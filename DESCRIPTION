@@ -1,0 +1,25 @@
+Package: appusageR
+Title: Parse and Validate APP Usage Android Smartphone-Use Logs
+Version: 0.3.2
+Authors@R: 
+    person("First", "Last", email = "first.last@example.com", role = c("aut", "cre"))
+Description: Tools for parsing, validating, standardizing, and summarizing exported APP Usage / Screen Time Android smartphone-use logs.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Imports:
+    cli,
+    jsonlite,
+    openxlsx,
+    readxl,
+    stringi,
+    stringr,
+    tibble
+Suggests:
+    dplyr,
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0
+VignetteBuilder: knitr

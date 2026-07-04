@@ -1,0 +1,25 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rcheck/
+*.tar.gz
+*.tgz
+*.zip
+appusageR.Rcheck/
+docs/reference/
+Meta/
+doc/
+dev_samples/
+.r-cache/
+.cache/
+workflow_test/
+all_text_data/
+
+# Local app category dictionary sources are intentionally excluded from Git.
+# A future release may add a CRAN-style package data object under data/ or
+# inst/extdata/, but the current Excel dictionary must not be committed.
+apptypedict/
+apptypedict/*.xls
+apptypedict/*.xlsx
+apptypedict/*.xlsm

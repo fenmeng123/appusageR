@@ -1,0 +1,167 @@
+---
+title: "appusageR Workflow"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{appusageR Workflow}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+## Batch Preprocessing
+
+`appusageR` parses exported APP Usage / Screen Time text files that already
+exist. It does not collect Android data, implement questionnaire CIER detection,
+scrape app stores, or infer sensitive app categories automatically.
+
+The numeric sources of truth are `duration_ms` and millisecond timestamp
+columns. Formatted duration strings are retained for audit/display only.
+`package_name` is the stable app key; `app_name` is retained for human
+inspection and reporting.
+
+```{r}
+library(appusageR)
+
+files <- list.files("raw_exports", pattern = "\\.txt$", full.names = TRUE)
+
+batch_summary <- read_appusage_batch(
+  files,
+  output_dir = "output_cache",
+  overwrite = FALSE,
+  progress = TRUE
+)
+
+batch_summary
+```
+
+## Inspect Cached Outputs
+
+```{r}
+cache_files <- batch_summary$data_file[batch_summary$status == "success"]
+
+load(cache_files[[1]])
+
+data
+```
+
+## Project Cache Workflow
+
+```{r}
+second_level <- write_second_level_batch(
+  batch_summary,
+  overwrite = TRUE,
+  progress = TRUE
+)
+
+project_root <- unique(stats::na.omit(batch_summary$project_root))[[1]]
+
+qc_summary <- write_qc_metadata_batch(
+  project_root,
+  progress = TRUE
+)
+```
+
+Second-level caches contain `data$event`, `data$episode`, and `data$daily`.
+Each successful second-level cache has a paired `proc-2.json` metadata file.
+QC updates `proc-2.json` and refreshes the project-level
+`analytic_summary_table_proclevel-2.csv` without loading all RDA files into one
+object.
+
+Routine QC does not create `proclevel-3` or `proclevel-tmp`. `proclevel-3` is
+reserved for a future final analytic layer.
+
+Supported second-level grains by export type are:
+
+- line exports: `data$episode` plus line-episode-derived `data$daily`;
+- meta exports by default: faithful `data$event` plus Table 1 summary-derived
+  `data$daily`;
+- meta exports with explicit reconstruction: opt-in `data$episode`, with
+  episode-derived or combined daily rows when requested;
+- day and app exports: `data$daily`.
+
+Unavailable grains are represented by zero-row tables. Every RDA cache contains
+exactly one object named `data`.
+
+## Explicit Meta Reconstruction
+
+`parse_meta()` is faithful to the raw export and returns
+`list(summary = ..., events = ...)`; it does not reconstruct episodes.
+
+Meta reconstruction is explicit:
+
+```{r}
+meta_episodes <- reconstruct_meta_episodes(meta_records$events)
+
+second_level_meta <- run_second_level_appusage(
+  first_level_meta,
+  reconstruct_meta = TRUE,
+  meta_daily_source = "both"
+)
+```
+
+`meta_daily_source = "summary"` is the default. `"episodes"` and `"both"`
+require `reconstruct_meta = TRUE` and keep daily provenance through
+`daily_source` and duration-comparison columns.
+
+## Activity Type and Anomaly QC
+
+Second-level tables include `activity_type` where app labels are available.
+Rows with APP Usage background/media markers are flagged as `"background"`; all
+other rows are `"foreground"`. This flag does not drop rows or change duration
+calculations.
+
+`write_qc_metadata_batch()` and `run_qc_appusage(project_dir = ...)` write
+standard mobile-sensing QC and anomaly diagnostics into `proc-2.json`.
+Anomaly QC summarizes implausible timestamps, durations, cross-date episodes,
+meta duration disagreements, and export-date-span issues. These are diagnostics
+only and do not delete rows by default.
+
+## Manual App Category Enrichment
+
+```{r}
+dict <- read_app_category_dictionary(
+  "apptypedict/apptyp_dictionary_v251016.xlsx"
+)
+
+category_summary <- write_app_categories_batch(
+  project_root,
+  dictionary = dict,
+  overwrite = TRUE,
+  progress = TRUE
+)
+```
+
+Category enrichment writes `Level_1_Category` and `Level_2_Category` into
+second-level `proc-2.rda` files and records match diagnostics in `proc-2.json`.
+It first matches `package_name` to dictionary `App_UUID`, then falls back to
+exact unambiguous app-name matches.
+
+No category is inferred from app text automatically. Unmatched or conflicting
+dictionary keys remain uncoded for user review.
+
+## Day-Level QC
+
+```{r}
+day_files <- batch_summary$data_file[batch_summary$detected_type %in% c("day", "app")]
+
+day_records <- do.call(rbind, lapply(day_files, function(path) {
+  load(path)
+  data[[1]]
+}))
+
+qc <- qc_appusage_day(
+  day_records,
+  min_nonempty_days = 7,
+  require_all_weekdays = TRUE
+)
+
+valid_day_records <- filter_valid_appusage(day_records, qc)
+```
+
+## Local Reference Data Boundary
+
+The package examples and tests do not use `reference/all_text_data/`. That
+directory is reserved for future explicitly authorized full-data stress tests.
