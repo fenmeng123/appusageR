@@ -1,5 +1,6 @@
 ---
 title: "appusageR Workflow"
+author: "Kunru Song <Kunrusong97@gmail.com>"
 output: rmarkdown::html_vignette
 vignette: >
   %\VignetteIndexEntry{appusageR Workflow}

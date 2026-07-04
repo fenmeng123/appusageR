@@ -1,5 +1,6 @@
 ---
 title: "appusageR"
+author: "Kunru Song <Kunrusong97@gmail.com>"
 output: github_document
 ---
 
@@ -7,16 +8,23 @@ output: github_document
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ```
 
-`appusageR` parses, validates, standardizes, and preprocesses exported APP
-Usage / Screen Time Android smartphone-use logs. It parses files that already
-exist; it is not an Android data collector and does not implement questionnaire
-CIER detection.
+`appusageR` parses, validates, standardizes, and summarizes exported APP Usage /
+Screen Time Android smartphone-use logs for reproducible research workflows.
+Version 0.3.2 provides faithful raw parsers, BIDS-like per-source cache files,
+second-level event/episode/daily outputs, QC metadata, manual app-category
+enrichment, project-level Wenjuanxing/self-report matching, structured workflow
+progress output, and preprocessing performance/diagnostic hardening.
+
+Author: Kunru Song (<Kunrusong97@gmail.com>)
+
+The package parses files that already exist; it is not an Android data
+collector and does not implement questionnaire CIER detection.
 
 APP Usage exports measure Android foreground-use duration from Android usage
 statistics. They should not be interpreted directly as attention, engagement,
 or subjective involvement with an app.
 
-The 0.2.x text-processing core is designed around auditable per-source caches:
+The 0.3.2 preprocessing core is designed around auditable per-source caches:
 
 - raw parsers remain faithful to APP Usage export content;
 - `duration_ms` and millisecond timestamp fields are the numeric sources of
@@ -33,8 +41,9 @@ categories automatically.
 ## Installation
 
 ```{r, eval = FALSE}
-# From the package root during development
-devtools::install()
+# Install from GitHub
+install.packages("devtools")
+devtools::install_github("fenmeng123/appusageR")
 ```
 
 ## Detect Export Type
@@ -63,13 +72,15 @@ timestamps or dates.
 
 ## Module-Level Workflow
 
-The preferred 0.2.x user-facing entry points are:
+The preferred 0.3.2 user-facing entry points are:
 
 - `read_appusage_text()` for raw text I/O;
 - `run_first_level_appusage()` for one source file or text object;
 - `run_second_level_appusage()` for one first-level result/cache;
 - `run_qc_appusage()` for in-memory daily QC or project-level metadata QC;
-- `run_appusage_workflow()` for the full serial cache workflow.
+- `run_appusage_workflow()` for the full serial cache workflow;
+- `run_appusage_project_workflow()` for project-level preprocessing and
+  Wenjuanxing/self-report matching.
 
 Existing lower-level parser and batch functions remain exported for advanced
 or developer-facing use.

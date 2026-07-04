@@ -2,9 +2,9 @@ Package: appusageR
 Title: Parse and Validate APP Usage Android Smartphone-Use Logs
 Version: 0.3.2
 Authors@R: 
-    person("First", "Last", email = "first.last@example.com", role = c("aut", "cre"))
+    person("Kunru", "Song", email = "Kunrusong97@gmail.com", role = c("aut", "cre"))
 Description: Tools for parsing, validating, standardizing, and summarizing exported APP Usage / Screen Time Android smartphone-use logs.
-License: MIT + file LICENSE
+License: GPL-3 + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 Imports:
