@@ -1,6 +1,5 @@
 ---
 title: "appusageR"
-author: "Kunru Song <Kunrusong97@gmail.com>"
 output: github_document
 ---
 

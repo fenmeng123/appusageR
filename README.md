@@ -1,6 +1,5 @@
 appusageR
 ================
-Kunru Song <Kunrusong97@gmail.com>
 
 `appusageR` parses, validates, standardizes, and summarizes exported APP
 Usage / Screen Time Android smartphone-use logs for reproducible
