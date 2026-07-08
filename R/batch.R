@@ -29,6 +29,16 @@
 #' @param parallel Whether to use parallel workers. Defaults to `FALSE`.
 #' @param n_cores Number of workers when `parallel = TRUE`; must not exceed the
 #'   maximum available cores reported by the machine.
+#' @param resume Whether to reuse durable first-level checkpoint rows when
+#'   resuming an interrupted first-level batch.
+#' @param checkpoint_every Write a durable checkpoint summary after this many
+#'   processed files. Defaults to `progress_every`.
+#' @param max_workers Maximum ordinary first-level parallel workers.
+#' @param worker_cap_override Whether to bypass the ordinary first-level worker
+#'   cap while still respecting available cores and file count.
+#' @param retry_memory_allocation Whether to retry memory-allocation failures
+#'   with a reduced worker count.
+#' @param memory_retry_workers Worker count recorded for memory retries.
 #'
 #' @return Invisibly returns a tibble summary. It does not return parsed data.
 #' @export
@@ -41,12 +51,23 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
                                 tz = "Asia/Shanghai", encoding = "auto",
                                 strict = FALSE, overwrite = FALSE,
                                 progress = TRUE, progress_every = 100,
-                                parallel = FALSE, n_cores = 1) {
+                                parallel = FALSE, n_cores = 1,
+                                resume = FALSE, checkpoint_every = NULL,
+                                max_workers = 12, worker_cap_override = FALSE,
+                                retry_memory_allocation = TRUE,
+                                memory_retry_workers = 1) {
   input <- match.arg(input, c("file", "text", "lines"))
   if (!identical(type, "auto") && !type %in% c("line", "meta", "day", "app")) {
     cli::cli_abort("`type` must be 'auto', 'line', 'meta', 'day', or 'app'.")
   }
-  n_cores <- validate_parallel_settings(parallel = parallel, n_cores = n_cores)
+  n_cores <- appusage_resolve_first_level_workers(
+    parallel = parallel,
+    n_cores = n_cores,
+    x = x,
+    input = input,
+    max_workers = max_workers,
+    worker_cap_override = worker_cap_override
+  )
   id_plan <- resolve_participant_ids(
     x = x,
     ids = ids,
@@ -60,10 +81,29 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
     project_name = project_name,
     project_id = project_id,
     overwrite = overwrite,
+    resume = resume,
     n_inputs = length(x),
     input = input,
     tz = tz
   )
+
+  if (is.null(checkpoint_every)) {
+    checkpoint_every <- progress_every
+  }
+  checkpoint_file <- NULL
+  existing_checkpoint <- NULL
+  if (!is.null(output_project$project_root)) {
+    checkpoint_file <- file.path(
+      output_project$project_root,
+      "analytic_summary_table_proclevel-1.checkpoint.csv"
+    )
+    existing_checkpoint <- appusage_read_first_level_resume_seed(
+      project_root = output_project$project_root,
+      checkpoint_file = checkpoint_file,
+      resume = resume,
+      overwrite = overwrite
+    )
+  }
 
   rows <- process_batch_rows(
     x = x,
@@ -77,7 +117,12 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
     progress = progress,
     progress_every = progress_every,
     parallel = parallel,
-    n_cores = n_cores
+    n_cores = n_cores,
+    checkpoint_every = checkpoint_every,
+    checkpoint_file = checkpoint_file,
+    existing_rows = existing_checkpoint,
+    retry_memory_allocation = retry_memory_allocation,
+    memory_retry_workers = memory_retry_workers
   )
   if (strict) {
     failed <- which(vapply(rows, function(z) !identical(z$status, "success"), logical(1)))
@@ -87,7 +132,7 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
     }
   }
 
-  summary <- tibble::as_tibble(do.call(rbind, rows))
+  summary <- tibble::as_tibble(do.call(bind_appusage_summary_rows, rows))
   if (!is.null(output_project$project_root)) {
     summary$project_root <- output_project$project_root
     summary$proclevel_1_dir <- output_project$proclevel_1
@@ -182,6 +227,446 @@ write_second_level_batch <- function(batch_summary, output_dir = NULL,
     )
   }
   invisible(summary)
+}
+
+#' Rerun second-level processing for a filtered project subset
+#'
+#' Rebuilds only selected first-level records from an existing project folder,
+#' then refreshes the project-level second-level summary from current `proc-2`
+#' metadata while preserving non-rebuilt rows such as upstream first-level
+#' failures and self-report matching annotations.
+#'
+#' @param project_dir Project folder containing `analytic_summary_table_proclevel-1.csv`.
+#' @param filter Selection rule for records to rebuild. A named list applies
+#'   exact column matches, `*_regex` entries apply regular expressions to the
+#'   matching column name, and `where` may be a function returning a logical
+#'   vector. A bare function is also accepted.
+#' @param output_dir Optional `proclevel-2` output directory.
+#' @param eligible_only Whether to rebuild only first-level rows with
+#'   `status == "success"` and an existing first-level `data_file`.
+#' @param overwrite Whether selected second-level RDA/JSON pairs may be replaced.
+#' @param resume Whether complete selected pairs should be skipped.
+#' @param progress Whether to print progress messages.
+#' @param parallel,n_cores Parallel controls passed to [write_second_level_batch()].
+#' @param update_workflow_configuration Whether to append the subset rerun record
+#'   to `workflow_configuration.rds`.
+#' @param ... Additional arguments passed to [write_second_level_batch()].
+#'
+#' @return Invisibly returns an `appusage_second_level_subset_rerun` list.
+#' @export
+rerun_second_level_project_subset <- function(project_dir,
+                                              filter = list(detected_type = "meta"),
+                                              output_dir = NULL,
+                                              eligible_only = TRUE,
+                                              overwrite = TRUE,
+                                              resume = FALSE,
+                                              progress = TRUE,
+                                              parallel = FALSE,
+                                              n_cores = 1,
+                                              update_workflow_configuration = TRUE,
+                                              ...) {
+  if (length(project_dir) != 1 || is.na(project_dir) || !dir.exists(project_dir)) {
+    cli::cli_abort("`project_dir` must be an existing project directory.")
+  }
+  project_dir <- normalizePath(project_dir, winslash = "/", mustWork = TRUE)
+  first_summary_file <- file.path(project_dir, "analytic_summary_table_proclevel-1.csv")
+  if (!file.exists(first_summary_file)) {
+    cli::cli_abort("Project is missing {.path analytic_summary_table_proclevel-1.csv}.")
+  }
+  first <- utils::read.csv(first_summary_file, stringsAsFactors = FALSE)
+  if (nrow(first) == 0) {
+    cli::cli_abort("First-level summary is empty: {.path {first_summary_file}}.")
+  }
+  old_summary_file <- file.path(project_dir, "analytic_summary_table_proclevel-2.csv")
+  old_second <- if (file.exists(old_summary_file)) {
+    utils::read.csv(old_summary_file, stringsAsFactors = FALSE)
+  } else {
+    tibble::tibble()
+  }
+
+  selected <- filter_second_level_rerun_candidates(first, filter)
+  if (isTRUE(eligible_only)) {
+    selected <- eligible_second_level_rerun_candidates(selected)
+  }
+  second_level_args <- list(...)
+  if (isTRUE(progress)) {
+    message(sprintf(
+      "Selected %d/%d first-level rows for second-level subset rerun%s",
+      nrow(selected), nrow(first),
+      if (isTRUE(eligible_only)) " after first-level success/data-file eligibility filtering" else ""
+    ))
+  }
+  if (nrow(selected) == 0) {
+    summary <- tibble::as_tibble(old_second)
+    config_file <- if (isTRUE(update_workflow_configuration)) {
+      appusage_record_second_level_subset_rerun(
+        project_dir = project_dir,
+        filter = filter,
+        selected = selected,
+        summary = summary,
+        output_dir = output_dir,
+        eligible_only = eligible_only,
+        overwrite = overwrite,
+        resume = resume,
+        parallel = parallel,
+        n_cores = n_cores,
+        second_level_args = second_level_args
+      )
+    } else {
+      NA_character_
+    }
+    out <- list(
+      project_dir = project_dir,
+      selected_first_level = selected,
+      second_level = summary,
+      summary = summary,
+      configuration_file = config_file,
+      n_selected = 0L
+    )
+    class(out) <- c("appusage_second_level_subset_rerun", "list")
+    return(invisible(out))
+  }
+
+  subset_summary <- write_second_level_batch(selected,
+    output_dir = output_dir,
+    overwrite = overwrite,
+    resume = resume,
+    progress = progress,
+    parallel = parallel,
+    n_cores = n_cores,
+    ...
+  )
+  summary <- merge_subset_second_level_summary(
+    old_summary = old_second,
+    new_summary = subset_summary,
+    first_summary = first
+  )
+  summary_file <- file.path(project_dir, "analytic_summary_table_proclevel-2.csv")
+  utils::write.csv(summary, summary_file, row.names = FALSE, na = "")
+  write_dataset_description_json(
+    project_info_from_root(project_dir),
+    summary = summary,
+    proclevel = 2,
+    summary_file = summary_file,
+    status = "success"
+  )
+  config_file <- if (isTRUE(update_workflow_configuration)) {
+    appusage_record_second_level_subset_rerun(
+      project_dir = project_dir,
+      filter = filter,
+      selected = selected,
+      summary = summary,
+      output_dir = output_dir,
+      eligible_only = eligible_only,
+      overwrite = overwrite,
+      resume = resume,
+      parallel = parallel,
+      n_cores = n_cores,
+      second_level_args = second_level_args
+    )
+  } else {
+    NA_character_
+  }
+  out <- list(
+    project_dir = project_dir,
+    selected_first_level = selected,
+    second_level = subset_summary,
+    summary = summary,
+    configuration_file = config_file,
+    n_selected = nrow(selected)
+  )
+  class(out) <- c("appusage_second_level_subset_rerun", "list")
+  invisible(out)
+}
+
+filter_second_level_rerun_candidates <- function(batch_summary, filter = NULL) {
+  batch_summary <- tibble::as_tibble(batch_summary)
+  n <- nrow(batch_summary)
+  if (is.null(filter)) {
+    return(batch_summary)
+  }
+  if (is.function(filter)) {
+    keep <- filter(batch_summary)
+    return(batch_summary[appusage_validate_filter_result(keep, n), , drop = FALSE])
+  }
+  if (!is.list(filter)) {
+    cli::cli_abort("`filter` must be NULL, a function, or a named list.")
+  }
+  keep <- rep(TRUE, n)
+  for (nm in names(filter)) {
+    value <- filter[[nm]]
+    if (identical(nm, "where")) {
+      if (!is.function(value)) {
+        cli::cli_abort("`filter$where` must be a function.")
+      }
+      keep <- keep & appusage_validate_filter_result(value(batch_summary), n)
+      next
+    }
+    if (grepl("_regex$", nm)) {
+      col <- sub("_regex$", "", nm)
+      if (!col %in% names(batch_summary)) {
+        cli::cli_abort("Regex filter column is missing from `batch_summary`: {.field {col}}.")
+      }
+      text <- as.character(batch_summary[[col]])
+      text[is.na(text)] <- ""
+      keep <- keep & grepl(paste(value, collapse = "|"), text)
+      next
+    }
+    if (!nm %in% names(batch_summary)) {
+      cli::cli_abort("Filter column is missing from `batch_summary`: {.field {nm}}.")
+    }
+    column <- as.character(batch_summary[[nm]])
+    keep <- keep & column %in% as.character(value)
+  }
+  batch_summary[keep %in% TRUE, , drop = FALSE]
+}
+
+eligible_second_level_rerun_candidates <- function(batch_summary) {
+  batch_summary <- tibble::as_tibble(batch_summary)
+  if (nrow(batch_summary) == 0) {
+    return(batch_summary)
+  }
+  for (col in c("status", "data_file")) {
+    if (!col %in% names(batch_summary)) {
+      cli::cli_abort("First-level eligibility filtering requires a {.field {col}} column.")
+    }
+  }
+  data_file <- as.character(batch_summary$data_file)
+  data_file[is.na(data_file)] <- ""
+  keep <- identical_first_level_success(batch_summary$status) &
+    nzchar(data_file) &
+    file.exists(data_file)
+  batch_summary[keep %in% TRUE, , drop = FALSE]
+}
+
+identical_first_level_success <- function(status) {
+  tolower(as.character(status)) == "success"
+}
+
+appusage_validate_filter_result <- function(keep, n) {
+  if (!is.logical(keep) || length(keep) != n) {
+    cli::cli_abort("Custom second-level filter must return a logical vector with length {n}.")
+  }
+  keep[is.na(keep)] <- FALSE
+  keep
+}
+
+merge_subset_second_level_summary <- function(old_summary, new_summary, first_summary) {
+  old_summary <- tibble::as_tibble(old_summary)
+  new_summary <- tibble::as_tibble(new_summary)
+  if (nrow(old_summary) == 0) {
+    return(order_second_level_summary(new_summary, first_summary))
+  }
+  if (nrow(new_summary) == 0) {
+    return(order_second_level_summary(old_summary, first_summary))
+  }
+  old_key <- second_level_summary_key(old_summary)
+  new_key <- second_level_summary_key(new_summary)
+  keep_old <- is.na(old_key) | !old_key %in% stats::na.omit(new_key)
+  merged <- bind_appusage_summary_rows(new_summary, old_summary[keep_old, , drop = FALSE])
+  merged <- restore_previous_matching_fields(merged, old_summary)
+  order_second_level_summary(merged, first_summary)
+}
+
+restore_previous_matching_fields <- function(summary, old_summary) {
+  matching_cols <- grep("^self_report_", names(old_summary), value = TRUE)
+  if (length(matching_cols) == 0 || nrow(summary) == 0 || nrow(old_summary) == 0) {
+    return(summary)
+  }
+  summary_key <- second_level_summary_key(summary)
+  old_key <- second_level_summary_key(old_summary)
+  old_idx <- match(summary_key, old_key)
+  for (col in matching_cols) {
+    if (!col %in% names(summary)) {
+      summary[[col]] <- typed_summary_na(old_summary[[col]], nrow(summary))
+    }
+    has_old <- !is.na(old_idx)
+    old_values <- old_summary[[col]][old_idx[has_old]]
+    should_restore <- appusage_missing_summary_value(summary[[col]][has_old]) &
+      !appusage_missing_summary_value(old_values)
+    target <- which(has_old)[should_restore]
+    if (length(target) > 0) {
+      summary[[col]][target] <- old_values[should_restore]
+    }
+  }
+  summary
+}
+
+typed_summary_na <- function(template, n) {
+  if (is.integer(template)) {
+    return(rep(NA_integer_, n))
+  }
+  if (is.numeric(template)) {
+    return(rep(NA_real_, n))
+  }
+  if (is.logical(template)) {
+    return(rep(NA, n))
+  }
+  rep(NA_character_, n)
+}
+
+appusage_missing_summary_value <- function(x) {
+  if (is.character(x)) {
+    return(is.na(x) | !nzchar(x))
+  }
+  is.na(x)
+}
+
+order_second_level_summary <- function(summary, first_summary) {
+  summary <- tibble::as_tibble(summary)
+  if (nrow(summary) == 0) {
+    return(summary)
+  }
+  first_key <- first_level_summary_key(first_summary)
+  summary_key <- second_level_summary_key(summary)
+  order_index <- match(summary_key, first_key)
+  summary <- summary[order(order_index, seq_len(nrow(summary)), na.last = TRUE), , drop = FALSE]
+  tibble::as_tibble(summary)
+}
+
+first_level_summary_key <- function(summary) {
+  summary <- tibble::as_tibble(summary)
+  out <- rep(NA_character_, nrow(summary))
+  if ("data_file" %in% names(summary)) {
+    out <- normalized_summary_path(summary$data_file)
+  }
+  fallback <- appusage_identity_summary_key(summary)
+  missing <- is.na(out) | !nzchar(out)
+  out[missing] <- fallback[missing]
+  out
+}
+
+second_level_summary_key <- function(summary) {
+  summary <- tibble::as_tibble(summary)
+  out <- rep(NA_character_, nrow(summary))
+  for (col in c("first_level_data_file", "first_level_rda", "data_file")) {
+    if (col %in% names(summary)) {
+      value <- normalized_summary_path(summary[[col]])
+      fill <- (is.na(out) | !nzchar(out)) & !is.na(value) & nzchar(value)
+      out[fill] <- value[fill]
+    }
+  }
+  fallback <- appusage_identity_summary_key(summary)
+  missing <- is.na(out) | !nzchar(out)
+  out[missing] <- fallback[missing]
+  out
+}
+
+normalized_summary_path <- function(x) {
+  x <- as.character(x)
+  missing <- is.na(x) | !nzchar(x)
+  out <- x
+  out[!missing] <- vapply(out[!missing], function(path) {
+    normalizePath(path, winslash = "/", mustWork = FALSE)
+  }, character(1))
+  out[missing] <- NA_character_
+  out
+}
+
+appusage_identity_summary_key <- function(summary) {
+  summary <- tibble::as_tibble(summary)
+  get_col <- function(col) {
+    if (col %in% names(summary)) {
+      value <- as.character(summary[[col]])
+      value[is.na(value)] <- ""
+      value
+    } else {
+      rep("", nrow(summary))
+    }
+  }
+  paste(
+    "identity",
+    get_col("participant_id"),
+    get_col("detected_type"),
+    get_col("filename_export_type"),
+    get_col("wenjuanxing_sequence_id"),
+    sep = "\r"
+  )
+}
+
+appusage_record_second_level_subset_rerun <- function(project_dir, filter, selected,
+                                                      summary, output_dir,
+                                                      eligible_only,
+                                                      overwrite, resume,
+                                                      parallel, n_cores,
+                                                      second_level_args) {
+  config_file <- file.path(project_dir, "workflow_configuration.rds")
+  config <- if (file.exists(config_file)) {
+    readRDS(config_file)
+  } else {
+    list(
+      package_version = as.character(utils::packageVersion("appusageR")),
+      output_schema_version = "0.3.0",
+      created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3%z"),
+      output_study_dir = project_dir
+    )
+  }
+  event <- list(
+    operation = "second_level_subset_rerun",
+    run_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3%z"),
+    filter = appusage_serializable_filter(filter),
+    n_selected = nrow(selected),
+    selected_detected_type_counts = appusage_named_count_list(selected, "detected_type"),
+    n_summary_rows = nrow(summary),
+    output_dir = appusage_normalize_optional_path(output_dir %||% file.path(project_dir, "proclevel-2")),
+    eligible_only = isTRUE(eligible_only),
+    overwrite = isTRUE(overwrite),
+    resume = isTRUE(resume),
+    parallel = isTRUE(parallel),
+    n_cores = n_cores,
+    second_level_options = appusage_serializable_list(second_level_args)
+  )
+  history <- config$second_level_rerun_history
+  if (is.null(history)) {
+    history <- list()
+  }
+  config$second_level_rerun_history <- c(history, list(event))
+  config$latest_second_level_rerun <- event
+  config$latest_run_at <- event$run_at
+  saveRDS(config, config_file)
+  normalizePath(config_file, winslash = "/", mustWork = FALSE)
+}
+
+appusage_named_count_list <- function(data, column) {
+  if (!column %in% names(data) || nrow(data) == 0) {
+    return(list())
+  }
+  counts <- table(as.character(data[[column]]), useNA = "ifany")
+  as.list(stats::setNames(as.integer(counts), names(counts)))
+}
+
+appusage_serializable_filter <- function(filter) {
+  if (is.null(filter)) {
+    return(list(type = "all"))
+  }
+  if (is.function(filter)) {
+    return(list(type = "function", label = paste(deparse(filter), collapse = "\n")))
+  }
+  if (is.list(filter)) {
+    return(list(type = "list", criteria = appusage_serializable_list(filter)))
+  }
+  list(type = class(filter)[[1]], value = as.character(filter))
+}
+
+appusage_serializable_list <- function(x) {
+  if (length(x) == 0) {
+    return(list())
+  }
+  out <- vector("list", length(x))
+  names(out) <- names(x)
+  for (i in seq_along(x)) {
+    value <- x[[i]]
+    out[[i]] <- if (is.function(value)) {
+      list(type = "function", label = paste(deparse(value), collapse = "\n"))
+    } else if (is.list(value) && !is.data.frame(value)) {
+      appusage_serializable_list(value)
+    } else if (is.atomic(value)) {
+      as.character(value)
+    } else {
+      paste(utils::capture.output(utils::str(value, give.attr = FALSE)), collapse = "\n")
+    }
+  }
+  out
 }
 
 combine_second_level_batch_summary <- function(proc2_metadata, rows, batch_summary) {
@@ -946,11 +1431,13 @@ process_second_level_batch_rows <- function(batch_summary, output_dir,
     envir = environment()
   )
   parallel::clusterEvalQ(cluster, {
-    if (requireNamespace("pkgload", quietly = TRUE) &&
-      file.exists(file.path(package_root, "DESCRIPTION"))) {
-      pkgload::load_all(package_root, quiet = TRUE)
-    } else if (!requireNamespace("appusageR", quietly = TRUE)) {
+    if (!requireNamespace("appusageR", quietly = TRUE)) {
+      if (requireNamespace("pkgload", quietly = TRUE) &&
+        file.exists(file.path(package_root, "DESCRIPTION"))) {
+        pkgload::load_all(package_root, quiet = TRUE)
+      } else {
         stop("Package appusageR is not available on the parallel worker.")
+      }
     }
     NULL
   })
@@ -1025,14 +1512,24 @@ second_level_processing_order <- function(batch_summary) {
 }
 
 appusage_package_root_for_workers <- function(start = getwd()) {
+  option_root <- getOption("appusageR.package_root", NULL)
+  if (length(option_root) == 1 && !is.na(option_root) && nzchar(option_root)) {
+    option_root <- normalizePath(option_root, winslash = "/", mustWork = FALSE)
+    if (appusage_is_package_root(option_root)) {
+      return(option_root)
+    }
+  }
+  loaded_root <- tryCatch(system.file(package = "appusageR"), error = function(e) "")
+  if (length(loaded_root) == 1 && nzchar(loaded_root)) {
+    loaded_root <- normalizePath(loaded_root, winslash = "/", mustWork = FALSE)
+    if (appusage_is_package_root(loaded_root)) {
+      return(loaded_root)
+    }
+  }
   current <- normalizePath(start, winslash = "/", mustWork = FALSE)
   repeat {
-    desc <- file.path(current, "DESCRIPTION")
-    if (file.exists(desc)) {
-      lines <- readLines(desc, warn = FALSE)
-      if (any(grepl("^Package:\\s*appusageR\\s*$", lines))) {
-        return(current)
-      }
+    if (appusage_is_package_root(current)) {
+      return(current)
     }
     parent <- dirname(current)
     if (identical(parent, current)) {
@@ -1042,16 +1539,75 @@ appusage_package_root_for_workers <- function(start = getwd()) {
   }
 }
 
+appusage_is_package_root <- function(path) {
+  desc <- file.path(path, "DESCRIPTION")
+  if (!file.exists(desc)) {
+    return(FALSE)
+  }
+  lines <- readLines(desc, warn = FALSE)
+  any(grepl("^Package:\\s*appusageR\\s*$", lines))
+}
+
 process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
                                encoding, overwrite, progress, progress_every,
-                               parallel, n_cores) {
-  if (!isTRUE(parallel) || length(x) <= 1 || n_cores == 1) {
-    rows <- vector("list", length(x))
-    for (i in seq_along(x)) {
-      if (isTRUE(progress) && (i == 1 || i %% progress_every == 0 || i == length(x))) {
-        message(sprintf("Preprocessing APP Usage file %d/%d", i, length(x)))
+                               parallel, n_cores, checkpoint_every = NULL,
+                               checkpoint_file = NULL, existing_rows = NULL,
+                               retry_memory_allocation = TRUE,
+                               memory_retry_workers = 1L) {
+  rows <- appusage_restore_checkpoint_rows(existing_rows, length(x))
+  seed_rows <- appusage_index_seed_rows(existing_rows, length(x))
+  pending <- which(vapply(rows, is.null, logical(1)))
+  checkpoint_every <- suppressWarnings(as.integer(checkpoint_every %||% progress_every))
+  if (is.na(checkpoint_every) || checkpoint_every < 1L) {
+    checkpoint_every <- length(x)
+  }
+
+  overwrite_plan <- rep(isTRUE(overwrite), length(x))
+  for (i in pending) {
+    overwrite_plan[[i]] <- isTRUE(overwrite) ||
+      appusage_first_level_seed_requires_overwrite(seed_rows[[i]])
+  }
+
+  retry_one <- function(row, i, worker_count) {
+    row <- appusage_annotate_first_level_row(
+      row,
+      retry_attempt = 0L,
+      retry_worker_count = worker_count
+    )
+    appusage_retry_memory_row(
+      row,
+      retry_fun = function() {
+        preprocess_one_appusage(
+          x = x[[i]],
+          id_info = id_plan[i, , drop = FALSE],
+          type = type,
+          input = input,
+          output_dir = output_dir,
+          tz = tz,
+          encoding = encoding,
+          overwrite = TRUE,
+          index = i
+        )
+      },
+      retry_worker_count = memory_retry_workers,
+      enabled = retry_memory_allocation
+    )
+  }
+
+  memory_retry_pending <- pending[vapply(
+    pending,
+    function(i) appusage_first_level_seed_is_memory_retry(seed_rows[[i]]),
+    logical(1)
+  )]
+  if (isTRUE(retry_memory_allocation) && length(memory_retry_pending) > 0L) {
+    for (i in memory_retry_pending) {
+      if (isTRUE(progress)) {
+        message(sprintf(
+          "Retrying memory-allocation APP Usage file %d/%d with %d worker",
+          i, length(x), memory_retry_workers
+        ))
       }
-      rows[[i]] <- preprocess_one_appusage(
+      row <- preprocess_one_appusage(
         x = x[[i]],
         id_info = id_plan[i, , drop = FALSE],
         type = type,
@@ -1059,17 +1615,57 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
         output_dir = output_dir,
         tz = tz,
         encoding = encoding,
-        overwrite = overwrite,
+        overwrite = TRUE,
         index = i
       )
+      rows[[i]] <- appusage_annotate_first_level_row(
+        row,
+        retry_attempt = 1L,
+        retry_worker_count = memory_retry_workers,
+        original_row = seed_rows[[i]]
+      )
     }
+    appusage_write_first_level_checkpoint(rows, checkpoint_file)
+    pending <- which(vapply(rows, is.null, logical(1)))
+  }
+
+  if (!isTRUE(parallel) || length(x) <= 1 || n_cores == 1) {
+    processed_since_checkpoint <- 0L
+    for (i in pending) {
+      if (isTRUE(progress) && (i == 1 || i %% progress_every == 0 || i == length(x))) {
+        message(sprintf("Preprocessing APP Usage file %d/%d", i, length(x)))
+      }
+      row <- preprocess_one_appusage(
+        x = x[[i]],
+        id_info = id_plan[i, , drop = FALSE],
+        type = type,
+        input = input,
+        output_dir = output_dir,
+        tz = tz,
+        encoding = encoding,
+        overwrite = overwrite_plan[[i]],
+        index = i
+      )
+      rows[[i]] <- retry_one(row, i, worker_count = 1L)
+      processed_since_checkpoint <- processed_since_checkpoint + 1L
+      if (processed_since_checkpoint >= checkpoint_every) {
+        appusage_write_first_level_checkpoint(rows, checkpoint_file)
+        processed_since_checkpoint <- 0L
+      }
+    }
+    appusage_write_first_level_checkpoint(rows, checkpoint_file)
+    return(rows)
+  }
+
+  if (length(pending) == 0L) {
+    appusage_write_first_level_checkpoint(rows, checkpoint_file)
     return(rows)
   }
 
   if (isTRUE(progress)) {
     message(sprintf(
       "Preprocessing %d APP Usage files with %d parallel workers",
-      length(x), n_cores
+      length(pending), n_cores
     ))
   }
   cluster <- parallel::makeCluster(n_cores)
@@ -1079,7 +1675,7 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
     cluster,
     varlist = c(
       "x", "id_plan", "type", "input", "output_dir", "tz", "encoding",
-      "overwrite", "package_root"
+      "overwrite_plan", "package_root"
     ),
     envir = environment()
   )
@@ -1094,24 +1690,42 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
     }
     NULL
   })
-  parallel::parLapplyLB(cluster, seq_along(x), function(i) {
-    worker_preprocess <- get("preprocess_one_appusage", envir = asNamespace("appusageR"))
-    worker_preprocess(
-      x = x[[i]],
-      id_info = id_plan[i, , drop = FALSE],
-      type = type,
-      input = input,
-      output_dir = output_dir,
-      tz = tz,
-      encoding = encoding,
-      overwrite = overwrite,
-      index = i
-    )
-  })
+  chunks <- split(
+    pending,
+    ceiling(seq_along(pending) / checkpoint_every)
+  )
+  for (chunk in chunks) {
+    chunk_rows <- parallel::parLapplyLB(cluster, chunk, function(i) {
+      worker_preprocess <- get("preprocess_one_appusage", envir = asNamespace("appusageR"))
+      row <- worker_preprocess(
+        x = x[[i]],
+        id_info = id_plan[i, , drop = FALSE],
+        type = type,
+        input = input,
+        output_dir = output_dir,
+        tz = tz,
+        encoding = encoding,
+        overwrite = overwrite_plan[[i]],
+        index = i
+      )
+      row$worker_pid <- Sys.getpid()
+      row
+    })
+    for (j in seq_along(chunk)) {
+      rows[[chunk[[j]]]] <- retry_one(
+        chunk_rows[[j]],
+        chunk[[j]],
+        worker_count = n_cores
+      )
+    }
+    appusage_write_first_level_checkpoint(rows, checkpoint_file)
+  }
+  rows
 }
 
 prepare_batch_output_project <- function(output_dir, project_name, project_id,
-                                         overwrite, n_inputs, input, tz) {
+                                         overwrite, resume = FALSE, n_inputs,
+                                         input, tz) {
   if (is.null(output_dir)) {
     return(list(
       project_root = NULL,
@@ -1125,7 +1739,7 @@ prepare_batch_output_project <- function(output_dir, project_name, project_id,
   folder_name <- paste0(sanitize_entity_value(project_name), "_", sanitize_entity_value(project_id))
   project_root <- file.path(output_dir, folder_name)
 
-  if (dir.exists(project_root) && !isTRUE(overwrite)) {
+  if (dir.exists(project_root) && !isTRUE(overwrite) && !isTRUE(resume)) {
     cli::cli_abort("Project output folder already exists: {.path {project_root}}")
   }
   dir.create(project_root, recursive = TRUE, showWarnings = FALSE)

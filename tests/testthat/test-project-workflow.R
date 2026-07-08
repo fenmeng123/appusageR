@@ -122,6 +122,138 @@ test_that("scan_appusage_project_root detects projects and paired Excel files", 
   expect_equal(scan$n_non_txt_files[[1]], 1L)
 })
 
+test_that("project workflow resume rebuilds missing first-level summary from proc-1 cache", {
+  raw_root <- file.path(tempdir(), paste0("appusage_project_resume_raw_", sample.int(1e8, 1)))
+  project_dir <- file.path(raw_root, "ProjectName-StudyA_ProjectID-123")
+  dir.create(project_dir, recursive = TRUE)
+  file.copy(
+    testthat::test_path("fixtures", "line_sample.txt"),
+    file.path(project_dir, "1001_AppUsage_line_2024_1_2_3_4_5.txt")
+  )
+  output_root <- file.path(tempdir(), paste0("appusage_project_resume_", sample.int(1e8, 1)))
+
+  first_run <- run_appusage_project_workflow(
+    project_dir = project_dir,
+    project_id = "123",
+    project_name = "StudyA",
+    output_root = output_root,
+    run_second_level = FALSE,
+    run_qc = FALSE,
+    overwrite = TRUE,
+    progress = FALSE
+  )
+  project_root <- first_run$project_dir
+  first_summary <- file.path(project_root, "analytic_summary_table_proclevel-1.csv")
+  checkpoint <- file.path(project_root, "analytic_summary_table_proclevel-1.checkpoint.csv")
+  expect_true(file.exists(first_summary))
+  unlink(first_summary)
+  unlink(checkpoint)
+
+  resumed <- run_appusage_project_workflow(
+    project_dir = project_dir,
+    project_id = "123",
+    project_name = "StudyA",
+    output_root = output_root,
+    run_second_level = FALSE,
+    run_qc = FALSE,
+    resume = TRUE,
+    overwrite = FALSE,
+    progress = FALSE
+  )
+
+  expect_true(file.exists(first_summary))
+  expect_true(isTRUE(resumed$resumed))
+  expect_equal(resumed$first_level$status[[1]], "success")
+  expect_true(any(resumed$first_level$summary_source == "reconstructed_proc1_cache"))
+})
+
+test_that("project workflow continues first-level when rebuilt summary has not-processed rows", {
+  raw_root <- file.path(tempdir(), paste0("appusage_project_incomplete_raw_", sample.int(1e8, 1)))
+  project_dir <- file.path(raw_root, "ProjectName-StudyA_ProjectID-123")
+  dir.create(project_dir, recursive = TRUE)
+  source_line <- file.path(project_dir, "1001_AppUsage_line_2024_1_2_3_4_5.txt")
+  source_day <- file.path(project_dir, "1002_AppUsage_day_2024_1_2_3_4_5.txt")
+  file.copy(testthat::test_path("fixtures", "line_sample.txt"), source_line)
+  file.copy(testthat::test_path("fixtures", "day_sample.txt"), source_day)
+  output_root <- file.path(tempdir(), paste0("appusage_project_incomplete_", sample.int(1e8, 1)))
+
+  first_run <- run_appusage_project_workflow(
+    project_dir = project_dir,
+    project_id = "123",
+    project_name = "StudyA",
+    output_root = output_root,
+    max_files = 1,
+    run_second_level = FALSE,
+    run_qc = FALSE,
+    overwrite = TRUE,
+    progress = FALSE
+  )
+  project_root <- first_run$project_dir
+  unlink(file.path(project_root, "workflow_configuration.rds"))
+  unlink(file.path(project_root, "analytic_summary_table_proclevel-1.csv"))
+  unlink(file.path(project_root, "analytic_summary_table_proclevel-1.checkpoint.csv"))
+  rebuilt <- rebuild_first_level_summary_from_cache(
+    project_root,
+    manifest = build_appusage_project_manifest(project_dir),
+    write = TRUE
+  )
+  expect_true(any(rebuilt$status == "not_processed"))
+
+  resumed <- run_appusage_project_workflow(
+    project_dir = project_dir,
+    project_id = "123",
+    project_name = "StudyA",
+    output_root = output_root,
+    run_second_level = FALSE,
+    run_qc = FALSE,
+    resume = TRUE,
+    overwrite = FALSE,
+    progress = FALSE
+  )
+
+  expect_false(any(resumed$first_level$status == "not_processed"))
+  expect_equal(sum(resumed$first_level$status == "success"), 2L)
+})
+
+test_that("project workflow can skip complete first-level summary and run second-level", {
+  raw_root <- file.path(tempdir(), paste0("appusage_project_complete_raw_", sample.int(1e8, 1)))
+  project_dir <- file.path(raw_root, "ProjectName-StudyA_ProjectID-123")
+  dir.create(project_dir, recursive = TRUE)
+  file.copy(
+    testthat::test_path("fixtures", "line_sample.txt"),
+    file.path(project_dir, "1001_AppUsage_line_2024_1_2_3_4_5.txt")
+  )
+  output_root <- file.path(tempdir(), paste0("appusage_project_complete_", sample.int(1e8, 1)))
+
+  first_run <- run_appusage_project_workflow(
+    project_dir = project_dir,
+    project_id = "123",
+    project_name = "StudyA",
+    output_root = output_root,
+    run_second_level = FALSE,
+    run_qc = FALSE,
+    overwrite = TRUE,
+    progress = FALSE
+  )
+  unlink(file.path(first_run$project_dir, "workflow_configuration.rds"))
+
+  resumed <- run_appusage_project_workflow(
+    project_dir = project_dir,
+    project_id = "123",
+    project_name = "StudyA",
+    output_root = output_root,
+    run_second_level = TRUE,
+    run_qc = FALSE,
+    resume = TRUE,
+    overwrite = FALSE,
+    progress = FALSE
+  )
+
+  expect_true(isTRUE(resumed$resumed))
+  expect_equal(resumed$first_level$status[[1]], "success")
+  expect_equal(resumed$second_level$status[[1]], "success")
+})
+
 test_that("scan_appusage_project_root does not count project subdirectories as files", {
   fixture <- project_workflow_fixture()
   dir.create(file.path(fixture$project, "nested"))

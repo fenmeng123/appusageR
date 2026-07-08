@@ -322,6 +322,13 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     qc_options = list(run_qc = run_qc),
     category_options = list()
   )
+  if (isTRUE(resume) && !isTRUE(overwrite)) {
+    appusage_rebuild_first_level_summary_if_needed(
+      project_dir = project$project_root,
+      manifest = manifest,
+      strict = FALSE
+    )
+  }
   resume_state <- appusage_prepare_workflow_resume(project, config, resume, overwrite)
 
   if (isTRUE(dry_run)) {
@@ -415,7 +422,8 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
         overwrite = overwrite,
         progress = FALSE,
         parallel = parallel,
-        n_cores = n_cores
+        n_cores = n_cores,
+        resume = resume
       )
       project$project_root <- unique(stats::na.omit(first$project_root))[[1]]
       config$output_study_dir <- project$project_root
@@ -1100,7 +1108,8 @@ appusage_prepare_workflow_resume <- function(project, config, resume, overwrite)
   if (!file.exists(config_file)) {
     return(list(
       existing_config = NULL,
-      use_existing_first_level = isTRUE(resume) && file.exists(first_summary_file),
+      use_existing_first_level = isTRUE(resume) &&
+        appusage_first_level_summary_complete(first_summary_file),
       use_existing_second_level = FALSE
     ))
   }
@@ -1117,7 +1126,7 @@ appusage_prepare_workflow_resume <- function(project, config, resume, overwrite)
     file.exists(second_summary_file)
   use_existing_first <- isTRUE(resume) &&
     !isTRUE(use_existing) &&
-    file.exists(first_summary_file)
+    appusage_first_level_summary_complete(first_summary_file)
   if (dir.exists(project$project_root) && !isTRUE(resume) && !isTRUE(use_existing)) {
     cli::cli_abort("Project output folder already exists: {.path {project$project_root}}")
   }

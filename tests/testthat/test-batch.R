@@ -227,6 +227,226 @@ test_that("Unlock native filenames are treated as unsupported first-level input"
   expect_true(is.na(summary$data_file[[1]]))
 })
 
+test_that("first-level cache summary rebuild detects complete, error, incomplete, and not-processed rows", {
+  raw_dir <- file.path(tempdir(), paste0("appusage_rebuild_raw_", sample.int(1e8, 1)))
+  dir.create(raw_dir, recursive = TRUE)
+  source_day <- file.path(raw_dir, "seq101_div style=tex_AppUsage_day_2024_1_2_3_4_5.txt")
+  source_app <- file.path(raw_dir, "seq102_div style=tex_AppUsage_app_2024_1_2_3_4_5.txt")
+  source_bad <- file.path(raw_dir, "seq103_div style=tex_AppUsage_meta_2024_1_2_3_4_5.txt")
+  source_not_processed <- file.path(raw_dir, "seq104_div style=tex_AppUsage_day_2024_1_2_3_4_5.txt")
+  file.copy(testthat::test_path("fixtures", "day_sample.txt"), source_day)
+  file.copy(testthat::test_path("fixtures", "app_sample.txt"), source_app)
+  writeLines("not an app usage export", source_bad)
+  file.copy(testthat::test_path("fixtures", "day_sample.txt"), source_not_processed)
+
+  output_dir <- file.path(tempdir(), paste0("appusage_rebuild_out_", sample.int(1e8, 1)))
+  first <- read_appusage_batch(
+    c(source_day, source_app, source_bad),
+    output_dir = output_dir,
+    progress = FALSE
+  )
+  project_root <- unique(first$project_root)
+  manifest <- build_appusage_project_manifest(raw_dir)
+
+  unlink(file.path(project_root, "analytic_summary_table_proclevel-1.csv"))
+  app_rda <- first$data_file[first$detected_type == "app"]
+  unlink(app_rda)
+  data <- list()
+  save(data, file = file.path(project_root, "proclevel-1", "sub-orphan_type-line_proc-1.rda"))
+
+  rebuilt <- rebuild_first_level_summary_from_cache(
+    project_root,
+    manifest = manifest,
+    write = TRUE
+  )
+
+  expect_true(file.exists(file.path(project_root, "analytic_summary_table_proclevel-1.csv")))
+  expect_true(any(rebuilt$status == "success"))
+  expect_true(any(rebuilt$status == "error"))
+  expect_true(any(rebuilt$status == "incomplete"))
+  expect_true(any(rebuilt$status == "not_processed"))
+  expect_true(any(rebuilt$cache_rebuild_status == "success_json_missing_rda"))
+  expect_true(any(rebuilt$cache_rebuild_status == "rda_missing_json"))
+  expect_true(any(rebuilt$cache_rebuild_status == "recorded_error"))
+  expect_true(any(rebuilt$summary_source == "reconstructed_proc1_cache"))
+})
+
+test_that("read_appusage_batch resumes from first-level checkpoint without reparsing existing caches", {
+  paths <- testthat::test_path("fixtures", c("day_sample.txt", "app_sample.txt"))
+  output_dir <- file.path(tempdir(), paste0("appusage_checkpoint_", sample.int(1e8, 1)))
+
+  first <- read_appusage_batch(
+    paths,
+    output_dir = output_dir,
+    project_name = "StudyCheckpoint",
+    project_id = "cp1",
+    progress = FALSE,
+    checkpoint_every = 1
+  )
+  project_root <- unique(first$project_root)
+  unlink(file.path(project_root, "analytic_summary_table_proclevel-1.csv"))
+
+  resumed <- read_appusage_batch(
+    paths,
+    output_dir = output_dir,
+    project_name = "StudyCheckpoint",
+    project_id = "cp1",
+    progress = FALSE,
+    resume = TRUE
+  )
+
+  expect_equal(resumed$status, first$status)
+  expect_equal(normalizePath(resumed$data_file, winslash = "/"), normalizePath(first$data_file, winslash = "/"))
+  expect_true(file.exists(file.path(project_root, "analytic_summary_table_proclevel-1.csv")))
+})
+
+test_that("read_appusage_batch resumes missing rows from rebuilt first-level summary", {
+  raw_dir <- file.path(tempdir(), paste0("appusage_resume_rebuilt_raw_", sample.int(1e8, 1)))
+  dir.create(raw_dir, recursive = TRUE)
+  source_day <- file.path(raw_dir, "1001_AppUsage_day_2024_1_2_3_4_5.txt")
+  source_app <- file.path(raw_dir, "1002_AppUsage_app_2024_1_2_3_4_5.txt")
+  file.copy(testthat::test_path("fixtures", "day_sample.txt"), source_day)
+  file.copy(testthat::test_path("fixtures", "app_sample.txt"), source_app)
+  output_dir <- file.path(tempdir(), paste0("appusage_resume_rebuilt_", sample.int(1e8, 1)))
+
+  first <- read_appusage_batch(
+    source_day,
+    output_dir = output_dir,
+    project_name = "StudyResume",
+    project_id = "rb1",
+    progress = FALSE
+  )
+  project_root <- unique(first$project_root)
+  manifest <- build_appusage_project_manifest(raw_dir)
+  unlink(file.path(project_root, "analytic_summary_table_proclevel-1.csv"))
+  unlink(file.path(project_root, "analytic_summary_table_proclevel-1.checkpoint.csv"))
+  rebuilt <- rebuild_first_level_summary_from_cache(
+    project_root,
+    manifest = manifest,
+    write = TRUE
+  )
+  expect_true(any(rebuilt$status == "not_processed"))
+
+  resumed <- read_appusage_batch(
+    c(source_day, source_app),
+    output_dir = output_dir,
+    project_name = "StudyResume",
+    project_id = "rb1",
+    progress = FALSE,
+    resume = TRUE
+  )
+
+  expect_equal(resumed$status, c("success", "success"))
+  expect_equal(normalizePath(resumed$data_file[[1]], winslash = "/"), normalizePath(first$data_file[[1]], winslash = "/"))
+  expect_true(file.exists(resumed$data_file[[2]]))
+  expect_false(any(resumed$status == "not_processed"))
+})
+
+test_that("read_appusage_batch retries memory-allocation rows from rebuilt summary", {
+  path <- testthat::test_path("fixtures", "day_sample.txt")
+  output_dir <- file.path(tempdir(), paste0("appusage_memory_seed_", sample.int(1e8, 1)))
+  project_root <- file.path(output_dir, "StudyMemory_mem1")
+  proc1 <- file.path(project_root, "proclevel-1")
+  dir.create(proc1, recursive = TRUE)
+  seed <- data.frame(
+    index = 1L,
+    source_file = path,
+    status = "error",
+    detected_type = "day",
+    data_file = NA_character_,
+    metadata_file = file.path(proc1, "sub-record-000001_type-day_proc-1.json"),
+    error_class = "simpleError",
+    error_message = "cannot allocate vector of size 143 Kb",
+    failure_family = "memory_allocation",
+    stringsAsFactors = FALSE
+  )
+  utils::write.csv(
+    seed,
+    file.path(project_root, "analytic_summary_table_proclevel-1.csv"),
+    row.names = FALSE,
+    na = ""
+  )
+
+  resumed <- read_appusage_batch(
+    path,
+    output_dir = output_dir,
+    project_name = "StudyMemory",
+    project_id = "mem1",
+    progress = FALSE,
+    resume = TRUE,
+    retry_memory_allocation = TRUE,
+    memory_retry_workers = 1L
+  )
+
+  expect_equal(resumed$status[[1]], "success")
+  expect_equal(resumed$retry_attempt[[1]], 1L)
+  expect_equal(resumed$retry_worker_count[[1]], 1L)
+  expect_equal(resumed$original_failure_family[[1]], "memory_allocation")
+  expect_match(resumed$original_error_message[[1]], "cannot allocate vector")
+})
+
+test_that("first-level worker cap respects ordinary and memory-risk caps", {
+  expect_equal(
+    appusage_resolve_first_level_workers(
+      parallel = FALSE,
+      n_cores = 99,
+      x = letters[1:3],
+      available_cores = 16
+    ),
+    1L
+  )
+  expect_equal(
+    appusage_resolve_first_level_workers(
+      parallel = TRUE,
+      n_cores = 20,
+      x = as.character(seq_len(100)),
+      available_cores = 16
+    ),
+    12L
+  )
+  expect_equal(
+    appusage_resolve_first_level_workers(
+      parallel = TRUE,
+      n_cores = 12,
+      x = as.character(seq_len(6000)),
+      available_cores = 16
+    ),
+    6L
+  )
+})
+
+test_that("memory allocation failures are classified and can be retried", {
+  row <- data.frame(
+    status = "error",
+    error_class = "simpleError",
+    error_message = "cannot allocate vector of size 143 Kb",
+    stringsAsFactors = FALSE
+  )
+  row <- appusage_annotate_first_level_row(row)
+
+  expect_equal(row$failure_family[[1]], "memory_allocation")
+
+  retry <- appusage_retry_memory_row(
+    row,
+    retry_fun = function() {
+      data.frame(
+        status = "success",
+        error_class = NA_character_,
+        error_message = NA_character_,
+        data_file = "ok.rda",
+        stringsAsFactors = FALSE
+      )
+    },
+    retry_worker_count = 1L
+  )
+
+  expect_equal(retry$status[[1]], "success")
+  expect_equal(retry$retry_attempt[[1]], 1L)
+  expect_equal(retry$retry_worker_count[[1]], 1L)
+  expect_equal(retry$original_failure_family[[1]], "memory_allocation")
+  expect_match(retry$original_error_message[[1]], "cannot allocate vector")
+})
+
 test_that("batch summary and metadata include filename-derived ID fields", {
   source <- testthat::test_path("fixtures", "line_sample.txt")
   wrapped <- file.path(
@@ -373,21 +593,19 @@ test_that("dataset description summarizes recognized appusage types and dates", 
   expect_equal(description$appusage_files$native_export_date_max, "2023-12-17")
 })
 
-test_that("parallel core settings are validated", {
+test_that("first-level parallel core settings are capped", {
   path <- testthat::test_path("fixtures", "line_sample.txt")
   output_dir <- file.path(tempdir(), paste0("appusage_batch_", as.integer(runif(1, 1, 1e8))))
   max_cores <- parallel::detectCores(logical = TRUE)
   testthat::skip_if(is.na(max_cores), "available cores could not be detected")
-  expect_error(
-    read_appusage_batch(
-      path,
-      output_dir = output_dir,
-      parallel = TRUE,
-      n_cores = max_cores + 1,
-      progress = FALSE
-    ),
-    "cannot exceed available cores"
+  summary <- read_appusage_batch(
+    path,
+    output_dir = output_dir,
+    parallel = TRUE,
+    n_cores = max_cores + 1,
+    progress = FALSE
   )
+  expect_equal(summary$status[[1]], "success")
 })
 
 test_that("second-level worker cap logic is bounded and explicit", {
@@ -519,6 +737,52 @@ test_that("second-level resume skips valid proc-2 RDA JSON pairs", {
   expect_equal(file.info(metadata)$mtime, json_mtime)
   expect_true(file.exists(rda))
   expect_true(file.exists(metadata))
+})
+
+test_that("second-level project subset rerun rebuilds only filtered rows", {
+  paths <- testthat::test_path("fixtures", c("line_sample.txt", "meta_sample.txt", "malformed.txt"))
+  parent_dir <- file.path(tempdir(), paste0("appusage_second_subset_", as.integer(runif(1, 1, 1e8))))
+  first <- read_appusage_batch(paths,
+    ids = c("line", "meta", "bad"),
+    output_dir = parent_dir,
+    progress = FALSE
+  )
+  first$detected_type[first$participant_id == "bad"] <- "meta"
+  initial <- write_second_level_batch(first, overwrite = TRUE, progress = FALSE)
+  project_root <- unique(first$project_root)
+  initial$self_report_match_status <- paste0("match-", initial$participant_id)
+  initial$self_report_sequence_id <- seq_len(nrow(initial))
+  utils::write.csv(initial,
+    file.path(project_root, "analytic_summary_table_proclevel-2.csv"),
+    row.names = FALSE,
+    na = ""
+  )
+  line_rda <- initial$second_level_data_file[initial$detected_type == "line"][[1]]
+  meta_rda <- initial$second_level_data_file[initial$detected_type == "meta"][[1]]
+  skipped <- initial[initial$status == "skipped", , drop = FALSE]
+  expect_equal(nrow(skipped), 1L)
+  line_mtime <- file.info(line_rda)$mtime
+  meta_mtime <- file.info(meta_rda)$mtime
+  Sys.sleep(1.1)
+
+  result <- rerun_second_level_project_subset(
+    project_root,
+    filter = list(detected_type = "meta"),
+    overwrite = TRUE,
+    progress = FALSE
+  )
+
+  expect_s3_class(result, "appusage_second_level_subset_rerun")
+  expect_equal(result$n_selected, 1L)
+  expect_equal(result$selected_first_level$detected_type, "meta")
+  expect_true(all(result$selected_first_level$status == "success"))
+  expect_equal(file.info(line_rda)$mtime, line_mtime)
+  expect_gt(file.info(meta_rda)$mtime, meta_mtime)
+  expect_true(file.exists(result$configuration_file))
+  expect_equal(nrow(result$summary), nrow(initial))
+  expect_true(any(result$summary$status == "skipped"))
+  expect_true(all(!is.na(result$summary$self_report_match_status)))
+  expect_true(all(!is.na(result$summary$self_report_sequence_id)))
 })
 
 test_that("second-level resume does not treat JSON-only or RDA-only partial caches as complete", {

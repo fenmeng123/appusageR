@@ -22,7 +22,13 @@ read_appusage_batch(
   progress = TRUE,
   progress_every = 100,
   parallel = FALSE,
-  n_cores = 1
+  n_cores = 1,
+  resume = FALSE,
+  checkpoint_every = NULL,
+  max_workers = 12,
+  worker_cap_override = FALSE,
+  retry_memory_allocation = TRUE,
+  memory_retry_workers = 1
 )
 }
 \arguments{
@@ -66,6 +72,22 @@ four-character hexadecimal ID.}
 
 \item{n_cores}{Number of workers when \code{parallel = TRUE}; must not exceed the
 maximum available cores reported by the machine.}
+
+\item{resume}{Whether to reuse durable first-level checkpoint rows when
+resuming an interrupted first-level batch.}
+
+\item{checkpoint_every}{Write a durable checkpoint summary after this many
+processed files. Defaults to \code{progress_every}.}
+
+\item{max_workers}{Maximum ordinary first-level parallel workers.}
+
+\item{worker_cap_override}{Whether to bypass the ordinary first-level worker
+cap while still respecting available cores and file count.}
+
+\item{retry_memory_allocation}{Whether to retry memory-allocation failures
+with a reduced worker count.}
+
+\item{memory_retry_workers}{Worker count recorded for memory retries.}
 }
 \value{
 Invisibly returns a tibble summary. It does not return parsed data.
