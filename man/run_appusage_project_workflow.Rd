@@ -27,6 +27,11 @@ run_appusage_project_workflow(
   progress = TRUE,
   parallel = FALSE,
   n_cores = 1,
+  first_level_max_workers = 12,
+  first_level_worker_cap_override = FALSE,
+  first_level_checkpoint_every = NULL,
+  retry_memory_allocation = TRUE,
+  memory_retry_workers = 1,
   run_second_level = TRUE,
   run_qc = TRUE,
   diagnostic_verbosity = c("summary", "full", "none"),
@@ -81,6 +86,21 @@ workflow configuration output.}
 \item{progress}{Whether delegated batch functions should report progress.}
 
 \item{parallel, n_cores}{Parallel controls. Defaults are serial.}
+
+\item{first_level_max_workers}{Maximum ordinary first-level workers before
+adaptive memory-risk caps are applied.}
+
+\item{first_level_worker_cap_override}{Whether to bypass adaptive
+first-level memory-risk caps after explicitly accepting the risk.}
+
+\item{first_level_checkpoint_every}{Checkpoint interval for first-level
+resume summaries. Defaults to the first-level batch default.}
+
+\item{retry_memory_allocation}{Whether first-level memory-allocation failures
+should be retried with reduced workers.}
+
+\item{memory_retry_workers}{Worker count recorded for memory-allocation
+retries.}
 
 \item{run_second_level}{Whether to run second-level processing.}
 

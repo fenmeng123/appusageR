@@ -27,8 +27,8 @@
 #'   `progress_every` files.
 #' @param progress_every Progress interval.
 #' @param parallel Whether to use parallel workers. Defaults to `FALSE`.
-#' @param n_cores Number of workers when `parallel = TRUE`; must not exceed the
-#'   maximum available cores reported by the machine.
+#' @param n_cores Requested workers when `parallel = TRUE`; effective workers
+#'   are capped by available cores and first-level memory-risk heuristics.
 #' @param resume Whether to reuse durable first-level checkpoint rows when
 #'   resuming an interrupted first-level batch.
 #' @param checkpoint_every Write a durable checkpoint summary after this many
@@ -60,7 +60,7 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
   if (!identical(type, "auto") && !type %in% c("line", "meta", "day", "app")) {
     cli::cli_abort("`type` must be 'auto', 'line', 'meta', 'day', or 'app'.")
   }
-  n_cores <- appusage_resolve_first_level_workers(
+  worker_decision <- appusage_first_level_worker_decision(
     parallel = parallel,
     n_cores = n_cores,
     x = x,
@@ -68,6 +68,16 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
     max_workers = max_workers,
     worker_cap_override = worker_cap_override
   )
+  n_cores <- worker_decision$selected_workers
+  if (isTRUE(progress) && isTRUE(parallel)) {
+    message(sprintf(
+      "First-level worker decision: requested=%d selected=%d reason=%s override=%s",
+      worker_decision$requested_workers,
+      worker_decision$selected_workers,
+      worker_decision$cap_reason,
+      worker_decision$worker_cap_override
+    ))
+  }
   id_plan <- resolve_participant_ids(
     x = x,
     ids = ids,
@@ -133,6 +143,11 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
   }
 
   summary <- tibble::as_tibble(do.call(bind_appusage_summary_rows, rows))
+  summary$first_level_requested_workers <- worker_decision$requested_workers
+  summary$first_level_selected_workers <- worker_decision$selected_workers
+  summary$first_level_worker_cap_reason <- worker_decision$cap_reason
+  summary$first_level_worker_cap_override <- worker_decision$worker_cap_override
+  attr(summary, "first_level_worker_decision") <- worker_decision
   if (!is.null(output_project$project_root)) {
     summary$project_root <- output_project$project_root
     summary$proclevel_1_dir <- output_project$proclevel_1
@@ -684,13 +699,8 @@ combine_second_level_batch_summary <- function(proc2_metadata, rows, batch_summa
 
   summary <- bind_appusage_summary_rows(metadata_summary, skipped_summary)
   summary <- merge_second_level_row_diagnostics(summary, row_summary)
-  if ("participant_id" %in% names(summary) && "participant_id" %in% names(batch_summary)) {
-    participant_order <- match(
-      as.character(summary$participant_id),
-      as.character(batch_summary$participant_id)
-    )
-    summary <- summary[order(participant_order, seq_len(nrow(summary)), na.last = TRUE), , drop = FALSE]
-  }
+  order_index <- match(second_level_summary_key(summary), first_level_summary_key(batch_summary))
+  summary <- summary[order(order_index, seq_len(nrow(summary)), na.last = TRUE), , drop = FALSE]
   tibble::as_tibble(summary)
 }
 
@@ -705,27 +715,37 @@ merge_second_level_row_diagnostics <- function(summary, row_summary) {
   if (nrow(error_rows) == 0) {
     return(summary)
   }
-  for (i in seq_len(nrow(error_rows))) {
-    candidates <- rep(TRUE, nrow(summary))
-    for (col in c("participant_id", "detected_type")) {
-      if (col %in% names(summary) && col %in% names(error_rows)) {
-        candidates <- candidates &
-          as.character(summary[[col]]) == as.character(error_rows[[col]][[i]])
-      }
+  for (col in c("error_class", "worker_stage")) {
+    if (!col %in% names(summary)) {
+      summary[[col]] <- NA_character_
     }
-    matched <- which(candidates)
-    if (length(matched) == 0) {
+  }
+  for (col in c("worker_task_index", "worker_pid")) {
+    if (!col %in% names(summary)) {
+      summary[[col]] <- NA_integer_
+    }
+  }
+  matched <- match(second_level_summary_key(error_rows), second_level_summary_key(summary))
+  for (i in which(!is.na(matched))) {
+    j <- matched[[i]]
+    if (is.na(j)) {
       next
     }
-    j <- matched[[1]]
     if (!is_present_string(summary$error_message[[j]]) &&
       "error_message" %in% names(error_rows)) {
       summary$error_message[[j]] <- error_rows$error_message[[i]]
     }
-    for (col in c("second_level_metadata_file", "second_level_data_file")) {
+    for (col in c("second_level_metadata_file", "second_level_data_file", "error_class", "worker_stage")) {
       if (col %in% names(summary) && col %in% names(error_rows) &&
         !is_present_string(summary[[col]][[j]]) &&
         is_present_string(error_rows[[col]][[i]])) {
+        summary[[col]][[j]] <- error_rows[[col]][[i]]
+      }
+    }
+    for (col in c("worker_task_index", "worker_pid")) {
+      if (col %in% names(summary) && col %in% names(error_rows) &&
+        (is.na(summary[[col]][[j]]) || !nzchar(as.character(summary[[col]][[j]]))) &&
+        !is.na(error_rows[[col]][[i]])) {
         summary[[col]][[j]] <- error_rows[[col]][[i]]
       }
     }
@@ -742,8 +762,9 @@ second_level_skipped_summary_rows <- function(row_summary, batch_summary) {
     return(tibble::tibble())
   }
 
+  source_indices <- match(skipped$index, batch_summary$index)
   rows <- lapply(seq_len(nrow(skipped)), function(i) {
-    source_index <- match(skipped$index[[i]], batch_summary$index)
+    source_index <- source_indices[[i]]
     if (is.na(source_index)) {
       source_index <- i
     }
@@ -1338,6 +1359,81 @@ parsed_n_warnings <- function(parsed_data) {
   NA_integer_
 }
 
+appusage_annotate_worker_result <- function(row, stage, task_index,
+                                            worker_pid = Sys.getpid()) {
+  if (!is.data.frame(row) || nrow(row) == 0L) {
+    return(row)
+  }
+
+  row$worker_stage <- stage
+  row$worker_task_index <- as.integer(task_index)
+  row$worker_pid <- as.integer(worker_pid)
+  row
+}
+
+appusage_progress_value <- function(row, columns, default = NA_character_) {
+  if (!is.data.frame(row) || nrow(row) == 0L) {
+    return(default)
+  }
+
+  for (column in columns) {
+    if (!column %in% names(row)) {
+      next
+    }
+    value <- row[[column]][[1]]
+    if (!is.null(value) && length(value) > 0L && !is.na(value)) {
+      return(as.character(value))
+    }
+  }
+
+  default
+}
+
+appusage_emit_parallel_progress <- function(progress, stage, row, index, total) {
+  if (!isTRUE(progress)) {
+    return(invisible(NULL))
+  }
+
+  status <- appusage_progress_value(row, "status", "unknown")
+  source <- appusage_progress_value(
+    row,
+    c("source_basename", "output_basename", "participant_id", "file_label"),
+    NA_character_
+  )
+  worker_pid <- appusage_progress_value(row, "worker_pid", NA_character_)
+  diagnostic <- appusage_progress_value(
+    row,
+    c("diagnostic_report", "second_level_metadata_file", "metadata_file"),
+    NA_character_
+  )
+  error_message <- appusage_progress_value(
+    row,
+    c("condition_message", "error_message"),
+    NA_character_
+  )
+
+  pieces <- c(
+    sprintf("[parallel-progress] %s", stage),
+    sprintf("task=%d/%d", as.integer(index), as.integer(total)),
+    sprintf("status=%s", status)
+  )
+  if (!is.na(source)) {
+    pieces <- c(pieces, sprintf("source=%s", source))
+  }
+  if (!is.na(worker_pid)) {
+    pieces <- c(pieces, sprintf("worker_pid=%s", worker_pid))
+  }
+  if (!is.na(diagnostic)) {
+    pieces <- c(pieces, sprintf("diagnostic=%s", diagnostic))
+  }
+  if (!is.na(error_message) && !identical(status, "success")) {
+    pieces <- c(pieces, sprintf("error=%s", error_message))
+  }
+
+  message(paste(pieces, collapse = " | "))
+  invisible(NULL)
+}
+
 validate_parallel_settings <- function(parallel, n_cores) {
   if (!is.logical(parallel) || length(parallel) != 1 || is.na(parallel)) {
     cli::cli_abort("`parallel` must be TRUE or FALSE.")
@@ -1444,7 +1540,8 @@ process_second_level_batch_rows <- function(batch_summary, output_dir,
   processing_order <- second_level_processing_order(batch_summary)
   ordered_rows <- parallel::parLapplyLB(cluster, processing_order, function(i) {
     worker <- get("write_second_level_one", envir = asNamespace("appusageR"))
-    worker(
+    annotator <- get("appusage_annotate_worker_result", envir = asNamespace("appusageR"))
+    row <- worker(
       batch_summary = batch_summary,
       index = i,
       output_dir = output_dir,
@@ -1452,21 +1549,51 @@ process_second_level_batch_rows <- function(batch_summary, output_dir,
       resume = resume,
       second_level_args = second_level_args
     )
+    annotator(
+      row,
+      stage = "second-level",
+      task_index = i,
+      worker_pid = Sys.getpid()
+    )
   })
   rows <- vector("list", n)
   rows[processing_order] <- ordered_rows
   if (isTRUE(progress)) {
     for (i in seq_along(rows)) {
-      message(sprintf("Writing second-level APP Usage file %d/%d complete", i, n))
+      appusage_emit_parallel_progress(
+        progress = progress,
+        stage = "second-level",
+        row = rows[[i]],
+        index = i,
+        total = n
+      )
     }
   }
   rows
 }
 
 second_level_processing_order <- function(batch_summary) {
+  schedule <- second_level_processing_score(batch_summary)
+  if (nrow(schedule) == 0) {
+    return(integer())
+  }
+  order(!schedule$eligible, -schedule$scheduling_score, schedule$index, na.last = TRUE)
+}
+
+second_level_processing_score <- function(batch_summary) {
   n <- nrow(batch_summary)
   if (n == 0) {
-    return(integer())
+    return(data.frame(
+      index = integer(),
+      eligible = logical(),
+      scheduling_score = numeric(),
+      file_size_bytes = numeric(),
+      source_size_bytes = numeric(),
+      row_signal = numeric(),
+      type_weight = numeric(),
+      elapsed_signal_sec = numeric(),
+      stringsAsFactors = FALSE
+    ))
   }
   status <- if ("status" %in% names(batch_summary)) {
     as.character(batch_summary$status)
@@ -1478,37 +1605,98 @@ second_level_processing_order <- function(batch_summary) {
   } else {
     rep(NA_character_, n)
   }
-  file_size <- rep(0, n)
   existing <- !is.na(data_file) & nzchar(data_file) & file.exists(data_file)
-  if (any(existing)) {
-    file_size[existing] <- as.numeric(file.info(data_file[existing])$size)
-    file_size[is.na(file_size)] <- 0
-  }
-  n_rows <- if ("n_rows" %in% names(batch_summary)) {
-    suppressWarnings(as.numeric(batch_summary$n_rows))
-  } else {
-    rep(0, n)
-  }
-  n_rows[is.na(n_rows)] <- 0
+  file_size <- second_level_file_size_signal(batch_summary, data_file, existing)
+  source_size <- second_level_numeric_first(
+    batch_summary,
+    c("source_file_size_bytes", "source_size_bytes", "file_size_bytes", "file_size"),
+    default = 0
+  )
+  n_rows <- second_level_row_count_signal(batch_summary)
   detected_type <- if ("detected_type" %in% names(batch_summary)) {
     as.character(batch_summary$detected_type)
   } else {
     rep(NA_character_, n)
   }
-  type_weight <- c(line = 4, meta = 3, day = 2, app = 1)
-  weight <- unname(type_weight[detected_type])
-  weight[is.na(weight)] <- 0
-  elapsed <- if ("second_level_total_elapsed_sec" %in% names(batch_summary)) {
-    suppressWarnings(as.numeric(batch_summary$second_level_total_elapsed_sec))
-  } else if ("elapsed_sec" %in% names(batch_summary)) {
-    suppressWarnings(as.numeric(batch_summary$elapsed_sec))
-  } else {
-    rep(0, n)
-  }
-  elapsed[is.na(elapsed)] <- 0
+  weight <- second_level_type_weight(detected_type)
+  elapsed <- second_level_numeric_first(
+    batch_summary,
+    c("second_level_total_elapsed_sec", "second_level_elapsed_sec", "elapsed_sec"),
+    default = 0
+  )
   eligible <- status == "success" & existing
-  score <- file_size + n_rows * 100 + weight * 1e6 + elapsed * 1e5
-  order(!eligible, -score, seq_len(n), na.last = TRUE)
+  score <- file_size + source_size * 0.25 + n_rows * 100 + weight * 1e6 + elapsed * 1e5
+  data.frame(
+    index = seq_len(n),
+    eligible = eligible,
+    scheduling_score = score,
+    file_size_bytes = file_size,
+    source_size_bytes = source_size,
+    row_signal = n_rows,
+    type_weight = weight,
+    elapsed_signal_sec = elapsed,
+    stringsAsFactors = FALSE
+  )
+}
+
+second_level_file_size_signal <- function(batch_summary, data_file, existing) {
+  size <- second_level_numeric_first(
+    batch_summary,
+    c(
+      "first_level_rda_size_bytes",
+      "first_level_data_size_bytes",
+      "data_file_size_bytes",
+      "rda_size_bytes"
+    ),
+    default = NA_real_
+  )
+  missing_size <- is.na(size) & existing
+  if (any(missing_size)) {
+    info <- file.info(data_file[missing_size])
+    size[missing_size] <- as.numeric(info$size)
+  }
+  size[is.na(size)] <- 0
+  size
+}
+
+second_level_row_count_signal <- function(batch_summary) {
+  n <- nrow(batch_summary)
+  rows <- second_level_numeric_first(batch_summary, "n_rows", default = NA_real_)
+  missing_rows <- is.na(rows)
+  grain_columns <- intersect(c("n_event_rows", "n_episode_rows", "n_daily_rows"), names(batch_summary))
+  if (any(missing_rows) && length(grain_columns) > 0) {
+    grain_rows <- rep(0, n)
+    for (column in grain_columns) {
+      value <- suppressWarnings(as.numeric(batch_summary[[column]]))
+      value[is.na(value)] <- 0
+      grain_rows <- grain_rows + value
+    }
+    rows[missing_rows] <- grain_rows[missing_rows]
+  }
+  rows[is.na(rows)] <- 0
+  rows
+}
+
+second_level_type_weight <- function(detected_type) {
+  type_weight <- c(line = 4, meta = 3, day = 2, app = 1)
+  weight <- unname(type_weight[as.character(detected_type)])
+  weight[is.na(weight)] <- 0
+  weight
+}
+
+second_level_numeric_first <- function(batch_summary, columns, default = 0) {
+  n <- nrow(batch_summary)
+  out <- rep(NA_real_, n)
+  for (column in columns) {
+    if (!column %in% names(batch_summary)) {
+      next
+    }
+    value <- suppressWarnings(as.numeric(batch_summary[[column]]))
+    replace <- is.na(out) & !is.na(value)
+    out[replace] <- value[replace]
+  }
+  out[is.na(out)] <- default
+  out
 }
 
 appusage_package_root_for_workers <- function(start = getwd()) {
@@ -1673,10 +1861,7 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
   package_root <- appusage_package_root_for_workers()
   parallel::clusterExport(
     cluster,
-    varlist = c(
-      "x", "id_plan", "type", "input", "output_dir", "tz", "encoding",
-      "overwrite_plan", "package_root"
-    ),
+    varlist = "package_root",
     envir = environment()
   )
   parallel::clusterEvalQ(cluster, {
@@ -1695,32 +1880,93 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
     ceiling(seq_along(pending) / checkpoint_every)
   )
   for (chunk in chunks) {
-    chunk_rows <- parallel::parLapplyLB(cluster, chunk, function(i) {
-      worker_preprocess <- get("preprocess_one_appusage", envir = asNamespace("appusageR"))
-      row <- worker_preprocess(
-        x = x[[i]],
-        id_info = id_plan[i, , drop = FALSE],
-        type = type,
-        input = input,
-        output_dir = output_dir,
-        tz = tz,
-        encoding = encoding,
-        overwrite = overwrite_plan[[i]],
-        index = i
-      )
-      row$worker_pid <- Sys.getpid()
-      row
+    chunk_tasks <- appusage_make_first_level_worker_tasks(
+      indices = chunk,
+      x = x,
+      id_plan = id_plan,
+      type = type,
+      input = input,
+      output_dir = output_dir,
+      tz = tz,
+      encoding = encoding,
+      overwrite_plan = overwrite_plan
+    )
+    chunk_rows <- parallel::parLapplyLB(cluster, chunk_tasks, function(task) {
+      worker_task <- get("appusage_process_first_level_worker_task", envir = asNamespace("appusageR"))
+      worker_task(task)
     })
     for (j in seq_along(chunk)) {
-      rows[[chunk[[j]]]] <- retry_one(
+      task_index <- chunk[[j]]
+      rows[[task_index]] <- retry_one(
         chunk_rows[[j]],
-        chunk[[j]],
+        task_index,
         worker_count = n_cores
+      )
+      appusage_emit_parallel_progress(
+        progress = progress,
+        stage = "first-level",
+        row = rows[[task_index]],
+        index = task_index,
+        total = length(x)
       )
     }
     appusage_write_first_level_checkpoint(rows, checkpoint_file)
   }
   rows
+}
+
+appusage_make_first_level_worker_tasks <- function(indices, x, id_plan, type,
+                                                   input, output_dir, tz,
+                                                   encoding, overwrite_plan) {
+  lapply(indices, function(i) {
+    appusage_make_first_level_worker_task(
+      index = i,
+      x = x[[i]],
+      id_info = id_plan[i, , drop = FALSE],
+      type = type,
+      input = input,
+      output_dir = output_dir,
+      tz = tz,
+      encoding = encoding,
+      overwrite = overwrite_plan[[i]]
+    )
+  })
+}
+
+appusage_make_first_level_worker_task <- function(index, x, id_info, type,
+                                                  input, output_dir, tz,
+                                                  encoding, overwrite) {
+  list(
+    index = index,
+    x = x,
+    id_info = id_info,
+    type = type,
+    input = input,
+    output_dir = output_dir,
+    tz = tz,
+    encoding = encoding,
+    overwrite = overwrite
+  )
+}
+
+appusage_process_first_level_worker_task <- function(task) {
+  row <- preprocess_one_appusage(
+    x = task$x,
+    id_info = task$id_info,
+    type = task$type,
+    input = task$input,
+    output_dir = task$output_dir,
+    tz = task$tz,
+    encoding = task$encoding,
+    overwrite = task$overwrite,
+    index = task$index
+  )
+  appusage_annotate_worker_result(
+    row,
+    stage = "first-level",
+    task_index = task$index,
+    worker_pid = Sys.getpid()
+  )
 }
 
 prepare_batch_output_project <- function(output_dir, project_name, project_id,
@@ -1941,6 +2187,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       first_level_data_file = first_file,
       second_level_data_file = NA_character_,
       second_level_metadata_file = NA_character_,
+      error_class = NA_character_,
       error_message = NA_character_,
       started_at = format(started_at, "%Y-%m-%d %H:%M:%OS3 %z"),
       finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),
@@ -1966,6 +2213,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       first_level_data_file = first_file,
       second_level_data_file = cache$rda_file,
       second_level_metadata_file = cache$json_file,
+      error_class = NA_character_,
       error_message = NA_character_,
       started_at = format(started_at, "%Y-%m-%d %H:%M:%OS3 %z"),
       finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),
@@ -2015,6 +2263,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
     first_level_data_file = first_file,
     second_level_data_file = result$output,
     second_level_metadata_file = metadata_file,
+    error_class = if (is.null(result$error)) NA_character_ else paste(class(result$error), collapse = ","),
     error_message = if (is.null(result$error)) NA_character_ else conditionMessage(result$error),
     started_at = format(started_at, "%Y-%m-%d %H:%M:%OS3 %z"),
     finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),

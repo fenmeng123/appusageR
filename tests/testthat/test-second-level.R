@@ -326,6 +326,94 @@ test_that("line episode-to-daily aggregation preserves grouped totals and diagno
   expect_equal(sum(daily$duration_ms, na.rm = TRUE), sum(line$duration_ms[line$duration_ms >= 0], na.rm = TRUE))
 })
 
+test_that("line episode-to-daily aggregation handles duplicate warnings and invalid durations", {
+  base_ms <- 1704067200000
+  duration_ms <- c(1000, 2000, 3000, 4000, NA_real_, -500, 0)
+  start_ts_ms <- base_ms + seq_along(duration_ms) * 10000
+  end_ts_ms <- start_ts_ms + ifelse(is.na(duration_ms), 0, duration_ms)
+  line <- tibble::tibble(
+    date = as.Date(c(
+      "2024-01-01", "2024-01-01", "2024-01-01",
+      "2024-01-01", "2024-01-02", "2024-01-02",
+      "2024-01-03"
+    )),
+    app_name = c("A", "A", "A", "A", "B", "B", "C"),
+    package_name = c("a.pkg", "a.pkg", "a.alt", "a.alt", "b.pkg", "b.pkg", "c.pkg"),
+    start_ts_ms = start_ts_ms,
+    end_ts_ms = end_ts_ms,
+    start_datetime = as.POSIXct(start_ts_ms / 1000, origin = "1970-01-01", tz = "Asia/Shanghai"),
+    end_datetime = as.POSIXct(end_ts_ms / 1000, origin = "1970-01-01", tz = "Asia/Shanghai"),
+    duration_text = "display",
+    duration_ms = duration_ms,
+    parse_warning = c("dup", "dup", "alpha", "beta", "missing-duration", "negative-duration", NA_character_)
+  )
+
+  second <- make_second_level_appusage(list(line = line))
+  daily <- second$daily
+
+  expect_equal(nrow(daily), 4)
+  a_pkg <- daily[daily$date == as.Date("2024-01-01") & daily$package_name == "a.pkg", ]
+  a_alt <- daily[daily$date == as.Date("2024-01-01") & daily$package_name == "a.alt", ]
+  b_pkg <- daily[daily$date == as.Date("2024-01-02") & daily$package_name == "b.pkg", ]
+  c_pkg <- daily[daily$date == as.Date("2024-01-03") & daily$package_name == "c.pkg", ]
+
+  expect_equal(a_pkg$duration_ms[[1]], 3000)
+  expect_equal(a_pkg$episode_count[[1]], 2L)
+  expect_equal(a_pkg$parse_warning[[1]], "dup")
+  expect_equal(a_alt$duration_ms[[1]], 7000)
+  expect_equal(a_alt$parse_warning[[1]], "alpha; beta")
+  expect_true(is.na(b_pkg$duration_ms[[1]]))
+  expect_equal(b_pkg$episode_count[[1]], 2L)
+  expect_equal(b_pkg$n_anomalies[[1]], 2L)
+  expect_true(b_pkg$anomaly_any[[1]])
+  expect_equal(c_pkg$duration_ms[[1]], 0)
+  expect_false(c_pkg$anomaly_any[[1]])
+  expect_equal(c_pkg$n_anomalies[[1]], 0L)
+  expect_equal(sum(daily$duration_ms, na.rm = TRUE), 10000)
+})
+
+test_that("line episode-to-daily aggregation handles empty and many-group inputs", {
+  empty <- make_second_level_appusage(list(line = tibble::tibble(
+    date = as.Date(character()),
+    app_name = character(),
+    package_name = character(),
+    start_ts_ms = numeric(),
+    end_ts_ms = numeric(),
+    start_datetime = as.POSIXct(character(), tz = "Asia/Shanghai"),
+    end_datetime = as.POSIXct(character(), tz = "Asia/Shanghai"),
+    duration_text = character(),
+    duration_ms = numeric(),
+    parse_warning = character()
+  )))
+  expect_equal(nrow(empty$daily), 0L)
+  expect_identical(names(empty$daily), names(empty_second_daily_tibble()))
+
+  n <- 120L
+  dates <- as.Date("2024-01-01") + rep(0:2, length.out = n)
+  package_name <- sprintf("pkg.%03d", seq_len(n))
+  start_ts_ms <- 1704067200000 + seq_len(n) * 1000
+  duration_ms <- rep(c(1000, 2000, 3000), length.out = n)
+  line <- tibble::tibble(
+    date = dates,
+    app_name = paste0("App ", seq_len(n)),
+    package_name = package_name,
+    start_ts_ms = start_ts_ms,
+    end_ts_ms = start_ts_ms + duration_ms,
+    start_datetime = as.POSIXct(start_ts_ms / 1000, origin = "1970-01-01", tz = "Asia/Shanghai"),
+    end_datetime = as.POSIXct((start_ts_ms + duration_ms) / 1000, origin = "1970-01-01", tz = "Asia/Shanghai"),
+    duration_text = "display",
+    duration_ms = duration_ms,
+    parse_warning = ifelse(seq_len(n) %% 10L == 0L, "periodic-warning", NA_character_)
+  )
+
+  second <- make_second_level_appusage(list(line = line))
+
+  expect_equal(nrow(second$daily), n)
+  expect_equal(sum(second$daily$duration_ms, na.rm = TRUE), sum(duration_ms))
+  expect_equal(sum(!is.na(second$daily$parse_warning)), n %/% 10L)
+  expect_true(all(second$daily$daily_source == "line_episodes"))
+})
+
 synthetic_meta_events <- function(event_type, offset_ms,
                                   package_name = "com.example.app",
                                   class_name = "MainActivity",

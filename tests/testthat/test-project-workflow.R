@@ -254,6 +254,44 @@ test_that("project workflow can skip complete first-level summary and run second
   expect_equal(resumed$second_level$status[[1]], "success")
 })
 
+test_that("project workflow records first-level worker controls and decision", {
+  raw_root <- file.path(tempdir(), paste0("appusage_project_worker_raw_", sample.int(1e8, 1)))
+  project_dir <- file.path(raw_root, "ProjectName-StudyA_ProjectID-123")
+  dir.create(project_dir, recursive = TRUE)
+  file.copy(
+    testthat::test_path("fixtures", "line_sample.txt"),
+    file.path(project_dir, "1001_AppUsage_line_2024_1_2_3_4_5.txt")
+  )
+  output_root <- file.path(tempdir(), paste0("appusage_project_worker_", sample.int(1e8, 1)))
+
+  result <- run_appusage_project_workflow(
+    project_dir = project_dir,
+    project_id = "123",
+    project_name = "StudyA",
+    output_root = output_root,
+    dry_run = TRUE,
+    progress = FALSE,
+    parallel = TRUE,
+    n_cores = 8,
+    first_level_max_workers = 7,
+    first_level_worker_cap_override = TRUE,
+    first_level_checkpoint_every = 11,
+    retry_memory_allocation = TRUE,
+    memory_retry_workers = 1
+  )
+  config <- readRDS(result$configuration_file)
+
+  expect_equal(config$first_level_options$first_level_max_workers, 7)
+  expect_true(config$first_level_options$first_level_worker_cap_override)
+  expect_equal(config$first_level_options$first_level_checkpoint_every, 11)
+  expect_true(config$first_level_options$retry_memory_allocation)
+  expect_equal(config$first_level_options$memory_retry_workers, 1)
+  expect_equal(config$first_level_options$worker_decision$requested_workers, 8L)
+  expect_equal(config$first_level_options$worker_decision$selected_workers, 1L)
+  expect_true(config$first_level_options$worker_decision$worker_cap_override)
+  expect_equal(result$first_level_worker_decision$cap_reason, "explicit_worker_cap_override")
+})
+
 test_that("scan_appusage_project_root does not count project subdirectories as files", {
   fixture <- project_workflow_fixture()
   dir.create(file.path(fixture$project, "nested"))
@@ -523,6 +561,110 @@ test_that("self-report matching requires both sequence and upload filename", {
   expect_equal(matched$moSens_match_status[[3]], "unmatched_sequence")
   expect_false("moSens_metadata_json" %in% names(matched))
   expect_false(grepl("^/", matched$moSens_data_dir[[1]]))
+})
+
+test_that("self-report matching status keeps filename and sequence mismatches distinct", {
+  fixture <- project_workflow_match_fixture()
+  missing_sequence_manifest <- fixture$manifest[1, ]
+  missing_sequence_manifest$wenjuanxing_sequence_id <- NA_integer_
+  self_report_filename_only <- data.frame(
+    "\u5e8f\u53f7" = 1001L,
+    upload = "1001_AppUsage_line_2024_1_2_3_4_5.txt",
+    check.names = FALSE
+  )
+
+  filename_only <- appusage_match_self_report_table(
+    self_report_filename_only,
+    manifest = missing_sequence_manifest,
+    project_root = fixture$project_root,
+    first = fixture$first[1, ],
+    second = fixture$second[1, ],
+    sequence_col = "\u5e8f\u53f7",
+    upload_col = "upload",
+    project_id = "123",
+    project_name = "StudyA"
+  )$matched_self_report
+
+  expect_equal(filename_only$moSens_match_status[[1]], "unmatched_sequence")
+
+  self_report_sequence_only <- data.frame(
+    "\u5e8f\u53f7" = 1001L,
+    upload = "1001_AppUsage_day_2024_1_2_3_4_5.txt",
+    check.names = FALSE
+  )
+  sequence_only <- appusage_match_self_report_table(
+    self_report_sequence_only,
+    manifest = fixture$manifest,
+    project_root = fixture$project_root,
+    first = fixture$first,
+    second = fixture$second,
+    sequence_col = "\u5e8f\u53f7",
+    upload_col = "upload",
+    project_id = "123",
+    project_name = "StudyA"
+  )$matched_self_report
+
+  expect_equal(sequence_only$moSens_match_status[[1]], "unmatched_filename")
+})
+
+test_that("self-report matching uses keyed lookup when inputs are reordered", {
+  fixture <- project_workflow_match_fixture()
+  self_report <- data.frame(
+    sequence = 1001L,
+    upload = "1001_AppUsage_line_2024_1_2_3_4_5.txt",
+    check.names = FALSE
+  )
+  names(self_report)[[1]] <- "\u5e8f\u53f7"
+
+  matched <- appusage_match_self_report_table(
+    self_report,
+    manifest = fixture$manifest[c(2, 1), ],
+    project_root = fixture$project_root,
+    first = fixture$first[c(2, 1), ],
+    second = fixture$second[c(2, 1), ],
+    sequence_col = "\u5e8f\u53f7",
+    upload_col = "upload",
+    project_id = "123",
+    project_name = "StudyA"
+  )$matched_self_report
+
+  expect_equal(matched$moSens_match_status[[1]], "matched")
+  expect_equal(matched$moSens_appusage_export_type[[1]], "line")
+  expect_match(basename(matched$moSens_data_dir[[1]]), "sub-1001_type-line_proc-2[.]rda")
+  expect_false("moSens_metadata_json" %in% names(matched))
+})
+
+test_that("self-report match summary refresh uses keyed proc-2 paths", {
+  fixture <- project_workflow_match_fixture()
+  summary_file <- file.path(fixture$project_root, "analytic_summary_table_proclevel-2.csv")
+  summary <- fixture$second[c(2, 1), ]
+  utils::write.csv(summary, summary_file, row.names = FALSE, na = "")
+  manifest <- appusage_manifest_with_proc2_paths(
+    fixture$manifest,
+    fixture$first,
+    fixture$second,
+    fixture$project_root
+  )
+  file_matches <- appusage_init_file_match_summary(manifest)
+  file_matches$self_report_match_status <- c("matched", "unmatched_appusage_upload")
+  file_matches$self_report_sequence_id <- c(1001L, NA_integer_)
+
+  appusage_refresh_match_summary(fixture$project_root, file_matches)
+  refreshed <- utils::read.csv(summary_file, stringsAsFactors = FALSE)
+
+  expect_equal(nrow(refreshed), nrow(summary))
+  expect_equal(
+    refreshed$self_report_match_status[refreshed$detected_type == "line"],
+    "matched"
+  )
+  expect_equal(
+    refreshed$self_report_match_status[refreshed$detected_type == "meta"],
+    "unmatched_appusage_upload"
+  )
+  expect_equal(
+    refreshed$self_report_sequence_id[refreshed$detected_type == "line"],
+    1001L
+  )
 })
 
 test_that("self-report matching can use native APP Usage filename postfix", {

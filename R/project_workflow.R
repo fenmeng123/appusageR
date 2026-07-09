@@ -222,6 +222,16 @@ build_appusage_project_manifest <- function(project_dir,
 #' @param overwrite Whether to overwrite the selected output study folder.
 #' @param progress Whether delegated batch functions should report progress.
 #' @param parallel,n_cores Parallel controls. Defaults are serial.
+#' @param first_level_max_workers Maximum ordinary first-level workers before
+#'   adaptive memory-risk caps are applied.
+#' @param first_level_worker_cap_override Whether to bypass adaptive
+#'   first-level memory-risk caps after explicitly accepting the risk.
+#' @param first_level_checkpoint_every Checkpoint interval for first-level
+#'   resume summaries. Defaults to the first-level batch default.
+#' @param retry_memory_allocation Whether first-level memory-allocation failures
+#'   should be retried with reduced workers.
+#' @param memory_retry_workers Worker count recorded for memory-allocation
+#'   retries.
 #' @param run_second_level Whether to run second-level processing.
 #' @param run_qc Whether to run QC metadata after second-level processing.
 #' @param diagnostic_verbosity Console diagnostic behavior for failures:
@@ -252,6 +262,11 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
                                           progress = TRUE,
                                           parallel = FALSE,
                                           n_cores = 1,
+                                          first_level_max_workers = 12,
+                                          first_level_worker_cap_override = FALSE,
+                                          first_level_checkpoint_every = NULL,
+                                          retry_memory_allocation = TRUE,
+                                          memory_retry_workers = 1,
                                           run_second_level = TRUE,
                                           run_qc = TRUE,
                                           diagnostic_verbosity = c("summary", "full", "none"),
@@ -286,6 +301,25 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
   manifest <- appusage_limit_manifest_files(manifest, max_files = max_files)
   n_appusage <- sum(manifest$is_txt %in% TRUE, na.rm = TRUE)
   n_survey <- appusage_count_self_report_rows(self_report_file, self_report_n_max)
+  txt_files <- manifest$source_file[manifest$is_txt %in% TRUE]
+  first_level_worker_decision <- appusage_first_level_worker_decision(
+    parallel = parallel,
+    n_cores = n_cores,
+    x = txt_files,
+    input = "file",
+    max_workers = first_level_max_workers,
+    worker_cap_override = first_level_worker_cap_override
+  )
+  appusage_project_progress(
+    progress && isTRUE(parallel),
+    sprintf(
+      "first-level workers: requested=%d selected=%d reason=%s override=%s",
+      first_level_worker_decision$requested_workers,
+      first_level_worker_decision$selected_workers,
+      first_level_worker_decision$cap_reason,
+      first_level_worker_decision$worker_cap_override
+    )
+  )
   console_start_time <- Sys.time()
   appusage_console_project_start(
     progress = progress,
@@ -316,7 +350,13 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
       strict = strict,
       progress = progress,
       parallel = parallel,
-      n_cores = n_cores
+      n_cores = n_cores,
+      first_level_max_workers = first_level_max_workers,
+      first_level_worker_cap_override = first_level_worker_cap_override,
+      first_level_checkpoint_every = first_level_checkpoint_every,
+      retry_memory_allocation = retry_memory_allocation,
+      memory_retry_workers = memory_retry_workers,
+      worker_decision = first_level_worker_decision
     ),
     second_level_options = second_level_options,
     qc_options = list(run_qc = run_qc),
@@ -343,6 +383,14 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
       n_appusage = n_appusage,
       n_survey = n_survey
     )
+    benchmark <- write_preprocessing_benchmark_summary(
+      project_dir = project$project_root,
+      first = NULL,
+      second = NULL,
+      qc = NULL,
+      manifest = manifest,
+      first_level_worker_decision = first_level_worker_decision
+    )
     appusage_console_project_end(
       progress = progress,
       project = project,
@@ -364,6 +412,9 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
       matched_self_report = NULL,
       matched_self_report_file = NA_character_,
       match_diagnostics = NULL,
+      first_level_worker_decision = first_level_worker_decision,
+      benchmark_summary = benchmark$summary,
+      benchmark_summary_file = benchmark$file,
       sample_size_flow = flow,
       dry_run = TRUE
     )
@@ -371,7 +422,6 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     return(out)
   }
 
-  txt_files <- manifest$source_file[manifest$is_txt %in% TRUE]
   if (length(txt_files) == 0) {
     cli::cli_abort("No `.txt` files were found in `project_dir`.")
   }
@@ -423,7 +473,12 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
         progress = FALSE,
         parallel = parallel,
         n_cores = n_cores,
-        resume = resume
+        resume = resume,
+        checkpoint_every = first_level_checkpoint_every,
+        max_workers = first_level_max_workers,
+        worker_cap_override = first_level_worker_cap_override,
+        retry_memory_allocation = retry_memory_allocation,
+        memory_retry_workers = memory_retry_workers
       )
       project$project_root <- unique(stats::na.omit(first$project_root))[[1]]
       config$output_study_dir <- project$project_root
@@ -562,6 +617,14 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     end_time = Sys.time(),
     flow = flow
   )
+  benchmark <- write_preprocessing_benchmark_summary(
+    project_dir = project$project_root,
+    first = first,
+    second = second,
+    qc = qc,
+    manifest = manifest,
+    first_level_worker_decision = first_level_worker_decision
+  )
 
   out <- list(
     project_dir = project$project_root,
@@ -575,6 +638,9 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     matched_self_report = match_result$matched_self_report,
     matched_self_report_file = match_result$matched_self_report_file,
     match_diagnostics = match_result$diagnostics,
+    first_level_worker_decision = first_level_worker_decision,
+    benchmark_summary = benchmark$summary,
+    benchmark_summary_file = benchmark$file,
     sample_size_flow = flow,
     resumed = resumed,
     dry_run = FALSE
@@ -1247,20 +1313,15 @@ appusage_merge_qc_with_second_level_skips <- function(qc, second) {
   if (is.null(qc) || nrow(qc) == 0) {
     return(skipped)
   }
-  key_cols <- intersect(c("participant_id", "detected_type"), names(qc))
-  if (all(key_cols %in% names(skipped))) {
-    existing <- do.call(paste, c(qc[key_cols], sep = "\r"))
-    skipped_key <- do.call(paste, c(skipped[key_cols], sep = "\r"))
-    skipped <- skipped[!skipped_key %in% existing, , drop = FALSE]
-  }
+  existing <- stats::na.omit(second_level_summary_key(qc))
+  skipped_key <- second_level_summary_key(skipped)
+  skipped <- skipped[is.na(skipped_key) | !skipped_key %in% existing, , drop = FALSE]
   if (nrow(skipped) == 0) {
     return(qc)
   }
   out <- bind_appusage_summary_rows(qc, skipped)
-  if ("participant_id" %in% names(out) && "participant_id" %in% names(second)) {
-    order_index <- match(as.character(out$participant_id), as.character(second$participant_id))
-    out <- out[order(order_index, seq_len(nrow(out)), na.last = TRUE), , drop = FALSE]
-  }
+  order_index <- match(second_level_summary_key(out), second_level_summary_key(second))
+  out <- out[order(order_index, seq_len(nrow(out)), na.last = TRUE), , drop = FALSE]
   tibble::as_tibble(out)
 }
 
@@ -2001,6 +2062,7 @@ appusage_match_self_report_table <- function(self_report, manifest,
     rep(as.POSIXct(NA), nrow(data))
   }
   duplicate_sequence <- duplicated(sequence) | duplicated(sequence, fromLast = TRUE)
+  manifest_match_index <- appusage_build_manifest_match_index(manifest)
 
   rows <- vector("list", nrow(data))
   file_matches <- appusage_init_file_match_summary(manifest)
@@ -2011,6 +2073,7 @@ appusage_match_self_report_table <- function(self_report, manifest,
       upload_candidates = upload_candidates[[i]],
       submit_time = submit_time[[i]],
       manifest = manifest,
+      manifest_match_index = manifest_match_index,
       export_type_priority = export_type_priority,
       duplicate_sequence = duplicate_sequence[[i]],
       project_root = project_root
@@ -2161,7 +2224,7 @@ appusage_manifest_with_proc2_paths <- function(manifest, first, second, project_
     return(manifest)
   }
   first_idx <- if ("source_file" %in% names(first)) {
-    match(as.character(manifest$source_file), as.character(first$source_file))
+    match(normalized_summary_path(manifest$source_file), normalized_summary_path(first$source_file))
   } else {
     rep(NA_integer_, nrow(manifest))
   }
@@ -2173,18 +2236,17 @@ appusage_manifest_with_proc2_paths <- function(manifest, first, second, project_
   first_data[has_first] <- as.character(first$data_file[first_idx[has_first]])
 
   second_idx <- rep(NA_integer_, nrow(manifest))
+  first_data_key <- normalized_summary_path(first_data)
   for (candidate_col in c("first_level_data_file", "first_level_rda")) {
     if (candidate_col %in% names(second)) {
       missing <- is.na(second_idx) & has_first
-      second_idx[missing] <- match(first_data[missing], as.character(second[[candidate_col]]))
+      second_idx[missing] <- match(first_data_key[missing], normalized_summary_path(second[[candidate_col]]))
     }
   }
   missing <- is.na(second_idx) & has_first
-  if (any(missing) &&
-    all(c("participant_id", "detected_type") %in% names(second)) &&
-    all(c("participant_id", "detected_type") %in% names(first))) {
-    first_key <- paste(first$participant_id, first$detected_type, sep = "\r")
-    second_key <- paste(second$participant_id, second$detected_type, sep = "\r")
+  if (any(missing)) {
+    first_key <- appusage_identity_summary_key(first)
+    second_key <- appusage_identity_summary_key(second)
     second_idx[missing] <- match(first_key[first_idx[missing]], second_key)
   }
   has_second <- !is.na(second_idx)
@@ -2249,6 +2311,7 @@ appusage_match_one_self_report_row <- function(row_index, sequence_id,
                                                upload_candidates,
                                                submit_time,
                                                manifest,
+                                               manifest_match_index = NULL,
                                                export_type_priority,
                                                duplicate_sequence,
                                                project_root) {
@@ -2277,18 +2340,16 @@ appusage_match_one_self_report_row <- function(row_index, sequence_id,
     ))
   }
   norm_candidates <- appusage_normalized_upload_name(upload_candidates)
-  source_names <- appusage_normalized_upload_name(manifest$source_basename)
-  uploaded_names <- appusage_normalized_upload_name(manifest$uploaded_file_name)
-  native_names <- appusage_normalized_upload_name(manifest$native_export_file_name)
-  seq_match <- manifest$wenjuanxing_sequence_id == sequence_id
-  file_match <- source_names %in% norm_candidates |
-    uploaded_names %in% norm_candidates |
-    native_names %in% norm_candidates
-  candidates <- which(seq_match & file_match & manifest$is_txt %in% TRUE)
+  manifest_match_index <- manifest_match_index %||% appusage_build_manifest_match_index(manifest)
+  candidates <- appusage_manifest_candidate_rows(
+    sequence_id = sequence_id,
+    norm_candidates = norm_candidates,
+    manifest_match_index = manifest_match_index
+  )
   if (length(candidates) == 0) {
-    status <- if (any(seq_match, na.rm = TRUE)) {
+    status <- if (appusage_manifest_has_sequence(sequence_id, manifest_match_index)) {
       "unmatched_filename"
-    } else if (any(file_match, na.rm = TRUE)) {
+    } else if (appusage_manifest_has_upload(norm_candidates, manifest_match_index)) {
       "unmatched_sequence"
     } else {
       "unmatched"
@@ -2355,6 +2416,63 @@ appusage_match_output_row <- function(status, sequence_id,
     moSens_match_warning = paste(unique(warning[nzchar(warning)]), collapse = ";"),
     stringsAsFactors = FALSE
   )
+}
+
+appusage_build_manifest_match_index <- function(manifest) {
+  n <- nrow(manifest)
+  if (n == 0) {
+    return(list(dual = list(), sequence = character(), upload = character()))
+  }
+  is_txt <- if ("is_txt" %in% names(manifest)) manifest$is_txt %in% TRUE else rep(TRUE, n)
+  sequence <- if ("wenjuanxing_sequence_id" %in% names(manifest)) {
+    as.character(manifest$wenjuanxing_sequence_id)
+  } else {
+    rep(NA_character_, n)
+  }
+  names_by_row <- vector("list", n)
+  for (col in c("source_basename", "uploaded_file_name", "native_export_file_name")) {
+    value <- if (col %in% names(manifest)) {
+      appusage_normalized_upload_name(manifest[[col]])
+    } else {
+      rep(NA_character_, n)
+    }
+    for (i in seq_len(n)) {
+      if (is_txt[[i]] && !is.na(value[[i]]) && nzchar(value[[i]])) {
+        names_by_row[[i]] <- c(names_by_row[[i]], value[[i]])
+      }
+    }
+  }
+  key_rows <- rep(seq_len(n), lengths(names_by_row))
+  upload_names <- unlist(names_by_row, use.names = FALSE)
+  sequence_values <- sequence[key_rows]
+  valid_upload <- !is.na(upload_names) & nzchar(upload_names)
+  valid <- !is.na(sequence_values) & nzchar(sequence_values) &
+    !is.na(upload_names) & nzchar(upload_names)
+  dual_key <- paste(sequence_values[valid], upload_names[valid], sep = "\r")
+  dual_rows <- key_rows[valid]
+  list(
+    dual = split(dual_rows, dual_key),
+    sequence = unique(sequence[is_txt & !is.na(sequence) & nzchar(sequence)]),
+    upload = unique(upload_names[valid_upload])
+  )
+}
+
+appusage_manifest_candidate_rows <- function(sequence_id, norm_candidates,
+                                             manifest_match_index) {
+  if (is.na(sequence_id) || length(norm_candidates) == 0) {
+    return(integer())
+  }
+  keys <- paste(as.character(sequence_id), norm_candidates, sep = "\r")
+  rows <- unlist(manifest_match_index$dual[keys], use.names = FALSE)
+  sort(unique(as.integer(rows)))
+}
+
+appusage_manifest_has_sequence <- function(sequence_id, manifest_match_index) {
+  !is.na(sequence_id) && as.character(sequence_id) %in% manifest_match_index$sequence
+}
+
+appusage_manifest_has_upload <- function(norm_candidates, manifest_match_index) {
+  any(norm_candidates %in% manifest_match_index$upload)
 }
 
 appusage_resolve_duplicate_manifest_candidates <- function(manifest, candidates,
@@ -2465,13 +2583,13 @@ appusage_refresh_match_summary <- function(project_root, file_matches) {
   }
   summary$self_report_match_status <- NA_character_
   summary$self_report_sequence_id <- NA_integer_
-  matched <- rep(NA_integer_, nrow(summary))
-  if ("second_level_rda" %in% names(summary)) {
-    matched <- match(as.character(summary$second_level_rda), as.character(file_matches$second_level_rda))
-  }
+  matched <- match(
+    normalized_summary_path(appusage_summary_proc2_paths(summary)),
+    normalized_summary_path(file_matches$second_level_rda)
+  )
   missing <- is.na(matched)
-  if (any(missing) && all(c("participant_id", "detected_type") %in% names(summary))) {
-    summary_key <- paste(summary$participant_id, summary$detected_type, sep = "\r")
+  if (any(missing)) {
+    summary_key <- appusage_identity_summary_key(summary)
     file_key <- paste(file_matches$wenjuanxing_sequence_id, file_matches$filename_export_type, sep = "\r")
     matched[missing] <- match(summary_key[missing], file_key)
   }
@@ -2482,6 +2600,19 @@ appusage_refresh_match_summary <- function(project_root, file_matches) {
   }
   utils::write.csv(summary, summary_file, row.names = FALSE, na = "")
   invisible(summary_file)
+}
+
+appusage_summary_proc2_paths <- function(summary) {
+  paths <- rep(NA_character_, nrow(summary))
+  for (col in c("second_level_rda", "second_level_data_file", "data_file")) {
+    if (!col %in% names(summary)) {
+      next
+    }
+    value <- as.character(summary[[col]])
+    fill <- (is.na(paths) | !nzchar(paths)) & !is.na(value) & nzchar(value)
+    paths[fill] <- value[fill]
+  }
+  paths
 }
 
 appusage_second_summary_has_inline_qc <- function(second) {

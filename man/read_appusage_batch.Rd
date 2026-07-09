@@ -70,8 +70,8 @@ four-character hexadecimal ID.}
 
 \item{parallel}{Whether to use parallel workers. Defaults to \code{FALSE}.}
 
-\item{n_cores}{Number of workers when \code{parallel = TRUE}; must not exceed the
-maximum available cores reported by the machine.}
+\item{n_cores}{Requested workers when \code{parallel = TRUE}; effective workers
+are capped by available cores and first-level memory-risk heuristics.}
 
 \item{resume}{Whether to reuse durable first-level checkpoint rows when
 resuming an interrupted first-level batch.}

@@ -233,6 +233,7 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
   inline_qc_result <- NULL
   inline_qc_started_at <- NULL
   inline_qc_finished_at <- NULL
+  first_metadata <- NULL
   if (isTRUE(inline_qc)) {
     inline_qc_started_at <- Sys.time()
     first_metadata <- read_first_level_metadata_for_second(first_level_rda)
@@ -312,6 +313,7 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     inline_qc_finished_at = inline_qc_finished_at
   )
   write_second_level_success_metadata(
+    first_metadata = first_metadata,
     first_level_rda = first_level_rda,
     second_level_rda = output_file,
     second_level_data = second,
@@ -435,7 +437,8 @@ read_first_level_metadata_for_second <- function(first_level_rda) {
   )
 }
 
-write_second_level_success_metadata <- function(first_level_rda,
+write_second_level_success_metadata <- function(first_metadata = NULL,
+                                                first_level_rda,
                                                 second_level_rda,
                                                 second_level_data,
                                                 include_collection_app,
@@ -454,7 +457,7 @@ write_second_level_success_metadata <- function(first_level_rda,
                                                 profiling = NULL,
                                                 started_at,
                                                 finished_at) {
-  first_metadata <- read_first_level_metadata_for_second(first_level_rda)
+  first_metadata <- first_metadata %||% read_first_level_metadata_for_second(first_level_rda)
   metadata_file <- second_level_metadata_path(second_level_rda)
   metadata <- build_second_level_metadata(
     first_metadata = first_metadata,
@@ -2043,16 +2046,21 @@ daily_from_episodes <- function(x, max_daily_app_ms) {
   key <- paste(x$date, x$app_name, x$package_name, activity_type, sep = "\r")
   levels <- sort(unique(key))
   group_id <- match(key, levels)
-  first_idx <- match(levels, key)
+  first_idx <- match(seq_along(levels), group_id)
   durations <- x$duration_ms
   valid_duration <- !is.na(durations) & durations >= 0
-  duration_sum <- rowsum(ifelse(valid_duration, durations, 0), group_id, reorder = FALSE)[, 1]
-  valid_count <- rowsum(as.integer(valid_duration), group_id, reorder = FALSE)[, 1]
-  duration_ms <- as.numeric(duration_sum)
+  anomaly_any <- if ("anomaly_any" %in% names(x)) x$anomaly_any else rep(FALSE, nrow(x))
+  grouped_counts <- rowsum(cbind(
+    duration_sum = ifelse(valid_duration, durations, 0),
+    valid_count = as.integer(valid_duration),
+    anomaly_count = as.integer(anomaly_any %in% TRUE)
+  ), group_id, reorder = FALSE)
+  grouped_counts <- grouped_counts[as.character(seq_along(levels)), , drop = FALSE]
+  duration_ms <- as.numeric(grouped_counts[, "duration_sum"])
+  valid_count <- grouped_counts[, "valid_count"]
   duration_ms[valid_count == 0] <- NA_real_
   episode_count <- as.integer(tabulate(group_id, nbins = length(levels)))
-  anomaly_any <- if ("anomaly_any" %in% names(x)) x$anomaly_any else rep(FALSE, nrow(x))
-  n_anomalies <- as.integer(rowsum(as.integer(anomaly_any %in% TRUE), group_id, reorder = FALSE)[, 1])
+  n_anomalies <- as.integer(grouped_counts[, "anomaly_count"])
   parse_warning <- line_daily_parse_warnings(x$parse_warning, group_id, length(levels))
   out <- tibble::tibble(
     date = x$date[first_idx],
@@ -2104,9 +2112,21 @@ line_daily_parse_warnings <- function(parse_warning, group_id, n_groups) {
   if (!any(present)) {
     return(out)
   }
-  split_warnings <- split(parse_warning[present], group_id[present])
-  for (nm in names(split_warnings)) {
-    out[[as.integer(nm)]] <- paste(unique(split_warnings[[nm]]), collapse = "; ")
+  present_idx <- which(present)
+  present_groups <- group_id[present_idx]
+  present_warnings <- parse_warning[present_idx]
+  pair_key <- paste(present_groups, present_warnings, sep = "\r")
+  keep <- !duplicated(pair_key)
+  present_groups <- present_groups[keep]
+  present_warnings <- present_warnings[keep]
+  ord <- order(present_groups, seq_along(present_groups))
+  present_groups <- present_groups[ord]
+  present_warnings <- present_warnings[ord]
+  run <- rle(present_groups)
+  ends <- cumsum(run$lengths)
+  starts <- ends - run$lengths + 1L
+  for (i in seq_along(run$values)) {
+    out[[run$values[[i]]]] <- paste(present_warnings[starts[[i]]:ends[[i]]], collapse = "; ")
   }
   out
 }

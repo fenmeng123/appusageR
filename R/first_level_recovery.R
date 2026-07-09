@@ -581,51 +581,238 @@ appusage_retry_memory_row <- function(row,
   retry
 }
 
+appusage_first_level_worker_decision <- function(parallel,
+                                                 n_cores,
+                                                 x,
+                                                 input = "file",
+                                                 max_workers = 12L,
+                                                 worker_cap_override = FALSE,
+                                                 available_cores = parallel::detectCores(logical = TRUE),
+                                                 memory_info = NULL,
+                                                 size_info = NULL) {
+  requested <- suppressWarnings(as.integer(n_cores))
+  if (is.na(requested) || requested < 1L) {
+    requested <- 1L
+  }
+  available_cores <- suppressWarnings(as.integer(available_cores))
+  if (is.na(available_cores) || available_cores < 1L) {
+    available_cores <- 1L
+  }
+  source_file_count <- length(x)
+  max_workers <- suppressWarnings(as.integer(max_workers))
+  if (is.na(max_workers) || max_workers < 1L) {
+    max_workers <- 12L
+  }
+  memory_info <- memory_info %||% appusage_detect_memory_info()
+  size_info <- size_info %||% appusage_source_size_info(x, input = input)
+
+  if (!isTRUE(parallel)) {
+    return(appusage_worker_decision_record(
+      requested_workers = requested,
+      detected_logical_cores = available_cores,
+      selected_workers = 1L,
+      max_workers = max_workers,
+      worker_cap_override = worker_cap_override,
+      source_file_count = source_file_count,
+      size_info = size_info,
+      memory_info = memory_info,
+      cap_reason = "serial_parallel_false"
+    ))
+  }
+
+  if (source_file_count < 1L) {
+    return(appusage_worker_decision_record(
+      requested_workers = requested,
+      detected_logical_cores = available_cores,
+      selected_workers = 0L,
+      max_workers = max_workers,
+      worker_cap_override = worker_cap_override,
+      source_file_count = source_file_count,
+      size_info = size_info,
+      memory_info = memory_info,
+      cap_reason = "no_inputs"
+    ))
+  }
+
+  base <- min(requested, available_cores, source_file_count)
+  cap_reason <- "requested_available_or_file_count"
+  selected <- base
+
+  if (isTRUE(worker_cap_override)) {
+    cap_reason <- "explicit_worker_cap_override"
+  } else {
+    selected <- min(selected, max_workers)
+    if (selected < base) {
+      cap_reason <- "ordinary_max_workers_cap"
+    }
+
+    risk <- appusage_first_level_memory_risk(
+      source_file_count = source_file_count,
+      size_info = size_info,
+      memory_info = memory_info
+    )
+    selected <- min(selected, risk$worker_cap)
+    cap_reason <- risk$cap_reason
+  }
+
+  selected <- max(1L, as.integer(selected))
+  appusage_worker_decision_record(
+    requested_workers = requested,
+    detected_logical_cores = available_cores,
+    selected_workers = selected,
+    max_workers = max_workers,
+    worker_cap_override = worker_cap_override,
+    source_file_count = source_file_count,
+    size_info = size_info,
+    memory_info = memory_info,
+    cap_reason = cap_reason
+  )
+}
+
 appusage_resolve_first_level_workers <- function(parallel,
                                                  n_cores,
                                                  x,
                                                  input = "file",
                                                  max_workers = 12L,
                                                  worker_cap_override = FALSE,
-                                                 available_cores = parallel::detectCores(logical = TRUE)) {
-  if (!isTRUE(parallel)) {
-    return(1L)
-  }
+                                                 available_cores = parallel::detectCores(logical = TRUE),
+                                                 memory_info = NULL,
+                                                 size_info = NULL) {
+  decision <- appusage_first_level_worker_decision(
+    parallel = parallel,
+    n_cores = n_cores,
+    x = x,
+    input = input,
+    max_workers = max_workers,
+    worker_cap_override = worker_cap_override,
+    available_cores = available_cores,
+    memory_info = memory_info,
+    size_info = size_info
+  )
+  decision$selected_workers
+}
 
-  available_cores <- suppressWarnings(as.integer(available_cores))
-  if (is.na(available_cores) || available_cores < 1L) {
-    available_cores <- 1L
+appusage_source_size_info <- function(x, input = "file") {
+  sizes <- numeric()
+  if (identical(input, "file") && length(x) > 0L) {
+    sizes <- suppressWarnings(file.info(x)$size)
+    sizes <- sizes[!is.na(sizes)]
   }
-  requested <- suppressWarnings(as.integer(n_cores))
-  if (is.na(requested) || requested < 1L) {
-    requested <- 1L
-  }
+  total_size <- if (length(sizes) > 0L) sum(sizes) else 0
+  max_size <- if (length(sizes) > 0L) max(sizes) else 0
+  average_size <- if (length(sizes) > 0L) mean(sizes) else 0
+  list(
+    total_source_size_bytes = as.numeric(total_size),
+    max_source_size_bytes = as.numeric(max_size),
+    average_source_size_bytes = as.numeric(average_size),
+    n_sized_files = as.integer(length(sizes))
+  )
+}
 
-  effective <- min(requested, available_cores, length(x))
-  if (!isTRUE(worker_cap_override)) {
-    max_workers <- suppressWarnings(as.integer(max_workers))
-    if (is.na(max_workers) || max_workers < 1L) {
-      max_workers <- 12L
+appusage_detect_memory_info <- function() {
+  out <- list(
+    detected_total_memory_bytes = NA_real_,
+    detected_free_memory_bytes = NA_real_,
+    memory_detected = FALSE,
+    memory_source = "unavailable"
+  )
+  if (!identical(.Platform$OS.type, "windows")) {
+    return(out)
+  }
+  command <- paste(
+    "try {",
+    "$os = Get-CimInstance Win32_OperatingSystem;",
+    "Write-Output $os.TotalVisibleMemorySize;",
+    "Write-Output $os.FreePhysicalMemory",
+    "} catch { exit 1 }"
+  )
+  values <- tryCatch(
+    suppressWarnings(as.numeric(system2(
+      "powershell",
+      c("-NoProfile", "-Command", command),
+      stdout = TRUE,
+      stderr = FALSE
+    ))),
+    error = function(e) numeric()
+  )
+  values <- values[!is.na(values)]
+  if (length(values) >= 2L) {
+    out$detected_total_memory_bytes <- values[[1]] * 1024
+    out$detected_free_memory_bytes <- values[[2]] * 1024
+    out$memory_detected <- TRUE
+    out$memory_source <- "Win32_OperatingSystem"
+  }
+  out
+}
+
+appusage_first_level_memory_risk <- function(source_file_count,
+                                             size_info,
+                                             memory_info) {
+  gb <- 1024^3
+  total_size <- size_info$total_source_size_bytes %||% 0
+  max_size <- size_info$max_source_size_bytes %||% 0
+  average_size <- size_info$average_source_size_bytes %||% 0
+  memory_detected <- isTRUE(memory_info$memory_detected)
+  total_memory <- memory_info$detected_total_memory_bytes %||% NA_real_
+  free_memory <- memory_info$detected_free_memory_bytes %||% NA_real_
+
+  if (max_size > 200 * 1024^2) {
+    return(list(worker_cap = 4L, cap_reason = "large_file_risk"))
+  }
+  if (max_size > 75 * 1024^2 || average_size > 15 * 1024^2) {
+    return(list(worker_cap = 6L, cap_reason = "moderate_large_file_risk"))
+  }
+  if (!memory_detected) {
+    if (source_file_count >= 5000L || total_size > 2 * gb) {
+      return(list(worker_cap = 6L, cap_reason = "conservative_large_project_memory_unknown"))
     }
-    effective <- min(effective, max_workers)
-
-    if (identical(input, "file")) {
-      sizes <- suppressWarnings(file.info(x)$size)
-      sizes <- sizes[!is.na(sizes)]
-      max_size <- if (length(sizes) > 0L) max(sizes) else 0
-      total_size <- if (length(sizes) > 0L) sum(sizes) else 0
-      if (length(x) >= 5000L || total_size > 2 * 1024^3) {
-        effective <- min(effective, 6L)
-      } else if (length(x) >= 1000L || total_size > 1024^3) {
-        effective <- min(effective, 8L)
-      }
-      if (max_size > 200 * 1024^2) {
-        effective <- min(effective, 4L)
-      }
+    if (source_file_count >= 1000L || total_size > gb) {
+      return(list(worker_cap = 8L, cap_reason = "conservative_medium_project_memory_unknown"))
     }
+    return(list(worker_cap = Inf, cap_reason = "memory_unknown_low_project_risk"))
   }
+  if (!is.na(free_memory) && free_memory < 8 * gb) {
+    return(list(worker_cap = 4L, cap_reason = "low_free_memory"))
+  }
+  if (!is.na(free_memory) && free_memory < 16 * gb) {
+    return(list(worker_cap = 8L, cap_reason = "moderate_free_memory"))
+  }
+  if (!is.na(total_memory) && total_memory >= 32 * gb &&
+    !is.na(free_memory) && free_memory >= 16 * gb) {
+    return(list(worker_cap = Inf, cap_reason = "adaptive_low_memory_risk"))
+  }
+  if (source_file_count >= 5000L || total_size > 2 * gb) {
+    return(list(worker_cap = 8L, cap_reason = "adaptive_large_project_general_cap"))
+  }
+  list(worker_cap = Inf, cap_reason = "adaptive_general_low_risk")
+}
 
-  max(1L, as.integer(effective))
+appusage_worker_decision_record <- function(requested_workers,
+                                            detected_logical_cores,
+                                            selected_workers,
+                                            max_workers,
+                                            worker_cap_override,
+                                            source_file_count,
+                                            size_info,
+                                            memory_info,
+                                            cap_reason) {
+  list(
+    requested_workers = as.integer(requested_workers),
+    detected_logical_cores = as.integer(detected_logical_cores),
+    selected_workers = as.integer(selected_workers),
+    max_workers = as.integer(max_workers),
+    worker_cap_override = isTRUE(worker_cap_override),
+    source_file_count = as.integer(source_file_count),
+    total_source_size_bytes = as.numeric(size_info$total_source_size_bytes %||% NA_real_),
+    max_source_size_bytes = as.numeric(size_info$max_source_size_bytes %||% NA_real_),
+    average_source_size_bytes = as.numeric(size_info$average_source_size_bytes %||% NA_real_),
+    n_sized_files = as.integer(size_info$n_sized_files %||% NA_integer_),
+    detected_total_memory_bytes = as.numeric(memory_info$detected_total_memory_bytes %||% NA_real_),
+    detected_free_memory_bytes = as.numeric(memory_info$detected_free_memory_bytes %||% NA_real_),
+    memory_detected = isTRUE(memory_info$memory_detected),
+    memory_source = memory_info$memory_source %||% NA_character_,
+    cap_reason = cap_reason
+  )
 }
 
 appusage_read_first_level_checkpoint <- function(path) {
