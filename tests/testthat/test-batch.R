@@ -385,6 +385,25 @@ test_that("read_appusage_batch retries memory-allocation rows from rebuilt summa
   expect_match(resumed$original_error_message[[1]], "cannot allocate vector")
 })
 
+test_that("first-level memory allocation diagnostics include Windows R allocation messages", {
+  string_buffer_error <- simpleError(
+    "could not allocate memory (0 Mb) in C function 'R_AllocStringBuffer'"
+  )
+  realloc_error <- "Failed to realloc working memory stack to 100000*4bytes"
+
+  expect_equal(first_level_failure_reason(string_buffer_error), "memory_allocation")
+  expect_true(appusage_is_memory_allocation_text(conditionMessage(string_buffer_error)))
+  expect_true(appusage_is_memory_allocation_text(realloc_error))
+  expect_equal(
+    appusage_classify_failure_family("simpleError", conditionMessage(string_buffer_error)),
+    "memory_allocation"
+  )
+  expect_equal(
+    appusage_classify_failure_family("simpleError", realloc_error),
+    "memory_allocation"
+  )
+})
+
 test_that("first-level adaptive worker selector records low-risk and high-risk decisions", {
   high_memory <- list(
     detected_total_memory_bytes = 64 * 1024^3,

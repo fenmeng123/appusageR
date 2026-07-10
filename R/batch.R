@@ -1278,6 +1278,10 @@ first_level_failure_reason <- function(error) {
   if (inherits(error, "appusage_unsupported_type")) {
     return("unknown_or_unsupported_type")
   }
+  error_message <- tryCatch(conditionMessage(error), error = function(e) "")
+  if (appusage_is_memory_allocation_text(class(error), error_message)) {
+    return("memory_allocation")
+  }
   "parse_error"
 }
 

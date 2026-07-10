@@ -1,5 +1,32 @@
 # First-level cache recovery and memory-safe batch helpers
 
+appusage_memory_allocation_error_pattern <- function() {
+  paste(
+    c(
+      "cannot allocate",
+      "could not allocate",
+      "memory exhausted",
+      "memory allocation",
+      "std::bad_alloc",
+      "vector memory exhausted",
+      "protect.*stack overflow",
+      "out of memory",
+      "r_allocstringbuffer",
+      "failed to realloc",
+      "realloc working memory stack"
+    ),
+    collapse = "|"
+  )
+}
+
+appusage_is_memory_allocation_text <- function(...) {
+  text <- paste(..., collapse = " ")
+  if (!nzchar(text)) {
+    return(FALSE)
+  }
+  grepl(appusage_memory_allocation_error_pattern(), tolower(text))
+}
+
 #' Rebuild first-level analytic summary from existing cache metadata
 #'
 #' Reconstructs `analytic_summary_table_proclevel-1.csv` from existing
@@ -454,10 +481,7 @@ appusage_classify_failure_family <- function(error_class = NA_character_,
   )
   text <- tolower(text)
 
-  if (grepl(
-    "cannot allocate|memory exhausted|memory allocation|std::bad_alloc|vector memory exhausted|protect.*stack overflow|out of memory",
-    text
-  )) {
+  if (appusage_is_memory_allocation_text(text)) {
     return("memory_allocation")
   }
   if (grepl("unsupported|unknown.*export|unlock", text)) {
