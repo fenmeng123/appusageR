@@ -750,6 +750,44 @@ qc_summary_row_from_loaded_metadata <- function(metadata, metadata_file) {
         default = appusage_default_timezone()
       )
     ),
+    daily_self_check_status = qc_metadata_value(
+      metadata, c("daily_aggregation_self_check", "status")
+    ),
+    daily_self_check_missing_source_keys = qc_metadata_value(
+      metadata,
+      c("daily_aggregation_self_check", "n_missing_or_unmatched_source_keys"),
+      default = NA_integer_
+    ),
+    daily_self_check_missing_daily_duration = qc_metadata_value(
+      metadata,
+      c("daily_aggregation_self_check", "n_missing_daily_duration"),
+      default = NA_integer_
+    ),
+    daily_self_check_numeric_mismatch = qc_metadata_value(
+      metadata,
+      c("daily_aggregation_self_check", "n_nonmissing_numeric_mismatch"),
+      default = NA_integer_
+    ),
+    daily_self_check_episode_count_mismatch = qc_metadata_value(
+      metadata,
+      c("daily_aggregation_self_check", "n_episode_count_mismatch"),
+      default = NA_integer_
+    ),
+    daily_self_check_duplicate_keys = qc_metadata_value(
+      metadata,
+      c("daily_aggregation_self_check", "n_duplicate_daily_keys"),
+      default = NA_integer_
+    ),
+    daily_self_check_order_violation = qc_metadata_value(
+      metadata,
+      c("daily_aggregation_self_check", "order_violation"),
+      default = NA
+    ),
+    daily_self_check_conservation_diff_ms = qc_metadata_value(
+      metadata,
+      c("daily_aggregation_self_check", "duration_conservation_difference_ms"),
+      default = NA_real_
+    ),
     filename_export_type = qc_metadata_value(metadata, c("export", "native_export_type_from_filename")),
     export_type_match = qc_metadata_value(metadata, c("export", "export_type_match"), default = NA),
     first_level_status = qc_metadata_value(metadata, c("processing", "first_level_status")),

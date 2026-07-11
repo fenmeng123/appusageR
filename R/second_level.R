@@ -61,6 +61,8 @@ make_second_level_appusage <- function(data, export_type = NULL,
   meta_summary_daily <- empty_second_daily_tibble()
   meta_episode_daily <- empty_second_daily_tibble()
   line_segmentation_diagnostics <- NULL
+  line_daily_expected <- NULL
+  meta_daily_expected <- NULL
 
   if (!is.null(first$meta_events)) {
     event <- second_level_events(first$meta_events, tz = tz)
@@ -70,6 +72,9 @@ make_second_level_appusage <- function(data, export_type = NULL,
     daily <- daily_from_episodes(episode, max_daily_app_ms = max_daily_app_ms, tz = tz)
     line_segmentation_diagnostics <- attr(
       daily, "line_interval_segmentation_diagnostics", exact = TRUE
+    )
+    line_daily_expected <- attr(
+      daily, "daily_aggregation_expected", exact = TRUE
     )
   }
   if (isTRUE(reconstruct_meta) && !is.null(first$meta_events)) {
@@ -101,6 +106,9 @@ make_second_level_appusage <- function(data, export_type = NULL,
       max_daily_app_ms = max_daily_app_ms,
       tz = tz
     )
+    meta_daily_expected <- attr(
+      meta_episode_daily, "daily_aggregation_expected", exact = TRUE
+    )
   }
   if (!is.null(first$meta_summary) || (isTRUE(reconstruct_meta) && !is.null(first$meta_events))) {
     meta_summary_daily <- compare_meta_daily_sources(meta_summary_daily, meta_episode_daily)
@@ -116,12 +124,22 @@ make_second_level_appusage <- function(data, export_type = NULL,
     event <- filter_collection_app(event)
     episode <- filter_collection_app(episode)
     daily <- filter_collection_app(daily)
+    if (!is.null(line_daily_expected$rows)) {
+      line_daily_expected$rows <- line_daily_expected$rows[
+        line_daily_expected$rows$package_name != "com.w.appusage", , drop = FALSE
+      ]
+    }
+    if (!is.null(meta_daily_expected$rows)) {
+      meta_daily_expected$rows <- meta_daily_expected$rows[
+        meta_daily_expected$rows$package_name != "com.w.appusage", , drop = FALSE
+      ]
+    }
   }
 
   out <- list(
     event = event,
     episode = episode,
-    daily = daily
+    daily = appusage_order_daily(daily)
   )
   attr(out, "meta_reconstruction_diagnostics") <-
     attr(meta_episode, "meta_reconstruction_diagnostics", exact = TRUE)
@@ -131,6 +149,10 @@ make_second_level_appusage <- function(data, export_type = NULL,
     meta = attr(meta_episode_daily, "meta_interval_segmentation_diagnostics", exact = TRUE)
   )
   attr(out, "effective_timezone") <- tz
+  attr(out, "daily_aggregation_expected") <- list(
+    line_episodes = line_daily_expected,
+    meta_episodes = meta_daily_expected
+  )
   out
 }
 
@@ -233,6 +255,9 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     meta_daily_source = meta_daily_source,
     tz = tz
   )
+  daily_self_check <- appusage_validate_second_level_daily(second, tz = tz)
+  attr(second, "daily_aggregation_self_check") <- daily_self_check
+  appusage_stop_on_daily_self_check(daily_self_check)
   convert_finished_at <- Sys.time()
 
   output_dir <- output_dir %||% default_second_level_output_dir(first_level_rda)
@@ -957,6 +982,14 @@ build_second_level_metadata <- function(first_metadata, first_level_rda,
   } else {
     diagnostics <- attr(second_level_data, "interval_segmentation_diagnostics", exact = TRUE)
     diagnostics %||% list(effective_timezone = effective_timezone, status = "not_applicable")
+  }
+  metadata$daily_aggregation_self_check <- if (is.null(second_level_data)) {
+    list(status = "not_available", rule_version = "0.3.4-E")
+  } else {
+    attr(second_level_data, "daily_aggregation_self_check", exact = TRUE) %||%
+      appusage_validate_second_level_daily(
+        second_level_data, tz = effective_timezone
+      )
   }
   metadata$processing$effective_timezone <- effective_timezone
   metadata$outputs$metadata_json <- normalizePath(
@@ -2364,7 +2397,7 @@ second_level_daily <- function(x, max_daily_app_ms) {
     duration_col = "duration_ms",
     max_duration_ms = max_daily_app_ms
   )
-  conform_second_daily(out[order(out$date, seq_len(nrow(out))), , drop = FALSE])
+  appusage_order_daily(out)
 }
 
 second_level_meta_summary <- function(x, max_daily_app_ms) {
@@ -2404,7 +2437,7 @@ second_level_meta_summary <- function(x, max_daily_app_ms) {
     duration_col = "duration_ms",
     max_duration_ms = max_daily_app_ms
   )
-  conform_second_daily(out[order(out$date, seq_len(nrow(out))), , drop = FALSE])
+  appusage_order_daily(out)
 }
 
 daily_from_episodes <- function(x, max_daily_app_ms, tz = "Asia/Shanghai") {
@@ -2419,28 +2452,43 @@ daily_from_episodes <- function(x, max_daily_app_ms, tz = "Asia/Shanghai") {
   } else {
     classify_activity_type(x$app_name)
   }
-  key <- paste(x$date, x$app_name, x$package_name, activity_type, sep = "\r")
-  levels <- sort(unique(key))
-  group_id <- match(key, levels)
-  first_idx <- match(seq_along(levels), group_id)
+  key_data <- tibble::tibble(
+    date = x$date,
+    package_name = x$package_name,
+    app_name = x$app_name,
+    activity_type = activity_type
+  )
+  key <- appusage_daily_key(key_data, include_daily_source = FALSE)
+  group_keys <- unique(key)
+  group_id <- match(key, group_keys)
+  first_idx <- match(group_keys, key)
+  if (anyNA(group_id) || anyNA(first_idx) || anyDuplicated(group_keys)) {
+    cli::cli_abort(
+      "Daily line key construction failed.",
+      class = "appusage_daily_key_alignment_error"
+    )
+  }
   durations <- x$duration_ms
   valid_duration <- !is.na(durations) & durations >= 0
   anomaly_any <- if ("anomaly_any" %in% names(x)) x$anomaly_any else rep(FALSE, nrow(x))
-  grouped_counts <- rowsum(cbind(
-    duration_sum = ifelse(valid_duration, durations, 0),
-    valid_count = as.integer(valid_duration),
-    anomaly_count = as.integer(anomaly_any %in% TRUE)
-  ), group_id, reorder = FALSE)
-  grouped_counts <- grouped_counts[as.character(seq_along(levels)), , drop = FALSE]
+  grouped_counts <- appusage_rowsum_by_daily_key(
+    cbind(
+      duration_sum = ifelse(valid_duration, durations, 0),
+      valid_count = as.integer(valid_duration),
+      anomaly_count = as.integer(anomaly_any %in% TRUE)
+    ),
+    key,
+    group_keys
+  )
   duration_ms <- as.numeric(grouped_counts[, "duration_sum"])
   valid_count <- grouped_counts[, "valid_count"]
   duration_ms[valid_count == 0] <- NA_real_
   episode_pair <- paste(group_id, x$.source_row_id, sep = "\r")
   episode_count <- as.integer(tabulate(
-    group_id[!duplicated(episode_pair)], nbins = length(levels)
+    group_id[!duplicated(episode_pair)], nbins = length(group_keys)
   ))
   n_anomalies <- as.integer(grouped_counts[, "anomaly_count"])
-  parse_warning <- line_daily_parse_warnings(x$parse_warning, group_id, length(levels))
+  parse_warning <- line_daily_parse_warnings(x$parse_warning, group_id, length(group_keys))
   out <- tibble::tibble(
     date = x$date[first_idx],
     weekday = weekday_name(x$date[first_idx]),
@@ -2481,8 +2529,21 @@ daily_from_episodes <- function(x, max_daily_app_ms, tz = "Asia/Shanghai") {
     out$anomaly_reason[out$n_anomalies > 0],
     "one or more source episodes were anomalous"
   )
-  out <- conform_second_daily(out[order(out$date, out$package_name, seq_len(nrow(out))), , drop = FALSE])
+  out <- appusage_order_daily(out)
   attr(out, "line_interval_segmentation_diagnostics") <- segmentation
+  attr(out, "daily_aggregation_expected") <- list(
+    rows = appusage_order_expected_daily(tibble::tibble(
+      key = group_keys,
+      date = x$date[first_idx],
+      package_name = x$package_name[first_idx],
+      app_name = x$app_name[first_idx],
+      activity_type = activity_type[first_idx],
+      duration_ms = duration_ms,
+      episode_count = episode_count,
+      source_row_count = as.integer(tabulate(group_id, nbins = length(group_keys)))
+    ), "line_episodes"),
+    segmentation = segmentation
+  )
   out
 }
 
@@ -2526,7 +2587,16 @@ aggregate_meta_episodes_daily <- function(episodes, summary_daily = NULL,
   meta <- appusage_interval_segments(meta, tz = tz)
   segmentation <- attr(meta, "interval_segmentation_diagnostics", exact = TRUE)
   key <- meta_daily_key(meta)
-  groups <- split(seq_len(nrow(meta)), key)
+  group_keys <- unique(key)
+  group_id <- match(key, group_keys)
+  if (anyNA(group_id)) {
+    cli::cli_abort(
+      "Meta daily grouping key alignment failed.",
+      class = "appusage_daily_key_alignment_error"
+    )
+  }
+  groups <- split(seq_len(nrow(meta)), group_id)
+  groups <- groups[as.character(seq_along(group_keys))]
   rows <- lapply(groups, function(idx) {
     x <- meta[idx, , drop = FALSE]
     valid_complete <- x$reconstruction_status == "complete" &
@@ -2584,11 +2654,24 @@ aggregate_meta_episodes_daily <- function(episodes, summary_daily = NULL,
     out$anomaly_reason[out$n_anomalies > 0],
     "reconstruction_diagnostics"
   )
-  out <- conform_second_daily(out[order(out$date, out$package_name, seq_len(nrow(out))), , drop = FALSE])
+  out <- appusage_order_daily(out)
   if (isTRUE(compare_to_summary) && !is.null(summary_daily)) {
     out <- compare_meta_daily_sources(out, summary_daily)
   }
   attr(out, "meta_interval_segmentation_diagnostics") <- segmentation
+  attr(out, "daily_aggregation_expected") <- list(
+    rows = tibble::tibble(
+      key = appusage_daily_key(out, include_daily_source = FALSE),
+      date = out$date,
+      package_name = out$package_name,
+      app_name = out$app_name,
+      activity_type = out$activity_type,
+      duration_ms = out$duration_ms,
+      episode_count = out$episode_count,
+      source_row_count = out$episode_count
+    ),
+    segmentation = segmentation
+  )
   out
 }
 
@@ -2616,13 +2699,13 @@ compare_meta_daily_sources <- function(target, reference) {
     target$episode_duration_ms <- target$duration_ms
   }
   if (nrow(ref) == 0) {
-    return(conform_second_daily(target))
+    return(appusage_order_daily(target))
   }
 
   match_idx <- match(meta_daily_key(target), meta_daily_key(ref))
   matched <- !is.na(match_idx)
   if (!any(matched)) {
-    return(conform_second_daily(target))
+    return(appusage_order_daily(target))
   }
   ref_matched <- ref[match_idx[matched], , drop = FALSE]
   if (identical(target_source, "meta_summary")) {
@@ -2643,17 +2726,11 @@ compare_meta_daily_sources <- function(target, reference) {
     "not_compared",
     ifelse(target$duration_diff_ms[matched] == 0, "matched_exact", "matched_with_difference")
   )
-  conform_second_daily(target)
+  appusage_order_daily(target)
 }
 
 meta_daily_key <- function(data) {
-  paste(
-    as.character(data$date),
-    reconstruction_key_value(data$app_name),
-    reconstruction_key_value(data$package_name),
-    reconstruction_key_value(data$activity_type),
-    sep = "\r"
-  )
+  appusage_daily_key(data, include_daily_source = FALSE)
 }
 
 first_nonmissing <- function(x) {

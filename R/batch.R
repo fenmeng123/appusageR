@@ -3285,7 +3285,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
     } else {
       "first_level_rda_not_found"
     }
-    return(data.frame(
+    return(appusage_attach_daily_self_check_summary(data.frame(
       index = batch_summary$index[[index]],
       participant_id = batch_summary$participant_id[[index]],
       detected_type = batch_summary$detected_type[[index]],
@@ -3304,7 +3304,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),
       elapsed_sec = as.numeric(difftime(finished_at, started_at, units = "secs")),
       stringsAsFactors = FALSE
-    ))
+    ), NA_character_))
   }
 
   cache <- second_level_existing_cache_status(
@@ -3315,7 +3315,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
   )
   if (isTRUE(resume) && !isTRUE(overwrite) && identical(cache$status, "complete")) {
     finished_at <- Sys.time()
-    return(data.frame(
+    return(appusage_attach_daily_self_check_summary(data.frame(
       index = batch_summary$index[[index]],
       participant_id = batch_summary$participant_id[[index]],
       detected_type = batch_summary$detected_type[[index]],
@@ -3335,11 +3335,11 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),
       elapsed_sec = as.numeric(difftime(finished_at, started_at, units = "secs")),
       stringsAsFactors = FALSE
-    ))
+    ), cache$json_file))
   }
   if (identical(cache$pair_state, "source_key_collision")) {
     finished_at <- Sys.time()
-    return(data.frame(
+    return(appusage_attach_daily_self_check_summary(data.frame(
       index = batch_summary$index[[index]],
       participant_id = batch_summary$participant_id[[index]],
       detected_type = batch_summary$detected_type[[index]],
@@ -3359,7 +3359,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),
       elapsed_sec = as.numeric(difftime(finished_at, started_at, units = "secs")),
       stringsAsFactors = FALSE
-    ))
+    ), cache$json_file))
   }
   effective_overwrite <- isTRUE(overwrite) ||
     (isTRUE(resume) && !isTRUE(overwrite) && identical(cache$status, "incomplete"))
@@ -3394,7 +3394,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       finished_at = finished_at
     )
   }
-  data.frame(
+  appusage_attach_daily_self_check_summary(data.frame(
     index = batch_summary$index[[index]],
     participant_id = batch_summary$participant_id[[index]],
     detected_type = batch_summary$detected_type[[index]],
@@ -3414,7 +3414,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
     finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),
     elapsed_sec = as.numeric(difftime(finished_at, started_at, units = "secs")),
     stringsAsFactors = FALSE
-  )
+  ), metadata_file)
 }
 
 second_level_expected_paths <- function(first_level_rda, output_dir = NULL) {

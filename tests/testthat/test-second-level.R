@@ -155,7 +155,17 @@ test_that("activity_type exists in meta event and daily outputs", {
   expect_equal(nrow(second$event), nrow(meta_events))
   expect_equal(nrow(second$daily), nrow(meta_summary))
   expect_equal(second$event$activity_type, c("background", "background", "foreground"))
-  expect_equal(second$daily$activity_type, c("background", "background", "foreground"))
+  expected_daily_order <- appusage_daily_order_index(tibble::tibble(
+    date = meta_summary$table_date,
+    package_name = meta_summary$package_name,
+    app_name = meta_summary$app_name,
+    activity_type = classify_activity_type(meta_summary$app_name),
+    daily_source = "meta_summary"
+  ))
+  expect_equal(
+    second$daily$activity_type,
+    classify_activity_type(meta_summary$app_name)[expected_daily_order]
+  )
 })
 
 test_that("activity_type is present in empty second-level tibbles", {
@@ -232,9 +242,19 @@ test_that("make_second_level_appusage preserves day-level numeric fields", {
   expect_equal(nrow(second$event), 0)
   expect_equal(nrow(second$episode), 0)
   expect_equal(nrow(second$daily), nrow(day))
-  expect_equal(second$daily$duration_ms, day$duration_ms)
-  expect_equal(second$daily$open_count, day$open_count)
-  expect_equal(second$daily$notification_count, day$notification_count)
+  expected_order <- appusage_daily_order_index(tibble::tibble(
+    date = day$date,
+    package_name = day$package_name,
+    app_name = day$app_name,
+    activity_type = classify_activity_type(day$app_name),
+    daily_source = "day_export"
+  ))
+  expect_equal(second$daily$duration_ms, day$duration_ms[expected_order])
+  expect_equal(second$daily$open_count, day$open_count[expected_order])
+  expect_equal(
+    second$daily$notification_count,
+    day$notification_count[expected_order]
+  )
 })
 
 test_that("second-level anomaly flags mark implausible durations", {
