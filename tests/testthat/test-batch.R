@@ -734,7 +734,10 @@ test_that("batch fallback IDs remain valid filename entity values", {
 
   expect_equal(summary$participant_id, "record-000001")
   expect_equal(summary$participant_id_source, "fallback")
-  expect_match(basename(summary$data_file), "^sub-record-000001_type-line_proc-1[.]rda$")
+  expect_match(
+    basename(summary$data_file),
+    "^sub-record-000001_type-line_src-[A-Za-z0-9-]+_proc-1[.]rda$"
+  )
 })
 
 test_that("batch output uses project folders and manual project identifiers", {
@@ -1362,6 +1365,9 @@ test_that("second-level parallel worker errors are captured in non-strict summar
   bad$participant_id <- "bad"
   bad$data_file <- bad_file
   bad$metadata_file <- NA_character_
+  bad$source_record_key <- paste0(first$source_record_key, "-bad")
+  bad$source_fingerprint <- paste0(first$source_fingerprint, "bad")
+  bad$source_cache_key <- NA_character_
   batch <- rbind(first, bad)
 
   messages <- capture.output(

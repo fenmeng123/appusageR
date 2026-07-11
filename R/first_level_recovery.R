@@ -302,6 +302,19 @@ appusage_proc1_row_from_json <- function(json_path,
     appusage_nested_value(metadata, c("identity", "participant_id_source")),
     row$participant_id_source
   )
+  source_identity <- appusage_metadata_source_identity(metadata)
+  row$source_record_key <- appusage_first_nonmissing(
+    source_identity$source_record_key,
+    row$source_record_key
+  )
+  row$source_fingerprint <- appusage_first_nonmissing(
+    source_identity$source_fingerprint,
+    row$source_fingerprint
+  )
+  row$source_cache_key <- appusage_first_nonmissing(
+    source_identity$source_cache_key,
+    row$source_cache_key
+  )
   row$detected_type <- appusage_first_nonmissing(detected_type, row$detected_type)
   row$content_detected_type <- appusage_first_nonmissing(
     appusage_nested_value(metadata, c("content_detection", "detected_type")),
@@ -425,6 +438,9 @@ appusage_proc1_problem_row <- function(metadata_file,
   data.frame(
     index = suppressWarnings(as.integer(manifest_value("index", NA_integer_))),
     source_file = as.character(source_file),
+    source_record_key = as.character(manifest_value("source_record_key", NA_character_)),
+    source_fingerprint = as.character(manifest_value("source_fingerprint", NA_character_)),
+    source_cache_key = as.character(manifest_value("source_cache_key", NA_character_)),
     participant_id = as.character(manifest_value("participant_id", NA_character_)),
     participant_id_source = as.character(manifest_value(
       "participant_id_source",

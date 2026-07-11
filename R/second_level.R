@@ -190,10 +190,13 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
   load_started_at <- Sys.time()
   first <- load_appusage_data_object(first_level_rda)
   load_finished_at <- Sys.time()
+  first_metadata <- read_first_level_metadata_for_second(first_level_rda)
 
   entities <- parse_appusage_filename(first_level_rda)
   participant_id <- entities$sub %||% "record-000001"
   export_type <- entities$type %||% infer_first_level_type(first) %||% "unknown"
+  source_cache_key <- entities$src %||%
+    appusage_metadata_source_identity(first_metadata)$source_cache_key
   convert_started_at <- Sys.time()
   second <- make_second_level_appusage(
     first,
@@ -219,7 +222,8 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
       participant_id = participant_id,
       export_type = export_type,
       proc = 2,
-      extension = "rda"
+      extension = "rda",
+      source_key = source_cache_key
     )
   )
   metadata_file <- second_level_metadata_path(output_file)
@@ -239,10 +243,8 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
   inline_qc_result <- NULL
   inline_qc_started_at <- NULL
   inline_qc_finished_at <- NULL
-  first_metadata <- NULL
   if (isTRUE(inline_qc)) {
     inline_qc_started_at <- Sys.time()
-    first_metadata <- read_first_level_metadata_for_second(first_level_rda)
     inline_qc_result <- tryCatch(
       run_qc_for_second_level_data(
         data = second,
@@ -398,7 +400,8 @@ second_level_metadata_path <- function(second_level_rda) {
       participant_id = entities$sub %||% "unknown",
       export_type = entities$type %||% "unknown",
       proc = 2,
-      extension = "json"
+      extension = "json",
+      source_key = entities$src %||% NULL
     )
   )
 }
@@ -504,6 +507,8 @@ appusage_validate_second_level_success_metadata <- function(
   status <- appusage_nested_value(metadata, c("processing", "second_level_status"))
   recorded_rda <- appusage_nested_value(metadata, c("outputs", "second_level_rda"))
   recorded_json <- appusage_nested_value(metadata, c("outputs", "metadata_json"))
+  entities <- parse_appusage_filename(output_file)
+  recorded_identity <- appusage_metadata_source_identity(metadata)
   if (!identical(as.character(status), "success")) {
     stop("Second-level success metadata does not contain success status.")
   }
@@ -515,6 +520,18 @@ appusage_validate_second_level_success_metadata <- function(
   }
   if (!appusage_normalized_paths_equal(recorded_json, metadata_file)) {
     stop("Second-level success metadata JSON path failed validation.")
+  }
+  if (is_present_string(entities$src)) {
+    if (!is_present_string(recorded_identity$source_record_key) ||
+      !is_present_string(recorded_identity$source_fingerprint)) {
+      stop("Second-level success metadata source identity is missing.")
+    }
+    if (!identical(
+      sanitize_entity_value(recorded_identity$source_cache_key),
+      as.character(entities$src)
+    )) {
+      stop("Second-level success metadata source cache key failed validation.")
+    }
   }
   metadata
 }
@@ -645,16 +662,7 @@ appusage_valid_second_level_success_pair <- function(metadata_file) {
 }
 
 first_level_metadata_path <- function(first_level_rda) {
-  entities <- parse_appusage_filename(first_level_rda)
-  file.path(
-    dirname(first_level_rda),
-    build_appusage_filename(
-      participant_id = entities$sub %||% "unknown",
-      export_type = entities$type %||% "unknown",
-      proc = 1,
-      extension = "json"
-    )
-  )
+  sub("[.]rda$", ".json", first_level_rda, ignore.case = TRUE)
 }
 
 read_first_level_metadata_for_second <- function(first_level_rda) {
@@ -676,9 +684,14 @@ read_first_level_metadata_for_second <- function(first_level_rda) {
     identity = list(
       participant_id = participant_id,
       participant_id_source = NA_character_,
-      wenjuanxing_sequence_id = NA_integer_
+      wenjuanxing_sequence_id = NA_integer_,
+      source_record_key = NA_character_,
+      source_cache_key = entities$src %||% NA_character_
     ),
-    source = list(),
+    source = list(
+      source_fingerprint = NA_character_,
+      source_cache_key = entities$src %||% NA_character_
+    ),
     export = list(
       detected_type = export_type,
       content_detected_export_type = export_type,
@@ -774,7 +787,8 @@ write_second_level_status_metadata <- function(batch_summary, index, output_dir,
       participant_id = participant_id,
       export_type = export_type,
       proc = 2,
-      extension = "json"
+      extension = "json",
+      source_key = parse_appusage_filename(first_level_rda)$src %||% NULL
     )
   )
   first_metadata <- if (is_present_string(first_metadata_file) && file.exists(first_metadata_file)) {
@@ -784,6 +798,25 @@ write_second_level_status_metadata <- function(batch_summary, index, output_dir,
   } else {
     minimal_qc_metadata(metadata_file)
   }
+  if (is.null(first_metadata$identity) || !is.list(first_metadata$identity)) {
+    first_metadata$identity <- list()
+  }
+  if (is.null(first_metadata$source) || !is.list(first_metadata$source)) {
+    first_metadata$source <- list()
+  }
+  first_metadata$identity$source_record_key <- appusage_summary_cell(
+    batch_summary, "source_record_key", index,
+    first_metadata$identity$source_record_key %||% NA_character_
+  )
+  first_metadata$identity$source_cache_key <- appusage_summary_cell(
+    batch_summary, "source_cache_key", index,
+    first_metadata$identity$source_cache_key %||% NA_character_
+  )
+  first_metadata$source$source_fingerprint <- appusage_summary_cell(
+    batch_summary, "source_fingerprint", index,
+    first_metadata$source$source_fingerprint %||% NA_character_
+  )
+  first_metadata$source$source_cache_key <- first_metadata$identity$source_cache_key
   metadata <- build_second_level_metadata(
     first_metadata = first_metadata,
     first_level_rda = first_level_rda,

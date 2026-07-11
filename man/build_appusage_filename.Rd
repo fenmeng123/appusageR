@@ -8,7 +8,8 @@ build_appusage_filename(
   participant_id,
   export_type,
   proc = 1,
-  extension = "rda"
+  extension = "rda",
+  source_key = NULL
 )
 }
 \arguments{
@@ -19,6 +20,10 @@ build_appusage_filename(
 \item{proc}{Processing step, using \code{1}, \code{2}, or \code{3}.}
 
 \item{extension}{File extension without leading dot.}
+
+\item{source_key}{Optional deterministic source cache key. New caches use
+this additive entity to distinguish multiple records with the same
+participant and export type; legacy names omit it.}
 }
 \value{
 A file name.

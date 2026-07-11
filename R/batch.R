@@ -223,12 +223,26 @@ write_second_level_batch <- function(batch_summary, output_dir = NULL,
     second_level_args = list(...)
   )
   project_root <- infer_project_root_from_summary(batch_summary)
-  proc2_metadata <- if (!is.null(output_dir) && dir.exists(output_dir)) {
-    sort(list.files(output_dir, pattern = "_proc-2[.]json$", full.names = TRUE))
+  previous_summary_file <- if (!is.na(project_root)) {
+    file.path(project_root, "analytic_summary_table_proclevel-2.csv")
   } else {
-    character()
+    NA_character_
   }
-  summary <- combine_second_level_batch_summary(proc2_metadata, rows, batch_summary)
+  previous_summary <- if (is_present_string(previous_summary_file) &&
+    file.exists(previous_summary_file)) {
+    tryCatch(
+      utils::read.csv(previous_summary_file, stringsAsFactors = FALSE),
+      error = function(e) tibble::tibble()
+    )
+  } else {
+    tibble::tibble()
+  }
+  summary <- refresh_second_level_summary_from_metadata(
+    batch_summary = batch_summary,
+    output_dir = output_dir,
+    rows = rows,
+    previous_summary = previous_summary
+  )
   if (!is.na(project_root)) {
     summary_file <- file.path(project_root, "analytic_summary_table_proclevel-2.csv")
     utils::write.csv(summary, summary_file, row.names = FALSE, na = "")
@@ -242,6 +256,26 @@ write_second_level_batch <- function(batch_summary, output_dir = NULL,
     )
   }
   invisible(summary)
+}
+
+refresh_second_level_summary_from_metadata <- function(batch_summary,
+                                                       output_dir,
+                                                       rows = list(),
+                                                       previous_summary = NULL) {
+  proc2_metadata <- if (!is.null(output_dir) && dir.exists(output_dir)) {
+    sort(list.files(output_dir, pattern = "_proc-2[.]json$", full.names = TRUE))
+  } else {
+    character()
+  }
+  summary <- combine_second_level_batch_summary(proc2_metadata, rows, batch_summary)
+  if (!is.null(previous_summary) && nrow(previous_summary) > 0L) {
+    summary <- restore_previous_matching_fields(summary, previous_summary)
+  }
+  reconcile_second_level_summary_cardinality(
+    summary,
+    row_summary = tibble::tibble(),
+    batch_summary = batch_summary
+  )
 }
 
 #' Rerun second-level processing for a filtered project subset
@@ -480,7 +514,11 @@ merge_subset_second_level_summary <- function(old_summary, new_summary, first_su
   keep_old <- is.na(old_key) | !old_key %in% stats::na.omit(new_key)
   merged <- bind_appusage_summary_rows(new_summary, old_summary[keep_old, , drop = FALSE])
   merged <- restore_previous_matching_fields(merged, old_summary)
-  order_second_level_summary(merged, first_summary)
+  reconcile_second_level_summary_cardinality(
+    merged,
+    row_summary = tibble::tibble(),
+    batch_summary = first_summary
+  )
 }
 
 restore_previous_matching_fields <- function(summary, old_summary) {
@@ -542,8 +580,15 @@ order_second_level_summary <- function(summary, first_summary) {
 first_level_summary_key <- function(summary) {
   summary <- tibble::as_tibble(summary)
   out <- rep(NA_character_, nrow(summary))
+  if ("source_record_key" %in% names(summary)) {
+    value <- as.character(summary$source_record_key)
+    value[is.na(value) | !nzchar(value)] <- NA_character_
+    out <- value
+  }
   if ("data_file" %in% names(summary)) {
-    out <- normalized_summary_path(summary$data_file)
+    value <- normalized_summary_path(summary$data_file)
+    fill <- (is.na(out) | !nzchar(out)) & !is.na(value) & nzchar(value)
+    out[fill] <- value[fill]
   }
   fallback <- appusage_identity_summary_key(summary)
   missing <- is.na(out) | !nzchar(out)
@@ -554,6 +599,11 @@ first_level_summary_key <- function(summary) {
 second_level_summary_key <- function(summary) {
   summary <- tibble::as_tibble(summary)
   out <- rep(NA_character_, nrow(summary))
+  if ("source_record_key" %in% names(summary)) {
+    value <- as.character(summary$source_record_key)
+    value[is.na(value) | !nzchar(value)] <- NA_character_
+    out <- value
+  }
   for (col in c("first_level_data_file", "first_level_rda", "data_file")) {
     if (col %in% names(summary)) {
       value <- normalized_summary_path(summary[[col]])
@@ -685,7 +735,11 @@ appusage_serializable_list <- function(x) {
 }
 
 combine_second_level_batch_summary <- function(proc2_metadata, rows, batch_summary) {
-  row_summary <- tibble::as_tibble(do.call(rbind, rows))
+  row_summary <- if (length(rows) > 0L) {
+    do.call(bind_appusage_summary_rows, rows)
+  } else {
+    tibble::tibble()
+  }
   metadata_summary <- if (length(proc2_metadata) > 0) {
     build_qc_summary_from_metadata(proc2_metadata)
   } else {
@@ -693,15 +747,120 @@ combine_second_level_batch_summary <- function(proc2_metadata, rows, batch_summa
   }
   skipped_summary <- second_level_skipped_summary_rows(row_summary, batch_summary)
 
-  if (nrow(metadata_summary) == 0 && nrow(skipped_summary) == 0) {
-    return(row_summary)
-  }
-
   summary <- bind_appusage_summary_rows(metadata_summary, skipped_summary)
   summary <- merge_second_level_row_diagnostics(summary, row_summary)
-  order_index <- match(second_level_summary_key(summary), first_level_summary_key(batch_summary))
-  summary <- summary[order(order_index, seq_len(nrow(summary)), na.last = TRUE), , drop = FALSE]
-  tibble::as_tibble(summary)
+  reconcile_second_level_summary_cardinality(summary, row_summary, batch_summary)
+}
+
+reconcile_second_level_summary_cardinality <- function(summary, row_summary,
+                                                        batch_summary) {
+  summary <- tibble::as_tibble(summary)
+  row_summary <- tibble::as_tibble(row_summary)
+  batch_summary <- tibble::as_tibble(batch_summary)
+  if (nrow(batch_summary) == 0L) {
+    return(summary[0, , drop = FALSE])
+  }
+  first_keys <- first_level_summary_key(batch_summary)
+  summary_keys <- second_level_summary_key(summary)
+  used <- rep(FALSE, nrow(summary))
+  output <- vector("list", nrow(batch_summary))
+
+  for (i in seq_len(nrow(batch_summary))) {
+    candidates <- which(!used & !is.na(summary_keys) & summary_keys == first_keys[[i]])
+    row_index <- if ("index" %in% names(row_summary) && "index" %in% names(batch_summary)) {
+      match(batch_summary$index[[i]], row_summary$index)
+    } else {
+      NA_integer_
+    }
+    preferred_json <- if (!is.na(row_index)) {
+      appusage_summary_cell(row_summary, "second_level_metadata_file", row_index)
+    } else {
+      NA_character_
+    }
+    chosen <- NA_integer_
+    if (length(candidates) > 0L && is_present_string(preferred_json)) {
+      candidate_paths <- rep(NA_character_, length(candidates))
+      for (col in c("second_level_metadata_file", "metadata_json")) {
+        if (col %in% names(summary)) {
+          values <- normalized_summary_path(summary[[col]][candidates])
+          fill <- is.na(candidate_paths) & !is.na(values)
+          candidate_paths[fill] <- values[fill]
+        }
+      }
+      matched <- which(candidate_paths == normalized_summary_path(preferred_json))
+      if (length(matched) > 0L) {
+        chosen <- candidates[[matched[[1]]]]
+      }
+    }
+    if (is.na(chosen) && length(candidates) > 0L) {
+      chosen <- candidates[[1]]
+    }
+    if (!is.na(chosen)) {
+      used[[chosen]] <- TRUE
+      record <- summary[chosen, , drop = FALSE]
+    } else {
+      record <- second_level_summary_fallback_row(
+        batch_summary, i, row_summary, row_index
+      )
+    }
+    duplicate_count <- max(
+      sum(first_keys == first_keys[[i]], na.rm = TRUE),
+      length(candidates)
+    )
+    source_key <- appusage_summary_cell(batch_summary, "source_record_key", i)
+    record$source_key_duplicate_count <- as.integer(duplicate_count)
+    record$source_key_diagnostic <- if (!is_present_string(source_key)) {
+      "legacy_identity_fallback"
+    } else if (duplicate_count > 1L) {
+      "duplicate_source_key"
+    } else if (is.na(chosen)) {
+      "missing_summary_candidate"
+    } else {
+      "ok"
+    }
+    output[[i]] <- record
+  }
+  do.call(bind_appusage_summary_rows, output)
+}
+
+second_level_summary_fallback_row <- function(batch_summary, index,
+                                              row_summary = tibble::tibble(),
+                                              row_index = NA_integer_) {
+  first_status <- as.character(batch_summary$status[[index]])
+  second_status <- if (identical(first_status, "success")) "incomplete" else "skipped"
+  row_status <- if (!is.na(row_index)) {
+    as.character(appusage_summary_cell(row_summary, "status", row_index, second_status))
+  } else {
+    second_status
+  }
+  out <- data.frame(
+    index = appusage_summary_cell(batch_summary, "index", index, index),
+    participant_id = appusage_summary_cell(batch_summary, "participant_id", index),
+    participant_id_source = appusage_summary_cell(batch_summary, "participant_id_source", index),
+    wenjuanxing_sequence_id = appusage_summary_cell(batch_summary, "wenjuanxing_sequence_id", index, NA_integer_),
+    source_record_key = appusage_summary_cell(batch_summary, "source_record_key", index),
+    source_fingerprint = appusage_summary_cell(batch_summary, "source_fingerprint", index),
+    source_cache_key = appusage_summary_cell(batch_summary, "source_cache_key", index),
+    detected_type = appusage_summary_cell(batch_summary, "detected_type", index),
+    filename_export_type = appusage_summary_cell(batch_summary, "filename_export_type", index),
+    first_level_status = first_status,
+    second_level_status = row_status,
+    status = row_status,
+    skip_reason = if (identical(first_status, "success")) {
+      "missing_or_incomplete_proc2_metadata"
+    } else {
+      "upstream_first_level_error"
+    },
+    first_level_data_file = appusage_summary_cell(batch_summary, "data_file", index),
+    second_level_data_file = if (!is.na(row_index)) appusage_summary_cell(row_summary, "second_level_data_file", row_index) else NA_character_,
+    second_level_metadata_file = if (!is.na(row_index)) appusage_summary_cell(row_summary, "second_level_metadata_file", row_index) else NA_character_,
+    error_message = if (!is.na(row_index)) appusage_summary_cell(row_summary, "error_message", row_index) else appusage_summary_cell(batch_summary, "error_message", index),
+    stringsAsFactors = FALSE
+  )
+  for (col in grep("^self_report_", names(batch_summary), value = TRUE)) {
+    out[[col]] <- batch_summary[[col]][[index]]
+  }
+  tibble::as_tibble(out)
 }
 
 merge_second_level_row_diagnostics <- function(summary, row_summary) {
@@ -754,6 +913,9 @@ merge_second_level_row_diagnostics <- function(summary, row_summary) {
 }
 
 second_level_skipped_summary_rows <- function(row_summary, batch_summary) {
+  if (nrow(row_summary) == 0L || !"status" %in% names(row_summary)) {
+    return(tibble::tibble())
+  }
   skipped <- row_summary[row_summary$status == "skipped", , drop = FALSE]
   if ("skip_reason" %in% names(skipped)) {
     skipped <- skipped[!skipped$skip_reason %in% "existing_proc2_cache", , drop = FALSE]
@@ -789,6 +951,9 @@ second_level_skipped_summary_rows <- function(row_summary, batch_summary) {
       participant_id = batch_summary$participant_id[[source_index]],
       participant_id_source = batch_summary$participant_id_source[[source_index]],
       wenjuanxing_sequence_id = batch_summary$wenjuanxing_sequence_id[[source_index]],
+      source_record_key = appusage_summary_cell(batch_summary, "source_record_key", source_index),
+      source_fingerprint = appusage_summary_cell(batch_summary, "source_fingerprint", source_index),
+      source_cache_key = appusage_summary_cell(batch_summary, "source_cache_key", source_index),
       detected_type = batch_summary$detected_type[[source_index]],
       filename_export_type = batch_summary$filename_export_type[[source_index]],
       export_type_match = batch_summary$export_type_match[[source_index]],
@@ -798,6 +963,7 @@ second_level_skipped_summary_rows <- function(row_summary, batch_summary) {
       app_category_status = "not_run",
       status = "skipped",
       skip_reason = skip_reason,
+      pair_state = "not_applicable",
       pass_qc = NA,
       analysis_eligible_event = NA,
       analysis_eligible_episode = NA,
@@ -874,6 +1040,13 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
   metadata_file <- NA_character_
   data_file <- NA_character_
   preflight <- NULL
+  source_identity <- appusage_source_identity(
+    x = x,
+    input = input,
+    id_info = id_info,
+    participant_id = participant_id,
+    export_type = "unknown"
+  )
 
   result <- tryCatch(
     withCallingHandlers(
@@ -905,6 +1078,14 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
         if (identical(detected_type, "unknown")) {
           stop(batch_unsupported_error(detected_type))
         }
+        source_identity <- appusage_source_identity(
+          x = x,
+          input = input,
+          id_info = id_info,
+          participant_id = participant_id,
+          export_type = detected_type,
+          fingerprint = source_identity$source_fingerprint
+        )
 
         parsed_data <- switch(detected_type,
           line = parse_line(
@@ -959,7 +1140,8 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           metadata_file = NA_character_,
           data_file = NA_character_,
           preflight = preflight,
-          memory_risk_signal = memory_risk_signal
+          memory_risk_signal = memory_risk_signal,
+          source_identity = source_identity
         )
 
         if (!is.null(output_dir)) {
@@ -969,7 +1151,8 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
               participant_id = participant_id,
               export_type = detected_type,
               proc = 1,
-              extension = "rda"
+              extension = "rda",
+              source_key = source_identity$source_cache_key
             )
           )
           metadata_file <- file.path(
@@ -978,7 +1161,8 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
               participant_id = participant_id,
               export_type = detected_type,
               proc = 1,
-              extension = "json"
+              extension = "json",
+              source_key = source_identity$source_cache_key
             )
           )
           if ((file.exists(data_file) || file.exists(metadata_file)) && !overwrite) {
@@ -1017,6 +1201,14 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
 
   finished_at <- Sys.time()
   error <- result$error
+  source_identity <- appusage_source_identity(
+    x = x,
+    input = input,
+    id_info = id_info,
+    participant_id = participant_id,
+    export_type = ifelse(is.na(detected_type), "unknown", detected_type),
+    fingerprint = source_identity$source_fingerprint
+  )
   if (!is.null(error) && !is.null(output_dir)) {
     metadata_file <- file.path(
       output_dir,
@@ -1024,7 +1216,8 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
         participant_id = participant_id,
         export_type = ifelse(is.na(detected_type), "unknown", detected_type),
         proc = 1,
-        extension = "json"
+        extension = "json",
+        source_key = source_identity$source_cache_key
       )
     )
     error_info <- build_metadata(
@@ -1046,7 +1239,8 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
       metadata_file = metadata_file,
       data_file = NA_character_,
       preflight = preflight,
-      memory_risk_signal = memory_risk_signal
+      memory_risk_signal = memory_risk_signal,
+      source_identity = source_identity
     )
     write_metadata_json(error_info, metadata_file)
   }
@@ -1063,6 +1257,9 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
     native_export_created_at = id_info$native_export_created_at[[1]],
     export_type_match = filename_export_type_match(id_info, detected_type),
     source_file = source_file,
+    source_record_key = source_identity$source_record_key,
+    source_fingerprint = source_identity$source_fingerprint,
+    source_cache_key = source_identity$source_cache_key,
     detected_type = detected_type,
     status = result$status,
     metadata_file = metadata_file,
@@ -1213,10 +1410,13 @@ build_metadata <- function(participant_id, participant_id_source, id_info,
                            encoding, tz, started_at, finished_at, status,
                            data, warnings, error, metadata_file, data_file,
                            preflight = NULL,
-                           memory_risk_signal = FALSE) {
+                           memory_risk_signal = FALSE,
+                           source_identity = list()) {
   source_meta <- source_metadata(source_file, input)
   compact_preflight <- appusage_compact_source_preflight(preflight)
   source_meta$preflight <- compact_preflight
+  source_meta$source_fingerprint <- source_identity$source_fingerprint %||% NA_character_
+  source_meta$source_cache_key <- source_identity$source_cache_key %||% NA_character_
   parser_diag <- first_level_parser_diagnostics(data, error)
   list(
     schema_version = "0.2.0",
@@ -1229,7 +1429,9 @@ build_metadata <- function(participant_id, participant_id_source, id_info,
     identity = list(
       participant_id = participant_id,
       participant_id_source = participant_id_source,
-      wenjuanxing_sequence_id = id_info$wenjuanxing_sequence_id[[1]]
+      wenjuanxing_sequence_id = id_info$wenjuanxing_sequence_id[[1]],
+      source_record_key = source_identity$source_record_key %||% NA_character_,
+      source_cache_key = source_identity$source_cache_key %||% NA_character_
     ),
     source = source_meta,
     export = list(
@@ -1880,10 +2082,19 @@ appusage_second_level_checkpoint_summary <- function(rows, batch_summary) {
     }
     as.character(path)
   }), use.names = FALSE))
+  completed_indices <- vapply(completed_rows, function(row) {
+    as.integer(row$index[[1]])
+  }, integer(1))
+  batch_indices <- if ("index" %in% names(batch_summary)) {
+    match(completed_indices, as.integer(batch_summary$index))
+  } else {
+    completed_indices
+  }
+  completed_batch <- batch_summary[stats::na.omit(batch_indices), , drop = FALSE]
   combine_second_level_batch_summary(
     proc2_metadata = metadata_files,
     rows = completed_rows,
-    batch_summary = batch_summary
+    batch_summary = completed_batch
   )
 }
 
@@ -2994,6 +3205,9 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
   first_file <- batch_summary$data_file[[index]]
   status <- batch_summary$status[[index]]
   started_at <- Sys.time()
+  source_record_key <- appusage_summary_cell(batch_summary, "source_record_key", index)
+  source_fingerprint <- appusage_summary_cell(batch_summary, "source_fingerprint", index)
+  source_cache_key <- appusage_summary_cell(batch_summary, "source_cache_key", index)
   if (!identical(status, "success") || is.na(first_file) || !file.exists(first_file)) {
     finished_at <- Sys.time()
     skip_reason <- if (!identical(status, "success")) {
@@ -3007,6 +3221,9 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       index = batch_summary$index[[index]],
       participant_id = batch_summary$participant_id[[index]],
       detected_type = batch_summary$detected_type[[index]],
+      source_record_key = source_record_key,
+      source_fingerprint = source_fingerprint,
+      source_cache_key = source_cache_key,
       status = "skipped",
       skip_reason = skip_reason,
       first_level_data_file = first_file,
@@ -3033,13 +3250,40 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       index = batch_summary$index[[index]],
       participant_id = batch_summary$participant_id[[index]],
       detected_type = batch_summary$detected_type[[index]],
+      source_record_key = source_record_key,
+      source_fingerprint = source_fingerprint,
+      source_cache_key = source_cache_key,
       status = "skipped",
       skip_reason = "existing_proc2_cache",
+      pair_state = cache$pair_state,
       first_level_data_file = first_file,
       second_level_data_file = cache$rda_file,
       second_level_metadata_file = cache$json_file,
       error_class = NA_character_,
       error_message = NA_character_,
+      started_at = format(started_at, "%Y-%m-%d %H:%M:%OS3 %z"),
+      finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),
+      elapsed_sec = as.numeric(difftime(finished_at, started_at, units = "secs")),
+      stringsAsFactors = FALSE
+    ))
+  }
+  if (identical(cache$pair_state, "source_key_collision")) {
+    finished_at <- Sys.time()
+    return(data.frame(
+      index = batch_summary$index[[index]],
+      participant_id = batch_summary$participant_id[[index]],
+      detected_type = batch_summary$detected_type[[index]],
+      source_record_key = source_record_key,
+      source_fingerprint = source_fingerprint,
+      source_cache_key = source_cache_key,
+      status = "error",
+      skip_reason = cache$reason,
+      pair_state = cache$pair_state,
+      first_level_data_file = first_file,
+      second_level_data_file = cache$rda_file,
+      second_level_metadata_file = cache$json_file,
+      error_class = "appusage_source_cache_collision",
+      error_message = paste("Second-level cache ownership validation failed:", cache$reason),
       started_at = format(started_at, "%Y-%m-%d %H:%M:%OS3 %z"),
       finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),
       elapsed_sec = as.numeric(difftime(finished_at, started_at, units = "secs")),
@@ -3083,6 +3327,10 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
     index = batch_summary$index[[index]],
     participant_id = batch_summary$participant_id[[index]],
     detected_type = batch_summary$detected_type[[index]],
+    source_record_key = source_record_key,
+    source_fingerprint = source_fingerprint,
+    source_cache_key = source_cache_key,
+    pair_state = cache$pair_state,
     status = if (is.null(result$error)) "success" else "error",
     skip_reason = NA_character_,
     first_level_data_file = first_file,
@@ -3108,7 +3356,8 @@ second_level_expected_paths <- function(first_level_rda, output_dir = NULL) {
       participant_id = participant_id,
       export_type = export_type,
       proc = 2,
-      extension = "rda"
+      extension = "rda",
+      source_key = entities$src %||% NULL
     )
   )
   list(
@@ -3121,29 +3370,116 @@ second_level_existing_cache_status <- function(first_level_rda, output_dir = NUL
                                                batch_summary = NULL,
                                                index = NULL) {
   paths <- second_level_expected_paths(first_level_rda, output_dir)
+  entities <- parse_appusage_filename(first_level_rda)
+  expected_key <- if (!is.null(batch_summary) && !is.null(index)) {
+    appusage_summary_cell(batch_summary, "source_record_key", index)
+  } else {
+    NA_character_
+  }
+  expected_fingerprint <- if (!is.null(batch_summary) && !is.null(index)) {
+    appusage_summary_cell(batch_summary, "source_fingerprint", index)
+  } else {
+    NA_character_
+  }
+  first_metadata <- tryCatch(
+    read_first_level_metadata_for_second(first_level_rda),
+    error = function(e) NULL
+  )
+  first_identity <- if (is.null(first_metadata)) list() else appusage_metadata_source_identity(first_metadata)
+  expected_key <- appusage_first_nonmissing(expected_key, first_identity$source_record_key)
+  expected_fingerprint <- appusage_first_nonmissing(
+    expected_fingerprint,
+    first_identity$source_fingerprint
+  )
+  legacy_name <- !is_present_string(entities$src)
+  legacy_count <- 1L
+  if (legacy_name && !is.null(batch_summary) && !is.null(index)) {
+    same_id <- as.character(batch_summary$participant_id) ==
+      as.character(batch_summary$participant_id[[index]])
+    same_type <- as.character(batch_summary$detected_type) ==
+      as.character(batch_summary$detected_type[[index]])
+    legacy_count <- sum(same_id & same_type, na.rm = TRUE)
+  }
+  key_count <- 1L
+  if (!is.null(batch_summary) && !is.null(index) && is_present_string(expected_key) &&
+    "source_record_key" %in% names(batch_summary)) {
+    key_count <- sum(
+      as.character(batch_summary$source_record_key) == as.character(expected_key),
+      na.rm = TRUE
+    )
+  }
+  result <- function(status, pair_state, reason, metadata = NULL) {
+    c(paths, list(
+      status = status,
+      pair_state = pair_state,
+      reason = reason,
+      metadata = metadata,
+      legacy_name = legacy_name,
+      owned_by_task = !identical(pair_state, "source_key_collision")
+    ))
+  }
   rda_exists <- file.exists(paths$rda_file)
   json_exists <- file.exists(paths$json_file)
+  if (key_count > 1L) {
+    return(result("collision", "source_key_collision", "duplicate_source_record_key"))
+  }
   if (!rda_exists && !json_exists) {
-    return(c(paths, list(status = "missing", reason = "missing_pair")))
+    return(result("missing", "missing_pair", "missing_pair"))
   }
-  if (!rda_exists || !json_exists) {
-    reason <- if (rda_exists) "rda_only_partial_cache" else "json_only_partial_cache"
-    return(c(paths, list(status = "incomplete", reason = reason)))
-  }
-  rda_size <- appusage_file_size_bytes(paths$rda_file)
-  if (is.na(rda_size) || rda_size <= 0) {
-    return(c(paths, list(status = "incomplete", reason = "empty_proc2_rda")))
+  if (rda_exists && !json_exists) {
+    if (legacy_name && legacy_count > 1L) {
+      return(result("collision", "source_key_collision", "ambiguous_legacy_rda_only_cache"))
+    }
+    return(result("incomplete", "rda_only_incomplete", "rda_only_partial_cache"))
   }
   metadata <- tryCatch(
     jsonlite::read_json(paths$json_file, simplifyVector = TRUE),
-    error = function(e) NULL
+    error = function(e) e
   )
-  if (is.null(metadata)) {
-    return(c(paths, list(status = "incomplete", reason = "malformed_proc2_json")))
+  if (inherits(metadata, "error")) {
+    if (legacy_name && legacy_count > 1L) {
+      return(result("collision", "source_key_collision", "ambiguous_legacy_corrupt_json"))
+    }
+    return(result("incomplete", "corrupt_json", "malformed_proc2_json"))
   }
   processing_status <- appusage_nested_value(metadata, c("processing", "second_level_status"))
+  recorded_identity <- appusage_metadata_source_identity(metadata)
   if (!identical(as.character(processing_status), "success")) {
-    return(c(paths, list(status = "incomplete", reason = "non_success_proc2_json")))
+    if (is_present_string(expected_key) &&
+      is_present_string(recorded_identity$source_record_key) &&
+      !identical(as.character(recorded_identity$source_record_key), as.character(expected_key))) {
+      return(result("collision", "source_key_collision", "source_record_key_mismatch", metadata))
+    }
+    if (legacy_name && legacy_count > 1L) {
+      return(result("collision", "source_key_collision", "ambiguous_legacy_error_json", metadata))
+    }
+    return(result("incomplete", "json_only_error", "non_success_proc2_json", metadata))
+  }
+  if (is_present_string(expected_key)) {
+    if (!is_present_string(recorded_identity$source_record_key)) {
+      return(result("incomplete", "stale_source_identity", "missing_source_record_key", metadata))
+    }
+    if (!identical(as.character(recorded_identity$source_record_key), as.character(expected_key))) {
+      return(result("collision", "source_key_collision", "source_record_key_mismatch", metadata))
+    }
+  }
+  if (is_present_string(expected_fingerprint)) {
+    if (!is_present_string(recorded_identity$source_fingerprint)) {
+      return(result("incomplete", "stale_source_identity", "missing_source_fingerprint", metadata))
+    }
+    if (!identical(
+      as.character(recorded_identity$source_fingerprint),
+      as.character(expected_fingerprint)
+    )) {
+      return(result("incomplete", "stale_source_identity", "source_fingerprint_mismatch", metadata))
+    }
+  }
+  if (!rda_exists) {
+    return(result("incomplete", "json_success_missing_rda", "success_json_missing_rda", metadata))
+  }
+  rda_size <- appusage_file_size_bytes(paths$rda_file)
+  if (is.na(rda_size) || rda_size <= 0) {
+    return(result("incomplete", "rda_only_incomplete", "empty_proc2_rda", metadata))
   }
   expected_first <- normalizePath(first_level_rda, winslash = "/", mustWork = FALSE)
   recorded_first <- appusage_nested_value(metadata, c("outputs", "first_level_rda"))
@@ -3151,22 +3487,22 @@ second_level_existing_cache_status <- function(first_level_rda, output_dir = NUL
   recorded_metadata <- appusage_nested_value(metadata, c("outputs", "metadata_json"))
   if (is_present_string(recorded_first) &&
     !identical(normalizePath(recorded_first, winslash = "/", mustWork = FALSE), expected_first)) {
-    return(c(paths, list(status = "incomplete", reason = "first_level_rda_mismatch")))
+    return(result("incomplete", "stale_source_identity", "first_level_rda_mismatch", metadata))
   }
   if (!is_present_string(recorded_second)) {
-    return(c(paths, list(status = "incomplete", reason = "missing_second_level_rda_path")))
+    return(result("incomplete", "stale_source_identity", "missing_second_level_rda_path", metadata))
   }
   if (!identical(normalizePath(recorded_second, winslash = "/", mustWork = FALSE), paths$rda_file)) {
-    return(c(paths, list(status = "incomplete", reason = "second_level_rda_mismatch")))
+    return(result("incomplete", "stale_source_identity", "second_level_rda_mismatch", metadata))
   }
   if (!is_present_string(recorded_metadata)) {
-    return(c(paths, list(status = "incomplete", reason = "missing_metadata_json_path")))
+    return(result("incomplete", "stale_source_identity", "missing_metadata_json_path", metadata))
   }
   if (!identical(
     normalizePath(recorded_metadata, winslash = "/", mustWork = FALSE),
     paths$json_file
   )) {
-    return(c(paths, list(status = "incomplete", reason = "metadata_json_mismatch")))
+    return(result("incomplete", "stale_source_identity", "metadata_json_mismatch", metadata))
   }
   if (!is.null(batch_summary) && !is.null(index)) {
     recorded_id <- appusage_nested_value(metadata, c("identity", "participant_id"))
@@ -3175,14 +3511,20 @@ second_level_existing_cache_status <- function(first_level_rda, output_dir = NUL
     expected_type <- batch_summary$detected_type[[index]]
     if (is_present_string(recorded_id) && is_present_string(expected_id) &&
       !identical(as.character(recorded_id), as.character(expected_id))) {
-      return(c(paths, list(status = "incomplete", reason = "participant_id_mismatch")))
+      return(result("collision", "source_key_collision", "participant_id_mismatch", metadata))
     }
     if (is_present_string(recorded_type) && is_present_string(expected_type) &&
       !identical(as.character(recorded_type), as.character(expected_type))) {
-      return(c(paths, list(status = "incomplete", reason = "export_type_mismatch")))
+      return(result("collision", "source_key_collision", "export_type_mismatch", metadata))
     }
   }
-  c(paths, list(status = "complete", reason = "valid_proc2_pair"))
+  if (legacy_name) {
+    if (legacy_count > 1L) {
+      return(result("collision", "source_key_collision", "ambiguous_legacy_proc2_pair", metadata))
+    }
+    return(result("complete", "legacy_unambiguous_pair", "legacy_unambiguous_pair", metadata))
+  }
+  result("complete", "complete_valid_pair", "valid_proc2_pair", metadata)
 }
 
 appusage_nested_value <- function(x, path, default = NA_character_) {

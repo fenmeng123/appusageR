@@ -6,18 +6,25 @@
 #' @param participant_id Participant identifier.
 #' @param export_type APP Usage export type.
 #' @param proc Processing step, using `1`, `2`, or `3`.
+#' @param source_key Optional deterministic source cache key. New caches use
+#'   this additive entity to distinguish multiple records with the same
+#'   participant and export type; legacy names omit it.
 #' @param extension File extension without leading dot.
 #'
 #' @return A file name.
 #' @export
 build_appusage_filename <- function(participant_id, export_type,
                                     proc = 1,
-                                    extension = "rda") {
+                                    extension = "rda",
+                                    source_key = NULL) {
   entities <- c(
     sub = sanitize_entity_value(participant_id),
-    type = sanitize_entity_value(export_type),
-    proc = sanitize_entity_value(normalize_proc_value(proc))
+    type = sanitize_entity_value(export_type)
   )
+  if (is_present_string(source_key)) {
+    entities <- c(entities, src = sanitize_entity_value(source_key))
+  }
+  entities <- c(entities, proc = sanitize_entity_value(normalize_proc_value(proc)))
   paste0(
     paste(paste(names(entities), entities, sep = "-"), collapse = "_"),
     ".",
