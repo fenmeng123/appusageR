@@ -16,7 +16,8 @@ make_second_level_appusage(
   meta_end_event_types = c(2, 23),
   merge_meta_episodes = TRUE,
   meta_episode_merge_gap_ms = 30 * 1000,
-  meta_daily_source = c("summary", "episodes", "both")
+  meta_daily_source = c("summary", "episodes", "both"),
+  tz = "Asia/Shanghai"
 )
 }
 \arguments{
@@ -54,6 +55,9 @@ merging adjacent reconstructed meta episodes.}
 \item{meta_daily_source}{Source for meta daily rows. \code{"summary"} keeps Table
 1 summary-derived daily rows, \code{"episodes"} uses explicitly reconstructed
 Table 2 episodes, and \code{"both"} returns both with provenance.}
+
+\item{tz}{Effective IANA time zone. Defaults to \code{"Asia/Shanghai"} and is used
+for every timestamp-derived date and daily boundary.}
 }
 \value{
 A list with \code{event}, \code{episode}, and \code{daily} tibbles.

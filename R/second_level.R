@@ -29,6 +29,8 @@
 #' @param meta_daily_source Source for meta daily rows. `"summary"` keeps Table
 #'   1 summary-derived daily rows, `"episodes"` uses explicitly reconstructed
 #'   Table 2 episodes, and `"both"` returns both with provenance.
+#' @param tz Effective IANA time zone. Defaults to `"Asia/Shanghai"` and is used
+#'   for every timestamp-derived date and daily boundary.
 #'
 #' @return A list with `event`, `episode`, and `daily` tibbles.
 #' @export
@@ -42,7 +44,9 @@ make_second_level_appusage <- function(data, export_type = NULL,
                                        meta_end_event_types = c(2, 23),
                                        merge_meta_episodes = TRUE,
                                        meta_episode_merge_gap_ms = 30 * 1000,
-                                       meta_daily_source = c("summary", "episodes", "both")) {
+                                       meta_daily_source = c("summary", "episodes", "both"),
+                                       tz = "Asia/Shanghai") {
+  tz <- appusage_resolve_timezone(tz)
   meta_pairing <- match.arg(meta_pairing)
   meta_daily_source <- match.arg(meta_daily_source)
   if (!identical(meta_daily_source, "summary") && !isTRUE(reconstruct_meta)) {
@@ -56,13 +60,17 @@ make_second_level_appusage <- function(data, export_type = NULL,
   meta_episode <- empty_second_episode_tibble()
   meta_summary_daily <- empty_second_daily_tibble()
   meta_episode_daily <- empty_second_daily_tibble()
+  line_segmentation_diagnostics <- NULL
 
   if (!is.null(first$meta_events)) {
-    event <- second_level_events(first$meta_events)
+    event <- second_level_events(first$meta_events, tz = tz)
   }
   if (!is.null(first$line)) {
-    episode <- second_level_episodes(first$line, max_episode_ms = max_episode_ms)
-    daily <- daily_from_episodes(episode, max_daily_app_ms = max_daily_app_ms)
+    episode <- second_level_episodes(first$line, max_episode_ms = max_episode_ms, tz = tz)
+    daily <- daily_from_episodes(episode, max_daily_app_ms = max_daily_app_ms, tz = tz)
+    line_segmentation_diagnostics <- attr(
+      daily, "line_interval_segmentation_diagnostics", exact = TRUE
+    )
   }
   if (isTRUE(reconstruct_meta) && !is.null(first$meta_events)) {
     meta_episode <- reconstruct_meta_episodes(
@@ -72,7 +80,8 @@ make_second_level_appusage <- function(data, export_type = NULL,
       end_event_types = meta_end_event_types,
       max_episode_ms = max_episode_ms,
       merge_contiguous = merge_meta_episodes,
-      merge_gap_ms = meta_episode_merge_gap_ms
+      merge_gap_ms = meta_episode_merge_gap_ms,
+      tz = tz
     )
     episode <- conform_second_episode(rbind(episode, meta_episode))
   }
@@ -89,7 +98,8 @@ make_second_level_appusage <- function(data, export_type = NULL,
     meta_episode_daily <- aggregate_meta_episodes_daily(
       meta_episode,
       summary_daily = meta_summary_daily,
-      max_daily_app_ms = max_daily_app_ms
+      max_daily_app_ms = max_daily_app_ms,
+      tz = tz
     )
   }
   if (!is.null(first$meta_summary) || (isTRUE(reconstruct_meta) && !is.null(first$meta_events))) {
@@ -115,6 +125,12 @@ make_second_level_appusage <- function(data, export_type = NULL,
   )
   attr(out, "meta_reconstruction_diagnostics") <-
     attr(meta_episode, "meta_reconstruction_diagnostics", exact = TRUE)
+  attr(out, "interval_segmentation_diagnostics") <- list(
+    effective_timezone = tz,
+    line = line_segmentation_diagnostics,
+    meta = attr(meta_episode_daily, "meta_interval_segmentation_diagnostics", exact = TRUE)
+  )
+  attr(out, "effective_timezone") <- tz
   out
 }
 
@@ -146,6 +162,8 @@ make_second_level_appusage <- function(data, export_type = NULL,
 #' @param meta_episode_merge_gap_ms Maximum gap, in milliseconds, allowed when
 #'   merging adjacent reconstructed meta episodes.
 #' @param meta_daily_source Source for meta daily rows.
+#' @param tz Effective IANA time zone used for timestamp-derived dates and daily
+#'   interval boundaries.
 #' @param inline_qc Whether to compute routine daily QC metadata while the
 #'   second-level object is still in memory.
 #' @param require_all_weekdays Whether inline daily QC requires Monday through
@@ -169,8 +187,9 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
                                         meta_start_event_types = 1,
                                         meta_end_event_types = c(2, 23),
                                         merge_meta_episodes = TRUE,
-                                        meta_episode_merge_gap_ms = 30 * 1000,
-                                        meta_daily_source = c("summary", "episodes", "both"),
+                                         meta_episode_merge_gap_ms = 30 * 1000,
+                                         meta_daily_source = c("summary", "episodes", "both"),
+                                         tz = "Asia/Shanghai",
                                         inline_qc = TRUE,
                                         require_all_weekdays = TRUE,
                                         min_nonempty_days = 7,
@@ -184,6 +203,7 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
   if (!file.exists(first_level_rda)) {
     cli::cli_abort("First-level RDA file does not exist: {.path {first_level_rda}}")
   }
+  tz <- appusage_resolve_timezone(tz)
   meta_pairing <- match.arg(meta_pairing)
   meta_daily_source <- match.arg(meta_daily_source)
   started_at <- Sys.time()
@@ -210,7 +230,8 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     meta_end_event_types = meta_end_event_types,
     merge_meta_episodes = merge_meta_episodes,
     meta_episode_merge_gap_ms = meta_episode_merge_gap_ms,
-    meta_daily_source = meta_daily_source
+    meta_daily_source = meta_daily_source,
+    tz = tz
   )
   convert_finished_at <- Sys.time()
 
@@ -335,6 +356,7 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     merge_meta_episodes = merge_meta_episodes,
     meta_episode_merge_gap_ms = meta_episode_merge_gap_ms,
     meta_daily_source = meta_daily_source,
+    tz = tz,
     inline_qc_result = inline_qc_result,
     inline_qc_started_at = inline_qc_started_at,
     inline_qc_finished_at = inline_qc_finished_at,
@@ -725,8 +747,9 @@ build_second_level_success_metadata <- function(first_metadata = NULL,
                                                 inline_qc_result = NULL,
                                                 inline_qc_started_at = NULL,
                                                 inline_qc_finished_at = NULL,
-                                                profiling = NULL,
-                                                started_at,
+                                                 profiling = NULL,
+                                                 tz = NULL,
+                                                 started_at,
                                                 finished_at) {
   first_metadata <- first_metadata %||% read_first_level_metadata_for_second(first_level_rda)
   metadata_file <- second_level_metadata_path(second_level_rda)
@@ -753,6 +776,7 @@ build_second_level_success_metadata <- function(first_metadata = NULL,
     inline_qc_started_at = inline_qc_started_at,
     inline_qc_finished_at = inline_qc_finished_at,
     profiling = profiling,
+    tz = tz,
     started_at = started_at,
     finished_at = finished_at
   )
@@ -864,9 +888,13 @@ build_second_level_metadata <- function(first_metadata, first_level_rda,
                                         inline_qc_started_at = NULL,
                                         inline_qc_finished_at = NULL,
                                         profiling = NULL,
+                                        tz = NULL,
                                         started_at,
                                         finished_at) {
   metadata <- first_metadata
+  effective_timezone <- appusage_resolve_timezone(
+    tz %||% metadata$export$timezone %||% appusage_default_timezone()
+  )
   if (is.null(metadata$processing) || !is.list(metadata$processing)) {
     metadata$processing <- list()
   }
@@ -899,7 +927,8 @@ build_second_level_metadata <- function(first_metadata, first_level_rda,
       meta_end_event_types = as.numeric(meta_end_event_types),
       merge_meta_episodes = isTRUE(merge_meta_episodes),
       meta_episode_merge_gap_ms = as.numeric(meta_episode_merge_gap_ms),
-      meta_daily_source = meta_daily_source
+      meta_daily_source = meta_daily_source,
+      timezone = effective_timezone
     ),
     profiling = profiling %||% list()
   )
@@ -923,6 +952,13 @@ build_second_level_metadata <- function(first_metadata, first_level_rda,
       is.data.frame(second_level_data$episode) &&
       any(second_level_data$episode$episode_source == "meta_events", na.rm = TRUE)
   )
+  metadata$interval_segmentation <- if (is.null(second_level_data)) {
+    list(effective_timezone = effective_timezone, status = "not_available")
+  } else {
+    diagnostics <- attr(second_level_data, "interval_segmentation_diagnostics", exact = TRUE)
+    diagnostics %||% list(effective_timezone = effective_timezone, status = "not_applicable")
+  }
+  metadata$processing$effective_timezone <- effective_timezone
   metadata$outputs$metadata_json <- normalizePath(
     second_level_metadata_file,
     winslash = "/",
@@ -1157,15 +1193,20 @@ infer_data_frame_export_type <- function(data) {
   "unknown"
 }
 
-second_level_events <- function(x) {
+second_level_events <- function(x, tz = "Asia/Shanghai") {
   if (nrow(x) == 0) {
     return(empty_second_event_tibble())
   }
-  event_date <- as.Date(x$event_datetime)
+  tz <- appusage_resolve_timezone(tz)
+  event_date <- appusage_date_from_datetime(x$event_datetime, tz = tz)
   event_date[is.na(event_date)] <- x$table_date[is.na(event_date)]
+  source_table_date <- if ("source_table_date" %in% names(x)) x$source_table_date else x$table_date
   out <- tibble::tibble(
     date = event_date,
     table_date = x$table_date,
+    source_table_date = source_table_date,
+    source_date_timestamp_date_mismatch = !is.na(source_table_date) &
+      !is.na(event_date) & source_table_date != event_date,
     app_name = x$app_name,
     activity_type = classify_activity_type(x$app_name),
     package_name = x$package_name,
@@ -1308,7 +1349,8 @@ second_level_events <- function(x) {
     duration_col = "duration_ms",
     max_duration_ms = max_episode_ms,
     start_col = "start_datetime",
-    end_col = "end_datetime"
+    end_col = "end_datetime",
+    tz = tz
   )
   paired <- !out$unmatched_start & !out$unmatched_end
   invalid <- paired & (out$anomaly_missing_duration | out$anomaly_negative_duration)
@@ -1386,6 +1428,7 @@ reconstruct_meta_episodes <- function(events, pairing = c("package", "package_cl
                                       merge_contiguous = TRUE,
                                       merge_gap_ms = 30 * 1000,
                                       ...) {
+  tz <- appusage_resolve_timezone(tz)
   pairing <- match.arg(pairing)
   events <- normalize_meta_events_for_reconstruction(events, tz = tz)
   diagnostics <- init_meta_reconstruction_diagnostics(
@@ -1420,7 +1463,8 @@ reconstruct_meta_episodes <- function(events, pairing = c("package", "package_cl
         event = event,
         pairing = pairing,
         duration_ms = duration,
-        reason = reason
+        reason = reason,
+        tz = tz
       ))
       diagnostics$n_duration_inferred_episodes <<-
         diagnostics$n_duration_inferred_episodes + 1L
@@ -1453,7 +1497,8 @@ reconstruct_meta_episodes <- function(events, pairing = c("package", "package_cl
         status = "complete",
         unmatched_start = FALSE,
         unmatched_end = FALSE,
-        device_boundary_involved = device_boundary_involved
+        device_boundary_involved = device_boundary_involved,
+        tz = tz
       ))
       open_start <<- NULL
       pending_end <<- NULL
@@ -1472,7 +1517,8 @@ reconstruct_meta_episodes <- function(events, pairing = c("package", "package_cl
         status = "complete",
         unmatched_start = FALSE,
         unmatched_end = FALSE,
-        device_boundary_involved = device_boundary_involved
+        device_boundary_involved = device_boundary_involved,
+        tz = tz
       ))
       open_start <<- NULL
       pending_end <<- NULL
@@ -1579,7 +1625,8 @@ reconstruct_meta_episodes <- function(events, pairing = c("package", "package_cl
     duration_col = "duration_ms",
     max_duration_ms = max_episode_ms,
     start_col = "start_datetime",
-    end_col = "end_datetime"
+    end_col = "end_datetime",
+    tz = tz
   )
   paired <- !out$unmatched_start & !out$unmatched_end
   invalid <- paired & (out$anomaly_missing_duration | out$anomaly_negative_duration)
@@ -1952,6 +1999,7 @@ attach_meta_reconstruction_diagnostics <- function(episodes, diagnostics) {
 }
 
 normalize_meta_events_for_reconstruction <- function(events, tz) {
+  tz <- appusage_resolve_timezone(tz)
   if (is.null(events)) {
     return(empty_second_event_tibble())
   }
@@ -1984,11 +2032,14 @@ normalize_meta_events_for_reconstruction <- function(events, tz) {
   }
   missing_label <- is.na(event_type_label) | event_type_label == ""
   event_type_label[missing_label] <- label_event_type(event_type[missing_label])
-  table_date <- if ("table_date" %in% names(events)) {
-    as.Date(events$table_date)
+  source_table_date <- if ("source_table_date" %in% names(events)) {
+    appusage_date_from_datetime(events$source_table_date, tz = tz)
+  } else if ("table_date" %in% names(events)) {
+    appusage_date_from_datetime(events$table_date, tz = tz)
   } else {
-    as.Date(event_datetime)
+    appusage_date_from_datetime(event_datetime, tz = tz)
   }
+  canonical_date <- appusage_date_from_datetime(event_datetime, tz = tz)
   event_duration_ms <- if ("event_duration_ms" %in% names(events)) {
     parse_ms_value(events$event_duration_ms)
   } else if ("duration_ms" %in% names(events)) {
@@ -1998,7 +2049,11 @@ normalize_meta_events_for_reconstruction <- function(events, tz) {
   }
 
   tibble::tibble(
-    table_date = table_date,
+    table_date = source_table_date,
+    source_table_date = source_table_date,
+    date = canonical_date,
+    source_date_timestamp_date_mismatch = !is.na(source_table_date) &
+      !is.na(canonical_date) & source_table_date != canonical_date,
     app_name = meta_column(events, "app_name", NA_character_),
     package_name = meta_column(events, "package_name", NA_character_),
     class_name = meta_column(events, "class_name", NA_character_),
@@ -2044,7 +2099,9 @@ reconstruction_key_value <- function(x) {
 
 meta_episode_row <- function(start_event, end_event, pairing, status,
                              unmatched_start, unmatched_end,
-                             device_boundary_involved) {
+                             device_boundary_involved,
+                             tz = "Asia/Shanghai") {
+  tz <- appusage_resolve_timezone(tz)
   start_ts_ms <- meta_event_value(start_event, "event_ts_ms", NA_real_)
   end_ts_ms <- meta_event_value(end_event, "event_ts_ms", NA_real_)
   start_datetime <- meta_event_value(start_event, "event_datetime", as.POSIXct(NA_real_, origin = "1970-01-01"))
@@ -2054,10 +2111,14 @@ meta_episode_row <- function(start_event, end_event, pairing, status,
   } else {
     NA_real_
   }
-  date <- as.Date(start_datetime)
+  date <- appusage_date_from_datetime(start_datetime, tz = tz)
   if (is.na(date)) {
-    date <- as.Date(end_datetime)
+    date <- appusage_date_from_datetime(end_datetime, tz = tz)
   }
+  source_table_date <- first_nonmissing(c(
+    meta_event_value(start_event, "source_table_date", as.Date(NA)),
+    meta_event_value(end_event, "source_table_date", as.Date(NA))
+  ))
 
   app_name <- first_present_character(
     meta_event_value(start_event, "app_name", NA_character_),
@@ -2074,6 +2135,9 @@ meta_episode_row <- function(start_event, end_event, pairing, status,
 
   data.frame(
     date = date,
+    source_table_date = source_table_date,
+    source_date_timestamp_date_mismatch = !is.na(source_table_date) &
+      !is.na(date) & source_table_date != date,
     app_name = app_name,
     activity_type = classify_activity_type(app_name),
     package_name = package_name,
@@ -2108,7 +2172,9 @@ meta_episode_row <- function(start_event, end_event, pairing, status,
 }
 
 meta_duration_inferred_episode_row <- function(event, pairing, duration_ms,
-                                               reason) {
+                                               reason,
+                                               tz = "Asia/Shanghai") {
+  tz <- appusage_resolve_timezone(tz)
   start_ts_ms <- meta_event_value(event, "event_ts_ms", NA_real_)
   end_ts_ms <- if (!is.na(start_ts_ms)) start_ts_ms + duration_ms else NA_real_
   start_datetime <- meta_event_value(
@@ -2116,23 +2182,22 @@ meta_duration_inferred_episode_row <- function(event, pairing, duration_ms,
     "event_datetime",
     as.POSIXct(NA_real_, origin = "1970-01-01")
   )
-  start_tz <- attr(start_datetime, "tzone")
-  start_tz <- if (length(start_tz) > 0 && is_present_string(start_tz[[1]])) {
-    start_tz[[1]]
-  } else {
-    "Asia/Shanghai"
-  }
   end_datetime <- if (!is.na(end_ts_ms)) {
-    ms_to_datetime(end_ts_ms, tz = start_tz)
+    ms_to_datetime(end_ts_ms, tz = tz)
   } else {
     as.POSIXct(NA_real_, origin = "1970-01-01")
   }
   app_name <- meta_event_value(event, "app_name", NA_character_)
   package_name <- meta_event_value(event, "package_name", NA_character_)
   warning <- paste0("duration_inferred_from_", reason)
+  source_table_date <- meta_event_value(event, "source_table_date", as.Date(NA))
+  canonical_date <- appusage_date_from_datetime(start_datetime, tz = tz)
 
   data.frame(
-    date = as.Date(start_datetime),
+    date = canonical_date,
+    source_table_date = source_table_date,
+    source_date_timestamp_date_mismatch = !is.na(source_table_date) &
+      !is.na(canonical_date) & source_table_date != canonical_date,
     app_name = app_name,
     activity_type = classify_activity_type(app_name),
     package_name = package_name,
@@ -2207,12 +2272,19 @@ append_reconstruction_warning <- function(x, flag, label) {
   x
 }
 
-second_level_episodes <- function(x, max_episode_ms) {
+second_level_episodes <- function(x, max_episode_ms, tz = "Asia/Shanghai") {
   if (nrow(x) == 0) {
     return(empty_second_episode_tibble())
   }
+  tz <- appusage_resolve_timezone(tz)
+  source_table_date <- if ("source_table_date" %in% names(x)) x$source_table_date else x$date
+  canonical_date <- appusage_date_from_datetime(x$start_datetime, tz = tz)
+  canonical_date[is.na(canonical_date)] <- x$date[is.na(canonical_date)]
   out <- tibble::tibble(
-    date = x$date,
+    date = canonical_date,
+    source_table_date = source_table_date,
+    source_date_timestamp_date_mismatch = !is.na(source_table_date) &
+      !is.na(canonical_date) & source_table_date != canonical_date,
     app_name = x$app_name,
     activity_type = classify_activity_type(x$app_name),
     package_name = x$package_name,
@@ -2247,7 +2319,8 @@ second_level_episodes <- function(x, max_episode_ms) {
     duration_col = "duration_ms",
     max_duration_ms = max_episode_ms,
     start_col = "start_datetime",
-    end_col = "end_datetime"
+    end_col = "end_datetime",
+    tz = tz
   )
   conform_second_episode(out[order(out$start_ts_ms, seq_len(nrow(out))), , drop = FALSE])
 }
@@ -2334,10 +2407,13 @@ second_level_meta_summary <- function(x, max_daily_app_ms) {
   conform_second_daily(out[order(out$date, seq_len(nrow(out))), , drop = FALSE])
 }
 
-daily_from_episodes <- function(x, max_daily_app_ms) {
+daily_from_episodes <- function(x, max_daily_app_ms, tz = "Asia/Shanghai") {
   if (nrow(x) == 0) {
     return(empty_second_daily_tibble())
   }
+  tz <- appusage_resolve_timezone(tz)
+  x <- appusage_interval_segments(x, tz = tz)
+  segmentation <- attr(x, "interval_segmentation_diagnostics", exact = TRUE)
   activity_type <- if ("activity_type" %in% names(x)) {
     x$activity_type
   } else {
@@ -2359,7 +2435,10 @@ daily_from_episodes <- function(x, max_daily_app_ms) {
   duration_ms <- as.numeric(grouped_counts[, "duration_sum"])
   valid_count <- grouped_counts[, "valid_count"]
   duration_ms[valid_count == 0] <- NA_real_
-  episode_count <- as.integer(tabulate(group_id, nbins = length(levels)))
+  episode_pair <- paste(group_id, x$.source_row_id, sep = "\r")
+  episode_count <- as.integer(tabulate(
+    group_id[!duplicated(episode_pair)], nbins = length(levels)
+  ))
   n_anomalies <- as.integer(grouped_counts[, "anomaly_count"])
   parse_warning <- line_daily_parse_warnings(x$parse_warning, group_id, length(levels))
   out <- tibble::tibble(
@@ -2402,7 +2481,9 @@ daily_from_episodes <- function(x, max_daily_app_ms) {
     out$anomaly_reason[out$n_anomalies > 0],
     "one or more source episodes were anomalous"
   )
-  conform_second_daily(out[order(out$date, out$package_name, seq_len(nrow(out))), , drop = FALSE])
+  out <- conform_second_daily(out[order(out$date, out$package_name, seq_len(nrow(out))), , drop = FALSE])
+  attr(out, "line_interval_segmentation_diagnostics") <- segmentation
+  out
 }
 
 line_daily_parse_warnings <- function(parse_warning, group_id, n_groups) {
@@ -2433,13 +2514,17 @@ line_daily_parse_warnings <- function(parse_warning, group_id, n_groups) {
 
 aggregate_meta_episodes_daily <- function(episodes, summary_daily = NULL,
                                           max_daily_app_ms = 24 * 60 * 60 * 1000,
-                                          compare_to_summary = TRUE) {
+                                          compare_to_summary = TRUE,
+                                          tz = "Asia/Shanghai") {
+  tz <- appusage_resolve_timezone(tz)
   episodes <- conform_second_episode(episodes)
   meta <- episodes[episodes$episode_source == "meta_events", , drop = FALSE]
   if (nrow(meta) == 0) {
     return(empty_second_daily_tibble())
   }
 
+  meta <- appusage_interval_segments(meta, tz = tz)
+  segmentation <- attr(meta, "interval_segmentation_diagnostics", exact = TRUE)
   key <- meta_daily_key(meta)
   groups <- split(seq_len(nrow(meta)), key)
   rows <- lapply(groups, function(idx) {
@@ -2503,6 +2588,7 @@ aggregate_meta_episodes_daily <- function(episodes, summary_daily = NULL,
   if (isTRUE(compare_to_summary) && !is.null(summary_daily)) {
     out <- compare_meta_daily_sources(out, summary_daily)
   }
+  attr(out, "meta_interval_segmentation_diagnostics") <- segmentation
   out
 }
 
@@ -2588,7 +2674,9 @@ first_nonmissing_character <- function(x) {
 }
 
 add_duration_anomalies <- function(data, duration_col, max_duration_ms,
-                                   start_col = NULL, end_col = NULL) {
+                                   start_col = NULL, end_col = NULL,
+                                   tz = "Asia/Shanghai") {
+  tz <- appusage_resolve_timezone(tz)
   duration <- data[[duration_col]]
   missing_duration <- is.na(duration)
   negative_duration <- !is.na(duration) & duration < 0
@@ -2596,8 +2684,8 @@ add_duration_anomalies <- function(data, duration_col, max_duration_ms,
   cross_date <- rep(FALSE, nrow(data))
   if (!is.null(start_col) && !is.null(end_col) &&
     all(c(start_col, end_col) %in% names(data))) {
-    start_date <- as.Date(data[[start_col]])
-    end_date <- as.Date(data[[end_col]])
+    start_date <- appusage_date_from_datetime(data[[start_col]], tz = tz)
+    end_date <- appusage_date_from_datetime(data[[end_col]], tz = tz)
     cross_date <- !is.na(start_date) & !is.na(end_date) & start_date != end_date
   }
   data$anomaly_missing_duration <- missing_duration
@@ -2674,6 +2762,8 @@ daily_source_from_export <- function(export_type, n) {
 canonical_second_episode_schema <- function() {
   list(
     date = as.Date(character()),
+    source_table_date = as.Date(character()),
+    source_date_timestamp_date_mismatch = logical(),
     app_name = character(),
     activity_type = character(),
     package_name = character(),
@@ -2733,7 +2823,10 @@ typed_episode_default <- function(template, n, name) {
     return(as.Date(rep(NA_character_, n)))
   }
   if (inherits(template, "POSIXt")) {
-    return(as.POSIXct(rep(NA_real_, n), origin = "1970-01-01"))
+    return(as.POSIXct(
+      rep(NA_real_, n), origin = "1970-01-01",
+      tz = appusage_default_timezone()
+    ))
   }
   if (is.integer(template)) {
     return(rep(NA_integer_, n))
@@ -2742,20 +2835,20 @@ typed_episode_default <- function(template, n, name) {
     return(rep(NA_real_, n))
   }
   if (is.logical(template)) {
-    return(if (grepl("^anomaly_|^is_|^unmatched_|^device_boundary", name)) rep(FALSE, n) else rep(NA, n))
+    return(if (grepl("^anomaly_|^is_|^unmatched_|^device_boundary|^source_date_", name)) rep(FALSE, n) else rep(NA, n))
   }
   rep(NA_character_, n)
 }
 
 coerce_episode_column <- function(x, template, name) {
   if (inherits(template, "Date")) {
-    return(as.Date(x))
+    return(appusage_date_from_datetime(x, tz = appusage_default_timezone()))
   }
   if (inherits(template, "POSIXt")) {
     if (is.numeric(x)) {
-      return(as.POSIXct(x, origin = "1970-01-01"))
+      return(as.POSIXct(x, origin = "1970-01-01", tz = appusage_default_timezone()))
     }
-    return(as.POSIXct(x))
+    return(as.POSIXct(x, tz = appusage_default_timezone()))
   }
   if (is.integer(template)) {
     return(as.integer(x))
@@ -2765,7 +2858,7 @@ coerce_episode_column <- function(x, template, name) {
   }
   if (is.logical(template)) {
     x <- as.logical(x)
-    if (grepl("^anomaly_|^is_|^unmatched_|^device_boundary", name)) {
+    if (grepl("^anomaly_|^is_|^unmatched_|^device_boundary|^source_date_", name)) {
       x[is.na(x)] <- FALSE
     }
     return(x)
@@ -2854,7 +2947,7 @@ typed_daily_default <- function(template, n, name) {
 
 coerce_daily_column <- function(x, template, name) {
   if (inherits(template, "Date")) {
-    return(as.Date(x))
+    return(appusage_date_from_datetime(x, tz = appusage_default_timezone()))
   }
   if (is.integer(template)) {
     x <- as.integer(x)
@@ -2888,6 +2981,8 @@ empty_second_event_tibble <- function() {
   tibble::tibble(
     date = as.Date(character()),
     table_date = as.Date(character()),
+    source_table_date = as.Date(character()),
+    source_date_timestamp_date_mismatch = logical(),
     app_name = character(),
     activity_type = character(),
     package_name = character(),

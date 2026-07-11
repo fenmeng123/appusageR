@@ -13,6 +13,7 @@ parse_line <- function(x, input = c("file", "text", "lines"),
                        tz = "Asia/Shanghai", encoding = "auto",
                        strict = FALSE) {
   input <- match.arg(input)
+  tz <- appusage_resolve_timezone(tz)
   lines <- read_appusage_lines(x, input = input, encoding = encoding)
   mat <- as_text_matrix(lines)
   required_fields <- line_required_fields()
@@ -52,7 +53,7 @@ parse_line <- function(x, input = c("file", "text", "lines"),
     raw,
     out,
     extras = utils::modifyList(
-      line_format_diagnostics(raw, out),
+      line_format_diagnostics(raw, out, tz = tz),
       list(
         structural_quality = structural_quality,
         structural_boundaries = list(
@@ -80,6 +81,7 @@ parse_meta <- function(x, input = c("file", "text", "lines"),
                        tz = "Asia/Shanghai", encoding = "auto",
                        strict = FALSE) {
   input <- match.arg(input)
+  tz <- appusage_resolve_timezone(tz)
   lines <- read_appusage_lines(x, input = input, encoding = encoding)
   mat <- as_text_matrix(lines)
   marker_text <- apply(mat, 1, paste, collapse = " ")
@@ -155,7 +157,7 @@ meta_required_fields <- function() {
   )
 }
 
-line_format_diagnostics <- function(raw, out) {
+line_format_diagnostics <- function(raw, out, tz = "Asia/Shanghai") {
   raw_timestamps <- character()
   if (is.data.frame(raw)) {
     timestamp_cols <- intersect(c("start_ts_ms", "end_ts_ms"), names(raw))
@@ -166,7 +168,11 @@ line_format_diagnostics <- function(raw, out) {
     n_zero_duration_episode = if (is.data.frame(out)) sum(out$duration_ms == 0, na.rm = TRUE) else 0L,
     n_negative_episode_duration = if (is.data.frame(out)) sum(out$duration_ms < 0, na.rm = TRUE) else 0L,
     n_cross_date_episode = if (is.data.frame(out) && nrow(out) > 0) {
-      sum(as.Date(out$start_datetime) != as.Date(out$end_datetime), na.rm = TRUE)
+      sum(
+        appusage_date_from_datetime(out$start_datetime, tz = tz) !=
+          appusage_date_from_datetime(out$end_datetime, tz = tz),
+        na.rm = TRUE
+      )
     } else {
       0L
     }
@@ -248,8 +254,9 @@ line_structural_quality <- function(out, candidate_row_count = nrow(out),
   package_valid[is.na(package_valid)] <- FALSE
   identity_malformed <- is.na(out$app_name) | !nzchar(trimws(out$app_name)) |
     !package_valid
-  timestamp_date <- as.Date(out$start_datetime, tz = tz)
-  date_mismatch <- !is.na(out$date) & !is.na(timestamp_date) & out$date != timestamp_date
+  timestamp_date <- appusage_date_from_datetime(out$start_datetime, tz = tz)
+  source_date <- if ("source_table_date" %in% names(out)) out$source_table_date else out$date
+  date_mismatch <- !is.na(source_date) & !is.na(timestamp_date) & source_date != timestamp_date
   valid_ratio <- mean(valid)
   duplicate_ratio <- mean(exact_duplicates)
   critical_reasons <- character()
@@ -447,17 +454,25 @@ finalize_line_tibble <- function(data, participant_id, source_file, tz) {
     "duration_ms could not be computed from timestamps"
   )
 
+  source_table_date <- safe_as_date(data$date)
+  start_datetime <- ms_to_datetime(start_ts_ms, tz = tz)
+  end_datetime <- ms_to_datetime(end_ts_ms, tz = tz)
+  canonical_date <- appusage_date_from_datetime(start_datetime, tz = tz)
+  source_mismatch <- !is.na(source_table_date) & !is.na(canonical_date) &
+    source_table_date != canonical_date
   out <- tibble::tibble(
     participant_id = participant_id,
     source_file = source_file,
     export_type = "line",
-    date = safe_as_date(data$date),
+    date = canonical_date,
+    source_table_date = source_table_date,
+    source_date_timestamp_date_mismatch = source_mismatch,
     app_name = blank_to_na(data$app_name),
     package_name = package_name,
     start_ts_ms = start_ts_ms,
     end_ts_ms = end_ts_ms,
-    start_datetime = ms_to_datetime(start_ts_ms, tz = tz),
-    end_datetime = ms_to_datetime(end_ts_ms, tz = tz),
+    start_datetime = start_datetime,
+    end_datetime = end_datetime,
     start_time_text = blank_to_na(data$start_time_text),
     end_time_text = blank_to_na(data$end_time_text),
     duration_text = blank_to_na(data$duration_text),
@@ -565,6 +580,7 @@ finalize_meta_summary_tibble <- function(data, participant_id, source_file, tz) 
     source_file = source_file,
     export_type = "meta",
     table_date = safe_as_date(data$table_date),
+    source_table_date = safe_as_date(data$table_date),
     app_name = blank_to_na(data$app_name),
     package_name = package_name,
     start_datetime = safe_as_datetime(data$start_datetime, tz = tz),
@@ -585,15 +601,22 @@ finalize_meta_events_tibble <- function(data, participant_id, source_file, tz) {
     return(empty_meta_events_tibble())
   }
   event_type <- parse_count(data$event_type)
+  source_table_date <- safe_as_date(data$table_date)
+  event_datetime <- safe_as_datetime(data$event_datetime, tz = tz)
+  canonical_date <- appusage_date_from_datetime(event_datetime, tz = tz)
   out <- tibble::tibble(
     participant_id = participant_id,
     source_file = source_file,
     export_type = "meta",
-    table_date = safe_as_date(data$table_date),
+    table_date = source_table_date,
+    source_table_date = source_table_date,
+    date = canonical_date,
+    source_date_timestamp_date_mismatch = !is.na(source_table_date) &
+      !is.na(canonical_date) & source_table_date != canonical_date,
     app_name = blank_to_na(data$app_name),
     package_name = standardize_package_name(data$package_name),
     class_name = blank_to_na(data$class_name),
-    event_datetime = safe_as_datetime(data$event_datetime, tz = tz),
+    event_datetime = event_datetime,
     event_ts_ms = parse_t_timestamp(data$event_ts_ms),
     event_type = event_type,
     event_type_label = label_event_type(event_type),
@@ -609,6 +632,8 @@ empty_line_tibble <- function() {
     source_file = character(),
     export_type = character(),
     date = as.Date(character()),
+    source_table_date = as.Date(character()),
+    source_date_timestamp_date_mismatch = logical(),
     app_name = character(),
     package_name = character(),
     start_ts_ms = numeric(),
@@ -664,6 +689,7 @@ empty_meta_summary_tibble <- function() {
     source_file = character(),
     export_type = character(),
     table_date = as.Date(character()),
+    source_table_date = as.Date(character()),
     app_name = character(),
     package_name = character(),
     start_datetime = as.POSIXct(character()),
@@ -684,6 +710,9 @@ empty_meta_events_tibble <- function() {
     source_file = character(),
     export_type = character(),
     table_date = as.Date(character()),
+    source_table_date = as.Date(character()),
+    date = as.Date(character()),
+    source_date_timestamp_date_mismatch = logical(),
     app_name = character(),
     package_name = character(),
     class_name = character(),

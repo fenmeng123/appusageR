@@ -19,7 +19,8 @@ run_second_level_appusage(
   meta_end_event_types = c(2, 23),
   merge_meta_episodes = TRUE,
   meta_episode_merge_gap_ms = 30 * 1000,
-  meta_daily_source = c("summary", "episodes", "both")
+  meta_daily_source = c("summary", "episodes", "both"),
+  tz = "Asia/Shanghai"
 )
 }
 \arguments{
@@ -56,6 +57,9 @@ meta episodes for the same app when their time gap is small.}
 allowed when merging adjacent reconstructed meta episodes.}
 
 \item{meta_daily_source}{Source for meta daily rows.}
+
+\item{tz}{Effective IANA time zone for timestamp-derived dates and daily
+interval boundaries.}
 }
 \value{
 An \code{appusage_second_level} list.

@@ -18,6 +18,7 @@ write_second_level_appusage(
   merge_meta_episodes = TRUE,
   meta_episode_merge_gap_ms = 30 * 1000,
   meta_daily_source = c("summary", "episodes", "both"),
+  tz = "Asia/Shanghai",
   inline_qc = TRUE,
   require_all_weekdays = TRUE,
   min_nonempty_days = 7,
@@ -64,6 +65,9 @@ episodes for the same app when the time gap is small.}
 merging adjacent reconstructed meta episodes.}
 
 \item{meta_daily_source}{Source for meta daily rows.}
+
+\item{tz}{Effective IANA time zone used for timestamp-derived dates and daily
+interval boundaries.}
 
 \item{inline_qc}{Whether to compute routine daily QC metadata while the
 second-level object is still in memory.}

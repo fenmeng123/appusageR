@@ -742,6 +742,14 @@ qc_summary_row_from_loaded_metadata <- function(metadata, metadata_file) {
     source_fingerprint = qc_metadata_value(metadata, c("source", "source_fingerprint")),
     source_cache_key = qc_metadata_value(metadata, c("identity", "source_cache_key")),
     detected_type = qc_metadata_value(metadata, c("export", "detected_type")),
+    effective_timezone = qc_metadata_value(
+      metadata,
+      c("processing", "effective_timezone"),
+      default = qc_metadata_value(
+        metadata, c("export", "timezone"),
+        default = appusage_default_timezone()
+      )
+    ),
     filename_export_type = qc_metadata_value(metadata, c("export", "native_export_type_from_filename")),
     export_type_match = qc_metadata_value(metadata, c("export", "export_type_match"), default = NA),
     first_level_status = qc_metadata_value(metadata, c("processing", "first_level_status")),

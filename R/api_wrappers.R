@@ -293,6 +293,8 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
 #' @param meta_episode_merge_gap_ms Maximum non-negative gap, in milliseconds,
 #'   allowed when merging adjacent reconstructed meta episodes.
 #' @param meta_daily_source Source for meta daily rows.
+#' @param tz Effective IANA time zone for timestamp-derived dates and daily
+#'   interval boundaries.
 #'
 #' @return An `appusage_second_level` list.
 #' @export
@@ -307,9 +309,11 @@ run_second_level_appusage <- function(x, export_type = NULL,
                                       meta_pairing = c("package", "package_class"),
                                       meta_start_event_types = 1,
                                       meta_end_event_types = c(2, 23),
-                                      merge_meta_episodes = TRUE,
-                                      meta_episode_merge_gap_ms = 30 * 1000,
-                                      meta_daily_source = c("summary", "episodes", "both")) {
+                                       merge_meta_episodes = TRUE,
+                                       meta_episode_merge_gap_ms = 30 * 1000,
+                                       meta_daily_source = c("summary", "episodes", "both"),
+                                       tz = "Asia/Shanghai") {
+  tz <- appusage_resolve_timezone(tz)
   meta_pairing <- match.arg(meta_pairing)
   meta_daily_source <- match.arg(meta_daily_source)
   first_level_rda <- NA_character_
@@ -343,7 +347,8 @@ run_second_level_appusage <- function(x, export_type = NULL,
       meta_end_event_types = meta_end_event_types,
       merge_meta_episodes = merge_meta_episodes,
       meta_episode_merge_gap_ms = meta_episode_merge_gap_ms,
-      meta_daily_source = meta_daily_source
+      meta_daily_source = meta_daily_source,
+      tz = tz
     )
     second_data <- load_appusage_data_object(data_file)
     metadata_file <- second_level_metadata_path(data_file)
@@ -360,7 +365,8 @@ run_second_level_appusage <- function(x, export_type = NULL,
       meta_end_event_types = meta_end_event_types,
       merge_meta_episodes = merge_meta_episodes,
       meta_episode_merge_gap_ms = meta_episode_merge_gap_ms,
-      meta_daily_source = meta_daily_source
+      meta_daily_source = meta_daily_source,
+      tz = tz
     )
   }
 
@@ -565,6 +571,7 @@ run_appusage_workflow <- function(x, output_dir, ids = NULL,
                                   merge_meta_episodes = TRUE,
                                   meta_episode_merge_gap_ms = 30 * 1000,
                                   meta_daily_source = c("summary", "episodes", "both")) {
+  tz <- appusage_resolve_timezone(tz)
   meta_pairing <- match.arg(meta_pairing)
   meta_daily_source <- match.arg(meta_daily_source)
   first <- read_appusage_batch(
@@ -598,7 +605,8 @@ run_appusage_workflow <- function(x, output_dir, ids = NULL,
       meta_end_event_types = meta_end_event_types,
       merge_meta_episodes = merge_meta_episodes,
       meta_episode_merge_gap_ms = meta_episode_merge_gap_ms,
-      meta_daily_source = meta_daily_source
+      meta_daily_source = meta_daily_source,
+      tz = tz
     )
     latest <- second
   }

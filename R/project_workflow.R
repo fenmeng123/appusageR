@@ -282,7 +282,9 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
                                           diagnostic_verbosity = c("summary", "full", "none"),
                                           ...) {
   diagnostic_verbosity <- match.arg(diagnostic_verbosity)
+  tz <- appusage_resolve_timezone(tz)
   second_level_options <- list(...)
+  if (is.null(second_level_options$tz)) second_level_options$tz <- tz
   resolved <- appusage_resolve_project_workflow_inputs(
     project_dir = project_dir,
     raw_data_root = raw_data_root,
@@ -364,6 +366,7 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     self_report_col_types = self_report_col_types,
     self_report_read = appusage_compact_self_report_read_diagnostics(self_report_read),
     export_type_priority = export_type_priority,
+    effective_timezone = tz,
     resume = resume,
     overwrite = overwrite,
     first_level_options = list(
@@ -1242,6 +1245,7 @@ appusage_build_workflow_configuration <- function(raw_data_root,
                                                    self_report_col_types,
                                                    self_report_read,
                                                    export_type_priority,
+                                                   effective_timezone,
                                                   resume,
                                                   overwrite,
                                                   first_level_options,
@@ -1271,6 +1275,7 @@ appusage_build_workflow_configuration <- function(raw_data_root,
     self_report_col_types = if (is.null(self_report_col_types)) character() else as.character(self_report_col_types),
     self_report_read = self_report_read,
     export_type_priority = export_type_priority,
+    effective_timezone = appusage_resolve_timezone(effective_timezone),
     resume = isTRUE(resume),
     overwrite = isTRUE(overwrite),
     first_level_options = first_level_options,

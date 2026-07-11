@@ -599,8 +599,8 @@ test_that("line episode-to-daily aggregation handles duplicate warnings and inva
   expect_equal(nrow(daily), 4)
   a_pkg <- daily[daily$date == as.Date("2024-01-01") & daily$package_name == "a.pkg", ]
   a_alt <- daily[daily$date == as.Date("2024-01-01") & daily$package_name == "a.alt", ]
-  b_pkg <- daily[daily$date == as.Date("2024-01-02") & daily$package_name == "b.pkg", ]
-  c_pkg <- daily[daily$date == as.Date("2024-01-03") & daily$package_name == "c.pkg", ]
+  b_pkg <- daily[daily$date == as.Date("2024-01-01") & daily$package_name == "b.pkg", ]
+  c_pkg <- daily[daily$date == as.Date("2024-01-01") & daily$package_name == "c.pkg", ]
 
   expect_equal(a_pkg$duration_ms[[1]], 3000)
   expect_equal(a_pkg$episode_count[[1]], 2L)
@@ -881,7 +881,7 @@ test_that("unknown and non-episode meta events are ignored for episode construct
 })
 
 test_that("reconstruct_meta_episodes flags boundary cross-date and overlong diagnostics", {
-  events <- synthetic_meta_events(c(1, 26, 2), c(86390000, 86400000, 86500000))
+  events <- synthetic_meta_events(c(1, 26, 2), c(57590000, 57600000, 57700000))
 
   episodes <- reconstruct_meta_episodes(events, max_episode_ms = 1000)
 

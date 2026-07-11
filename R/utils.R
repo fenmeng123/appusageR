@@ -227,6 +227,7 @@ parse_t_timestamp <- function(x) {
 #' @return POSIXct vector.
 #' @export
 safe_as_datetime <- function(x, tz = "Asia/Shanghai") {
+  tz <- appusage_resolve_timezone(tz)
   x <- as.character(x)
   x[x %in% c("", "NA", "NULL", "null")] <- NA_character_
   x <- stringr::str_replace(x, ":(\\d{3})$", ".\\1")
@@ -310,6 +311,7 @@ source_file_label <- function(x, input) {
 }
 
 ms_to_datetime <- function(x, tz = "Asia/Shanghai") {
+  tz <- appusage_resolve_timezone(tz)
   ms <- parse_t_timestamp(x)
   as.POSIXct(ms / 1000, origin = "1970-01-01", tz = tz)
 }

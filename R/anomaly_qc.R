@@ -538,28 +538,26 @@ appusage_add_checks <- function(metrics, checks) {
   metrics
 }
 
-appusage_date_from_ms <- function(x) {
-  suppressWarnings(as.Date(
-    as.POSIXct(as.numeric(x) / 1000, origin = "1970-01-01", tz = "Asia/Shanghai")
-  ))
+appusage_date_from_ms <- function(x, tz = "Asia/Shanghai") {
+  appusage_date_from_datetime(ms = x, tz = tz)
 }
 
-appusage_date_col <- function(x, col) {
+appusage_date_col <- function(x, col, tz = "Asia/Shanghai") {
   if (!appusage_has_col(x, col)) {
     return(rep(as.Date(NA), appusage_n(x)))
   }
-  appusage_as_date(x[[col]])
+  appusage_as_date(x[[col]], tz = tz)
 }
 
-appusage_as_date <- function(x) {
+appusage_as_date <- function(x, tz = "Asia/Shanghai") {
   if (inherits(x, "Date")) {
     return(x)
   }
   if (inherits(x, "POSIXt")) {
-    return(as.Date(x))
+    return(appusage_date_from_datetime(x, tz = tz))
   }
   if (is.numeric(x)) {
-    return(appusage_date_from_ms(x))
+    return(appusage_date_from_ms(x, tz = tz))
   }
   x_chr <- as.character(x)
   suppressWarnings(as.Date(substr(x_chr, 1L, 10L)))
@@ -611,7 +609,11 @@ appusage_metadata_export_date <- function(metadata) {
   )
   for (candidate in candidates) {
     if (!is.null(candidate) && length(candidate) > 0L && !is.na(candidate[[1L]])) {
-      parsed <- appusage_parse_export_date(candidate[[1L]])
+      parsed <- appusage_parse_export_date(
+        candidate[[1L]],
+        tz = metadata$export$timezone %||% metadata$processing$effective_timezone %||%
+          appusage_default_timezone()
+      )
       if (!is.na(parsed)) {
         return(parsed)
       }
@@ -620,15 +622,15 @@ appusage_metadata_export_date <- function(metadata) {
   as.Date(NA)
 }
 
-appusage_parse_export_date <- function(x) {
+appusage_parse_export_date <- function(x, tz = "Asia/Shanghai") {
   if (inherits(x, "Date")) {
     return(x)
   }
   if (inherits(x, "POSIXt")) {
-    return(as.Date(x))
+    return(appusage_date_from_datetime(x, tz = tz))
   }
   if (is.numeric(x)) {
-    return(appusage_date_from_ms(x))
+    return(appusage_date_from_ms(x, tz = tz))
   }
   x_chr <- as.character(x)
   if (!nzchar(trimws(x_chr))) {

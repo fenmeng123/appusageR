@@ -57,6 +57,7 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
                                 retry_memory_allocation = TRUE,
                                 memory_retry_workers = 1) {
   input <- match.arg(input, c("file", "text", "lines"))
+  tz <- appusage_resolve_timezone(tz)
   if (!identical(type, "auto") && !type %in% c("line", "meta", "day", "app")) {
     cli::cli_abort("`type` must be 'auto', 'line', 'meta', 'day', or 'app'.")
   }
@@ -1284,6 +1285,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
     source_fingerprint = source_identity$source_fingerprint,
     source_cache_key = source_identity$source_cache_key,
     detected_type = detected_type,
+    effective_timezone = appusage_resolve_timezone(tz),
     status = result$status,
     metadata_file = metadata_file,
     data_file = data_file,
@@ -3270,6 +3272,10 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
   source_record_key <- appusage_summary_cell(batch_summary, "source_record_key", index)
   source_fingerprint <- appusage_summary_cell(batch_summary, "source_fingerprint", index)
   source_cache_key <- appusage_summary_cell(batch_summary, "source_cache_key", index)
+  effective_timezone <- appusage_resolve_timezone(
+    second_level_args$tz %||%
+      appusage_summary_cell(batch_summary, "effective_timezone", index, NULL)
+  )
   if (!identical(status, "success") || is.na(first_file) || !file.exists(first_file)) {
     finished_at <- Sys.time()
     skip_reason <- if (!identical(status, "success")) {
@@ -3286,6 +3292,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       source_record_key = source_record_key,
       source_fingerprint = source_fingerprint,
       source_cache_key = source_cache_key,
+      effective_timezone = effective_timezone,
       status = "skipped",
       skip_reason = skip_reason,
       first_level_data_file = first_file,
@@ -3315,6 +3322,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       source_record_key = source_record_key,
       source_fingerprint = source_fingerprint,
       source_cache_key = source_cache_key,
+      effective_timezone = effective_timezone,
       status = "skipped",
       skip_reason = "existing_proc2_cache",
       pair_state = cache$pair_state,
@@ -3338,6 +3346,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       source_record_key = source_record_key,
       source_fingerprint = source_fingerprint,
       source_cache_key = source_cache_key,
+      effective_timezone = effective_timezone,
       status = "error",
       skip_reason = cache$reason,
       pair_state = cache$pair_state,
@@ -3392,6 +3401,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
     source_record_key = source_record_key,
     source_fingerprint = source_fingerprint,
     source_cache_key = source_cache_key,
+    effective_timezone = effective_timezone,
     pair_state = cache$pair_state,
     status = if (is.null(result$error)) "success" else "error",
     skip_reason = NA_character_,
