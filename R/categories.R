@@ -436,8 +436,8 @@ write_app_categories_one <- function(second_level_rda, project_dir,
       data <- load_appusage_data_object(second_level_rda)
       data <- add_app_categories(data, dictionary, overwrite = overwrite)
       summary <- attr(data, "app_category_summary", exact = TRUE)
-      save(data, file = second_level_rda)
-      update_matching_second_level_metadata(
+      write_app_category_second_level_pair(
+        data = data,
         project_dir,
         second_level_rda,
         summary,
@@ -461,19 +461,46 @@ write_app_categories_one <- function(second_level_rda, project_dir,
   )
 }
 
+write_app_category_second_level_pair <- function(data, project_dir,
+                                                 second_level_rda, summary,
+                                                 dictionary) {
+  metadata_file <- second_level_metadata_path(second_level_rda)
+  if (!file.exists(metadata_file)) {
+    metadata_file <- create_missing_second_level_metadata(second_level_rda, project_dir)
+  }
+  metadata <- jsonlite::read_json(metadata_file, simplifyVector = TRUE)
+  metadata <- update_category_metadata(
+    metadata, summary, dictionary, second_level_rda
+  )
+  appusage_cleanup_second_level_transaction_artifacts(
+    second_level_rda, metadata_file
+  )
+  transaction <- appusage_second_level_transaction_paths(
+    second_level_rda, metadata_file
+  )
+  on.exit(
+    appusage_cleanup_paths(c(transaction$temp_rda, transaction$temp_json)),
+    add = TRUE
+  )
+  appusage_save_second_level_data(data, transaction$temp_rda)
+  appusage_validate_nonempty_file(
+    transaction$temp_rda, "Category-enriched second-level RDA temporary artifact"
+  )
+  write_metadata_json(metadata, transaction$temp_json)
+  appusage_validate_second_level_success_metadata(
+    transaction$temp_json, second_level_rda, metadata_file
+  )
+  appusage_publish_second_level_pair(
+    transaction = transaction,
+    output_file = second_level_rda,
+    metadata_file = metadata_file
+  )
+  invisible(metadata_file)
+}
+
 update_matching_second_level_metadata <- function(project_dir, second_level_rda,
                                                  summary, dictionary) {
-  entities <- parse_appusage_filename(second_level_rda)
-  metadata_file <- file.path(
-    project_dir,
-    "proclevel-2",
-    build_appusage_filename(
-      participant_id = entities$sub %||% "unknown",
-      export_type = entities$type %||% "unknown",
-      proc = 2,
-      extension = "json"
-    )
-  )
+  metadata_file <- second_level_metadata_path(second_level_rda)
   if (!file.exists(metadata_file)) {
     metadata_file <- create_missing_second_level_metadata(second_level_rda, project_dir)
   }
@@ -484,7 +511,7 @@ update_matching_second_level_metadata <- function(project_dir, second_level_rda,
     dictionary,
     second_level_rda
   )
-  write_metadata_json(metadata, metadata_file)
+  appusage_atomic_write_metadata_json(metadata, metadata_file)
   invisible(metadata_file)
 }
 
@@ -504,6 +531,11 @@ update_category_metadata <- function(metadata, summary, dictionary,
   metadata$processing$app_category_status <- "success"
   metadata$outputs$second_level_rda <- normalizePath(
     second_level_rda,
+    winslash = "/",
+    mustWork = FALSE
+  )
+  metadata$outputs$metadata_json <- normalizePath(
+    second_level_metadata_path(second_level_rda),
     winslash = "/",
     mustWork = FALSE
   )

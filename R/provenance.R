@@ -23,7 +23,7 @@ appusage_canonical_object <- function(x) {
 }
 
 appusage_object_fingerprint <- function(x) {
-  text <- paste(capture.output(dput(appusage_canonical_object(x))), collapse = "\n")
+  text <- paste(utils::capture.output(dput(appusage_canonical_object(x))), collapse = "\n")
   appusage_stable_text_md5(text)
 }
 
@@ -34,7 +34,7 @@ appusage_function_fingerprint <- function(function_names) {
     if (!is.function(fun)) return(c(name, "<unavailable>"))
     c(
       paste0("function=", name),
-      paste(capture.output(dput(formals(fun))), collapse = "\n"),
+      paste(utils::capture.output(dput(formals(fun))), collapse = "\n"),
       paste(deparse(body(fun), width.cutoff = 500L), collapse = "\n")
     )
   }), use.names = FALSE)

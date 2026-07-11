@@ -119,6 +119,10 @@ test_that("write_app_categories_batch overwrites proc-2 only", {
   )
   project <- unique(first$project_root)
   second <- write_second_level_batch(first, overwrite = TRUE, progress = FALSE)
+  creator_metadata <- jsonlite::read_json(
+    second$metadata_json[[1]], simplifyVector = TRUE
+  )
+  creator_provenance <- creator_metadata$implementation_provenance
 
   dict <- tibble::tibble(
     App_Name = "系统桌面",
@@ -156,6 +160,14 @@ test_that("write_app_categories_batch overwrites proc-2 only", {
   )
   expect_equal(proc2_metadata$processing$app_category_status, "success")
   expect_equal(proc2_metadata$category_dictionary$n_category_matched_apps, 2)
+  expect_identical(
+    proc2_metadata$implementation_provenance$workflow_run_id,
+    creator_provenance$workflow_run_id
+  )
+  expect_identical(
+    proc2_metadata$implementation_provenance$parser_implementation_fingerprint,
+    creator_provenance$parser_implementation_fingerprint
+  )
 
   proc2 <- utils::read.csv(file.path(
     project,

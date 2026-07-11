@@ -244,7 +244,8 @@ test_that("line structural quality metrics apply documented thresholds", {
 
   malformed <- clean
   malformed$package_name <- "not a package"
-  malformed$date <- as.Date("2024-01-02")
+  malformed$source_table_date <- as.Date("2024-01-02")
+  expect_identical(malformed$date, clean$date)
   malformed_quality <- line_structural_quality(malformed, 1L)
   expect_equal(malformed_quality$n_malformed_identity, 1L)
   expect_equal(malformed_quality$n_source_date_timestamp_mismatch, 1L)
