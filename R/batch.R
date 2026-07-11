@@ -862,7 +862,9 @@ bind_appusage_summary_rows <- function(...) {
 }
 
 preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
-                                    tz, encoding, overwrite, index) {
+                                    tz, encoding, overwrite, index,
+                                    memory_risk_signal = FALSE,
+                                    memory_risk_reason = NA_character_) {
   warnings <- character()
   started_at <- Sys.time()
   source_file <- source_file_label(x, input)
@@ -871,13 +873,31 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
   detected_type <- NA_character_
   metadata_file <- NA_character_
   data_file <- NA_character_
+  preflight <- NULL
 
   result <- tryCatch(
     withCallingHandlers(
       {
-        detected_type <- first_level_detect_type(
+        preflight <- appusage_source_preflight(
           x = x,
           input = input,
+          encoding = encoding
+        )
+        if (!identical(preflight$status, "ok")) {
+          detected_type <- if (length(preflight$detected_components) == 1L) {
+            preflight$detected_components[[1]]
+          } else if (length(preflight$detected_components) > 1L) {
+            "mixed"
+          } else {
+            "unknown"
+          }
+          stop(appusage_source_preflight_error(preflight))
+        }
+        parse_x <- preflight$lines
+        parse_input <- "lines"
+        detected_type <- first_level_detect_type(
+          x = parse_x,
+          input = parse_input,
           type = type,
           encoding = encoding,
           id_info = id_info
@@ -888,26 +908,26 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
 
         parsed_data <- switch(detected_type,
           line = parse_line(
-            x,
-            input = input, participant_id = participant_id,
+            parse_x,
+            input = parse_input, participant_id = participant_id,
             source_file = source_file, tz = tz, encoding = encoding,
             strict = TRUE
           ),
           meta = parse_meta(
-            x,
-            input = input, participant_id = participant_id,
+            parse_x,
+            input = parse_input, participant_id = participant_id,
             source_file = source_file, tz = tz, encoding = encoding,
             strict = TRUE
           ),
           day = parse_day(
-            x,
-            input = input, participant_id = participant_id,
+            parse_x,
+            input = parse_input, participant_id = participant_id,
             source_file = source_file, tz = tz, encoding = encoding,
             strict = TRUE
           ),
           app = parse_app(
-            x,
-            input = input, participant_id = participant_id,
+            parse_x,
+            input = parse_input, participant_id = participant_id,
             source_file = source_file, tz = tz, encoding = encoding,
             strict = TRUE
           )
@@ -937,7 +957,9 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           warnings = warnings,
           error = NULL,
           metadata_file = NA_character_,
-          data_file = NA_character_
+          data_file = NA_character_,
+          preflight = preflight,
+          memory_risk_signal = memory_risk_signal
         )
 
         if (!is.null(output_dir)) {
@@ -995,7 +1017,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
 
   finished_at <- Sys.time()
   error <- result$error
-  if (!is.null(error) && !is.null(output_dir) && !is.na(detected_type)) {
+  if (!is.null(error) && !is.null(output_dir)) {
     metadata_file <- file.path(
       output_dir,
       build_appusage_filename(
@@ -1022,10 +1044,13 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
       warnings = warnings,
       error = error,
       metadata_file = metadata_file,
-      data_file = NA_character_
+      data_file = NA_character_,
+      preflight = preflight,
+      memory_risk_signal = memory_risk_signal
     )
     write_metadata_json(error_info, metadata_file)
   }
+  preflight_fields <- appusage_preflight_summary_fields(preflight)
   data.frame(
     index = index,
     participant_id = participant_id,
@@ -1044,6 +1069,18 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
     data_file = data_file,
     n_rows = result$n_rows,
     n_parse_warnings = result$n_parse_warnings,
+    preflight_status = preflight_fields$preflight_status,
+    detected_components = preflight_fields$detected_components,
+    preflight_has_record_rows = preflight_fields$preflight_has_record_rows,
+    binary_signature = preflight_fields$binary_signature,
+    nul_byte_ratio = preflight_fields$nul_byte_ratio,
+    control_byte_ratio = preflight_fields$control_byte_ratio,
+    encoding_attempted_candidates = preflight_fields$encoding_attempted_candidates,
+    encoding_supported_candidates = preflight_fields$encoding_supported_candidates,
+    encoding_selected = preflight_fields$encoding_selected,
+    encoding_conversion_failures = preflight_fields$encoding_conversion_failures,
+    memory_risk_signal = isTRUE(memory_risk_signal),
+    memory_risk_reason = memory_risk_reason,
     warning_messages = paste(unique(warnings), collapse = "\n"),
     error_message = if (is.null(error)) NA_character_ else conditionMessage(error),
     error_class = if (is.null(error)) NA_character_ else paste(class(error), collapse = ","),
@@ -1174,8 +1211,12 @@ strip_individual_columns <- function(x) {
 build_metadata <- function(participant_id, participant_id_source, id_info,
                            source_file, export_type, export_type_match, input,
                            encoding, tz, started_at, finished_at, status,
-                           data, warnings, error, metadata_file, data_file) {
+                           data, warnings, error, metadata_file, data_file,
+                           preflight = NULL,
+                           memory_risk_signal = FALSE) {
   source_meta <- source_metadata(source_file, input)
+  compact_preflight <- appusage_compact_source_preflight(preflight)
+  source_meta$preflight <- compact_preflight
   parser_diag <- first_level_parser_diagnostics(data, error)
   list(
     schema_version = "0.2.0",
@@ -1201,11 +1242,14 @@ build_metadata <- function(participant_id, participant_id_source, id_info,
       native_export_created_at = id_info$native_export_created_at[[1]],
       input = input,
       encoding = encoding,
+      encoding_diagnostics = compact_preflight$encoding %||% list(),
+      detected_components = compact_preflight$detected_components %||% character(),
       timezone = tz
     ),
     processing = list(
       first_level_status = status,
       first_level_failure_reason = first_level_failure_reason(error),
+      memory_risk_signal = isTRUE(memory_risk_signal),
       second_level_status = "pending",
       qc_status = "pending",
       started_at = format(started_at, "%Y-%m-%dT%H:%M:%OS3%z"),
@@ -1277,6 +1321,9 @@ first_level_failure_reason <- function(error) {
   }
   if (inherits(error, "appusage_unsupported_type")) {
     return("unknown_or_unsupported_type")
+  }
+  if (inherits(error, "appusage_source_preflight_error")) {
+    return(error$source_preflight$failure_family %||% "source_preflight_failure")
   }
   error_message <- tryCatch(conditionMessage(error), error = function(e) "")
   if (appusage_is_memory_allocation_text(class(error), error_message)) {
@@ -2496,6 +2543,12 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
                                checkpoint_file = NULL, existing_rows = NULL,
                                retry_memory_allocation = TRUE,
                                memory_retry_workers = 1L) {
+  memory_risk <- appusage_first_level_memory_risk_signal(
+    x = x,
+    input = input,
+    parallel = parallel,
+    n_cores = n_cores
+  )
   rows <- appusage_restore_checkpoint_rows(existing_rows, length(x))
   seed_rows <- appusage_index_seed_rows(existing_rows, length(x))
   pending <- which(vapply(rows, is.null, logical(1)))
@@ -2528,7 +2581,9 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
           tz = tz,
           encoding = encoding,
           overwrite = TRUE,
-          index = i
+          index = i,
+          memory_risk_signal = FALSE,
+          memory_risk_reason = "serial_retry"
         )
       },
       retry_worker_count = memory_retry_workers,
@@ -2558,7 +2613,9 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
         tz = tz,
         encoding = encoding,
         overwrite = TRUE,
-        index = i
+        index = i,
+        memory_risk_signal = FALSE,
+        memory_risk_reason = "serial_retry"
       )
       rows[[i]] <- appusage_annotate_first_level_row(
         row,
@@ -2586,7 +2643,9 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
         tz = tz,
         encoding = encoding,
         overwrite = overwrite_plan[[i]],
-        index = i
+        index = i,
+        memory_risk_signal = FALSE,
+        memory_risk_reason = "serial_execution"
       )
       rows[[i]] <- retry_one(row, i, worker_count = 1L)
       processed_since_checkpoint <- processed_since_checkpoint + 1L
@@ -2643,7 +2702,9 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
       output_dir = output_dir,
       tz = tz,
       encoding = encoding,
-      overwrite_plan = overwrite_plan
+      overwrite_plan = overwrite_plan,
+      memory_risk_signal = memory_risk$active,
+      memory_risk_reason = memory_risk$reason
     )
     chunk_rows <- parallel::parLapplyLB(cluster, chunk_tasks, function(task) {
       worker_task <- get("appusage_process_first_level_worker_task", envir = asNamespace("appusageR"))
@@ -2671,7 +2732,9 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
 
 appusage_make_first_level_worker_tasks <- function(indices, x, id_plan, type,
                                                    input, output_dir, tz,
-                                                   encoding, overwrite_plan) {
+                                                   encoding, overwrite_plan,
+                                                   memory_risk_signal = FALSE,
+                                                   memory_risk_reason = NA_character_) {
   lapply(indices, function(i) {
     appusage_make_first_level_worker_task(
       index = i,
@@ -2682,14 +2745,18 @@ appusage_make_first_level_worker_tasks <- function(indices, x, id_plan, type,
       output_dir = output_dir,
       tz = tz,
       encoding = encoding,
-      overwrite = overwrite_plan[[i]]
+      overwrite = overwrite_plan[[i]],
+      memory_risk_signal = memory_risk_signal,
+      memory_risk_reason = memory_risk_reason
     )
   })
 }
 
 appusage_make_first_level_worker_task <- function(index, x, id_info, type,
                                                   input, output_dir, tz,
-                                                  encoding, overwrite) {
+                                                  encoding, overwrite,
+                                                  memory_risk_signal = FALSE,
+                                                  memory_risk_reason = NA_character_) {
   list(
     index = index,
     x = x,
@@ -2699,7 +2766,9 @@ appusage_make_first_level_worker_task <- function(index, x, id_info, type,
     output_dir = output_dir,
     tz = tz,
     encoding = encoding,
-    overwrite = overwrite
+    overwrite = overwrite,
+    memory_risk_signal = memory_risk_signal,
+    memory_risk_reason = memory_risk_reason
   )
 }
 
@@ -2713,7 +2782,9 @@ appusage_process_first_level_worker_task <- function(task) {
     tz = task$tz,
     encoding = task$encoding,
     overwrite = task$overwrite,
-    index = task$index
+    index = task$index,
+    memory_risk_signal = task$memory_risk_signal %||% FALSE,
+    memory_risk_reason = task$memory_risk_reason %||% NA_character_
   )
   appusage_annotate_worker_result(
     row,

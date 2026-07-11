@@ -90,10 +90,28 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
   warnings <- character()
   started_at <- Sys.time()
   detected_type <- NA_character_
+  preflight <- NULL
 
   result <- tryCatch(
     withCallingHandlers(
       {
+        preflight <- appusage_source_preflight(
+          x = parse_x,
+          input = parse_input,
+          encoding = encoding
+        )
+        if (!identical(preflight$status, "ok")) {
+          detected_type <- if (length(preflight$detected_components) == 1L) {
+            preflight$detected_components[[1]]
+          } else if (length(preflight$detected_components) > 1L) {
+            "mixed"
+          } else {
+            "unknown"
+          }
+          stop(appusage_source_preflight_error(preflight))
+        }
+        parse_x <- preflight$lines
+        parse_input <- "lines"
         detected_type <- first_level_detect_type(
           x = parse_x,
           input = parse_input,
@@ -172,7 +190,8 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
     warnings = warnings,
     error = result$error,
     metadata_file = NA_character_,
-    data_file = NA_character_
+    data_file = NA_character_,
+    preflight = preflight
   )
 
   metadata_file <- NA_character_

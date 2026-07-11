@@ -13,7 +13,12 @@ appusage_memory_allocation_error_pattern <- function() {
       "out of memory",
       "r_allocstringbuffer",
       "failed to realloc",
-      "realloc working memory stack"
+      "realloc working memory stack",
+      "cannot reserve memory",
+      "not enough memory",
+      "insufficient memory",
+      "cannot grow vector",
+      "bad allocation"
     ),
     collapse = "|"
   )
@@ -25,6 +30,42 @@ appusage_is_memory_allocation_text <- function(...) {
     return(FALSE)
   }
   grepl(appusage_memory_allocation_error_pattern(), tolower(text))
+}
+
+appusage_is_memory_risk_control_flow <- function(error_message,
+                                                 memory_risk_signal = FALSE) {
+  isTRUE(memory_risk_signal) &&
+    grepl(
+      "missing value where true/false needed",
+      tolower(error_message %||% ""),
+      fixed = TRUE
+    )
+}
+
+appusage_first_level_memory_risk_signal <- function(x, input, parallel, n_cores) {
+  size <- appusage_source_size_info(x, input = input)
+  reasons <- character()
+  if (isTRUE(parallel) && n_cores >= 4L) {
+    reasons <- c(reasons, "four_or_more_concurrent_workers")
+  }
+  if (isTRUE(parallel) && n_cores > 1L &&
+    !is.na(size$max_source_size_bytes) &&
+    size$max_source_size_bytes >= 64 * 1024^2) {
+    reasons <- c(reasons, "large_source_file")
+  }
+  if (isTRUE(parallel) && n_cores > 1L &&
+    !is.na(size$total_source_size_bytes) &&
+    size$total_source_size_bytes >= 512 * 1024^2) {
+    reasons <- c(reasons, "large_batch_bytes")
+  }
+  list(
+    active = length(reasons) > 0L,
+    reason = if (length(reasons) == 0L) {
+      NA_character_
+    } else {
+      paste(unique(reasons), collapse = ";")
+    }
+  )
 }
 
 #' Rebuild first-level analytic summary from existing cache metadata
@@ -470,7 +511,8 @@ appusage_first_nonmissing <- function(...) {
 
 appusage_classify_failure_family <- function(error_class = NA_character_,
                                              error_message = NA_character_,
-                                             status = "error") {
+                                             status = "error",
+                                             memory_risk_signal = FALSE) {
   if (!identical(status, "error") && !identical(status, "incomplete")) {
     return(NA_character_)
   }
@@ -481,8 +523,30 @@ appusage_classify_failure_family <- function(error_class = NA_character_,
   )
   text <- tolower(text)
 
+  source_families <- c(
+    appusage_zero_byte_source = "source_zero_byte",
+    appusage_binary_source = "source_binary",
+    appusage_unknown_content = "source_unknown_content",
+    appusage_header_only_source = "source_header_only",
+    appusage_mixed_content_source = "source_mixed_content"
+  )
+  source_hit <- names(source_families)[vapply(
+    names(source_families),
+    function(x) grepl(tolower(x), text, fixed = TRUE),
+    logical(1)
+  )]
+  if (length(source_hit) > 0L) {
+    return(unname(source_families[[source_hit[[1]]]]))
+  }
+
   if (appusage_is_memory_allocation_text(text)) {
     return("memory_allocation")
+  }
+  if (grepl("missing value where true/false needed", text, fixed = TRUE)) {
+    if (appusage_is_memory_risk_control_flow(text, memory_risk_signal)) {
+      return("memory_allocation")
+    }
+    return("parser_control_flow")
   }
   if (grepl("unsupported|unknown.*export|unlock", text)) {
     return("unsupported_export_type")
@@ -527,6 +591,12 @@ appusage_annotate_first_level_row <- function(row,
   if (!"original_failure_family" %in% names(row)) {
     row$original_failure_family <- NA_character_
   }
+  for (name in c(
+    "original_error_call", "original_traceback", "original_worker_task_index",
+    "original_raw_line_number", "original_raw_line_window"
+  )) {
+    if (!name %in% names(row)) row[[name]] <- NA
+  }
 
   if (nrow(row) == 0L) {
     return(row)
@@ -535,7 +605,8 @@ appusage_annotate_first_level_row <- function(row,
   row$failure_family <- appusage_classify_failure_family(
     row$error_class[1],
     row$error_message[1],
-    status = row$status[1]
+    status = row$status[1],
+    memory_risk_signal = isTRUE(appusage_get_col_value(row, "memory_risk_signal", FALSE))
   )
   if (is.na(row$worker_pid[1])) {
     row$worker_pid <- Sys.getpid()
@@ -564,6 +635,15 @@ appusage_annotate_first_level_row <- function(row,
         status = appusage_get_col_value(original_row, "status", "error")
       )
     )
+    row$original_error_call <- appusage_get_col_value(original_row, "error_call", NA_character_)
+    row$original_traceback <- appusage_get_col_value(original_row, "traceback", NA_character_)
+    row$original_worker_task_index <- appusage_get_col_value(
+      original_row,
+      "worker_task_index",
+      appusage_get_col_value(original_row, "index", NA_integer_)
+    )
+    row$original_raw_line_number <- appusage_get_col_value(original_row, "raw_line_number", NA_integer_)
+    row$original_raw_line_window <- appusage_get_col_value(original_row, "raw_line_window", NA_character_)
   }
 
   row
@@ -591,7 +671,7 @@ appusage_retry_memory_row <- function(row,
   }
   family <- appusage_get_col_value(row, "failure_family", NA_character_)
   status <- appusage_get_col_value(row, "status", NA_character_)
-  if (!identical(status, "error") || !identical(family, "memory_allocation")) {
+  if (!identical(status, "error") || !appusage_recoverable_runtime_family(family)) {
     return(row)
   }
 
@@ -603,6 +683,10 @@ appusage_retry_memory_row <- function(row,
     original_row = row
   )
   retry
+}
+
+appusage_recoverable_runtime_family <- function(family) {
+  identical(family, "memory_allocation")
 }
 
 appusage_first_level_worker_decision <- function(parallel,

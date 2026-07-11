@@ -21,7 +21,9 @@ read_appusage_lines <- function(x, input = c("file", "text", "lines"),
     bytes <- readBin(x, what = "raw", n = file.info(x)$size)
     bytes <- bytes[bytes != as.raw(0)]
     text <- decode_raw_text(bytes, encoding = encoding)
-    return(split_lines(text))
+    lines <- split_lines(text)
+    attr(lines, "encoding_diagnostics") <- attr(text, "encoding_diagnostics")
+    return(lines)
   }
 
   if (input == "text") {
@@ -56,25 +58,73 @@ normalize_encoding <- function(x, encoding = "auto") {
   stringr::str_remove(x, "^\ufeff")
 }
 
-decode_raw_text <- function(bytes, encoding = "auto") {
-  candidates <- if (identical(encoding, "auto")) {
-    detected <- tryCatch(
+decode_raw_text <- function(bytes, encoding = "auto",
+                            detected_candidates = NULL,
+                            available_encodings = iconvlist(),
+                            converter = iconv) {
+  detected <- if (identical(encoding, "auto")) {
+    detected_candidates %||% tryCatch(
       stringi::stri_enc_detect(bytes)[[1]]$Encoding,
       error = function(e) character()
     )
-    unique(c(detected, "UTF-8", "GB18030", "GBK", "CP936"))
   } else {
     encoding
   }
-
-  raw_text <- rawToChar(bytes)
-  for (enc in candidates) {
-    converted <- suppressWarnings(iconv(raw_text, from = enc, to = "UTF-8"))
-    if (!is.na(converted)) {
-      return(stringr::str_remove(converted, "^\ufeff"))
-    }
+  candidates <- if (identical(encoding, "auto")) {
+    unique(c(detected, "UTF-8", "GB18030", "GBK", "CP936"))
+  } else {
+    unique(as.character(detected))
   }
-  enc2utf8(raw_text)
+  candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
+  available_encodings <- unique(as.character(available_encodings))
+  supported_index <- match(toupper(candidates), toupper(available_encodings))
+  supported <- candidates[!is.na(supported_index)]
+  unsupported <- candidates[is.na(supported_index)]
+  canonical <- available_encodings[stats::na.omit(supported_index)]
+  conversion_failures <- list()
+  raw_text <- rawToChar(bytes)
+  selected <- NA_character_
+  converted <- NA_character_
+
+  for (i in seq_along(supported)) {
+    attempt <- tryCatch(
+      suppressWarnings(converter(raw_text, from = canonical[[i]], to = "UTF-8")),
+      error = function(e) e
+    )
+    if (inherits(attempt, "condition")) {
+      conversion_failures[[length(conversion_failures) + 1L]] <- list(
+        candidate = supported[[i]],
+        message = conditionMessage(attempt),
+        condition_class = class(attempt)
+      )
+      next
+    }
+    if (length(attempt) == 0L || is.na(attempt[[1]])) {
+      conversion_failures[[length(conversion_failures) + 1L]] <- list(
+        candidate = supported[[i]],
+        message = "iconv returned NA",
+        condition_class = "iconv_na"
+      )
+      next
+    }
+    selected <- supported[[i]]
+    converted <- attempt[[1]]
+    break
+  }
+
+  if (is.na(converted)) {
+    converted <- enc2utf8(raw_text)
+  }
+  converted <- stringr::str_remove(converted, "^\ufeff")
+  attr(converted, "encoding_diagnostics") <- list(
+    attempted_candidates = candidates,
+    supported_candidates = supported,
+    unsupported_candidates = unsupported,
+    selected_encoding = selected,
+    conversion_failures = conversion_failures,
+    fallback_used = is.na(selected)
+  )
+  converted
 }
 
 split_lines <- function(text) {
