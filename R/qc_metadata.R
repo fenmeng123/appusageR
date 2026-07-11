@@ -452,6 +452,11 @@ run_qc_for_second_level_data <- function(data, second_level_rda, participant_id,
   }
   qc_row <- qc[1, , drop = FALSE]
   pass_qc <- isTRUE(qc_row$pass_qc[[1]])
+  source_eligibility <- anomaly_qc$source_anomaly_qc$eligibility %||% list()
+  episode_eligible <- pass_qc && counts$n_episode_rows > 0 &&
+    !isTRUE(source_eligibility$episode_ineligible)
+  daily_eligible <- pass_qc && counts$n_daily_rows > 0 &&
+    !isTRUE(source_eligibility$daily_ineligible)
   list(
     qc_status = "success",
     second_level_status = "success",
@@ -474,8 +479,10 @@ run_qc_for_second_level_data <- function(data, second_level_rda, participant_id,
       pass_min_days = as.logical(qc_row$pass_min_days[[1]]),
       pass_all_weekdays = as.logical(qc_row$pass_all_weekdays[[1]]),
       analysis_eligible_event = pass_qc && counts$n_event_rows > 0,
-      analysis_eligible_episode = pass_qc && counts$n_episode_rows > 0,
-      analysis_eligible_daily = pass_qc && counts$n_daily_rows > 0
+      analysis_eligible_episode = episode_eligible,
+      analysis_eligible_daily = daily_eligible,
+      analysis_ineligible_episode_reasons = source_eligibility$episode_reasons %||% NA_character_,
+      analysis_ineligible_daily_reasons = source_eligibility$daily_reasons %||% NA_character_
     )
   )
 }
@@ -622,6 +629,9 @@ update_qc_metadata <- function(metadata, metadata_file, qc_file, result,
     result$qc
   )
   metadata$anomaly_qc <- result$anomaly_qc
+  metadata$source_anomaly_qc <- result$anomaly_qc$source_anomaly_qc %||% list(
+    status = "not_run", rule_version = "0.3.4-F"
+  )
   metadata
 }
 
@@ -734,7 +744,7 @@ qc_summary_row_from_legacy_metadata <- function(legacy_file, strict = FALSE) {
 qc_summary_row_from_loaded_metadata <- function(metadata, metadata_file) {
   qc_status <- qc_metadata_value(metadata, c("processing", "qc_status"))
   second_level_status <- qc_metadata_value(metadata, c("processing", "second_level_status"))
-  data.frame(
+  row <- data.frame(
     participant_id = qc_metadata_value(metadata, c("participant_id")),
     participant_id_source = qc_metadata_value(metadata, c("participant_id_source")),
     wenjuanxing_sequence_id = qc_metadata_value(metadata, c("identity", "wenjuanxing_sequence_id"), default = NA_integer_),
@@ -965,6 +975,9 @@ qc_summary_row_from_loaded_metadata <- function(metadata, metadata_file) {
     second_level_metadata_file = normalizePath(metadata_file, winslash = "/", mustWork = FALSE),
     stringsAsFactors = FALSE
   )
+  source_values <- appusage_source_qc_summary_from_metadata(metadata)
+  for (name in names(source_values)) row[[name]] <- source_values[[name]]
+  row
 }
 
 read_qc_summary_metadata <- function(metadata_file, metadata_label, strict) {

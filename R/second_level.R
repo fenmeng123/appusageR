@@ -97,7 +97,11 @@ make_second_level_appusage <- function(data, export_type = NULL,
     daily <- second_level_daily(first$app, max_daily_app_ms = max_daily_app_ms)
   }
   if (!is.null(first$meta_summary)) {
-    meta_summary_daily <- second_level_meta_summary(first$meta_summary, max_daily_app_ms = max_daily_app_ms)
+    meta_summary_daily <- second_level_meta_summary(
+      first$meta_summary,
+      max_daily_app_ms = max_daily_app_ms,
+      tz = tz
+    )
   }
   if (isTRUE(reconstruct_meta) && !is.null(first$meta_events)) {
     meta_episode_daily <- aggregate_meta_episodes_daily(
@@ -2400,10 +2404,16 @@ second_level_daily <- function(x, max_daily_app_ms) {
   appusage_order_daily(out)
 }
 
-second_level_meta_summary <- function(x, max_daily_app_ms) {
+second_level_meta_summary <- function(x, max_daily_app_ms,
+                                      tz = appusage_default_timezone()) {
   if (nrow(x) == 0) {
     return(empty_second_daily_tibble())
   }
+  source_qc <- appusage_meta_summary_qc_fields(
+    x,
+    max_duration_ms = max_daily_app_ms,
+    tz = tz
+  )
   out <- tibble::tibble(
     date = x$table_date,
     weekday = weekday_name(x$table_date),
@@ -2429,6 +2439,15 @@ second_level_meta_summary <- function(x, max_daily_app_ms) {
     unmatched_end_count = 0L,
     invalid_pair_count = 0L,
     reconstruction_warning_count = 0L,
+    summary_interval_start_ts_ms = source_qc$summary_interval_start_ts_ms,
+    summary_interval_end_ts_ms = source_qc$summary_interval_end_ts_ms,
+    summary_interval_span_ms = source_qc$summary_interval_span_ms,
+    summary_interval_crosses_date = source_qc$summary_interval_crosses_date,
+    summary_duration_over_24h = source_qc$summary_duration_over_24h,
+    summary_repeated_cumulative = source_qc$summary_repeated_cumulative,
+    episode_daily_available = source_qc$episode_daily_available,
+    analysis_eligible_daily = source_qc$analysis_eligible_daily,
+    analysis_ineligibility_reason = source_qc$analysis_ineligibility_reason,
     is_all_apps = x$package_name == "ALL",
     is_collection_app = x$package_name == "com.w.appusage",
     parse_warning = x$parse_warning
@@ -2697,6 +2716,8 @@ compare_meta_daily_sources <- function(target, reference) {
     target$summary_duration_ms <- target$duration_ms
   } else {
     target$episode_duration_ms <- target$duration_ms
+    target$episode_daily_available <- TRUE
+    target$analysis_eligible_daily[is.na(target$analysis_eligible_daily)] <- TRUE
   }
   if (nrow(ref) == 0) {
     return(appusage_order_daily(target))
@@ -2715,6 +2736,7 @@ compare_meta_daily_sources <- function(target, reference) {
     target$unmatched_end_count[matched] <- ref_matched$unmatched_end_count
     target$invalid_pair_count[matched] <- ref_matched$invalid_pair_count
     target$reconstruction_warning_count[matched] <- ref_matched$reconstruction_warning_count
+    target$episode_daily_available[matched] <- TRUE
   } else {
     target$summary_duration_ms[matched] <- ref_matched$duration_ms
   }
@@ -2969,6 +2991,15 @@ canonical_second_daily_schema <- function() {
     unmatched_end_count = integer(),
     invalid_pair_count = integer(),
     reconstruction_warning_count = integer(),
+    summary_interval_start_ts_ms = numeric(),
+    summary_interval_end_ts_ms = numeric(),
+    summary_interval_span_ms = numeric(),
+    summary_interval_crosses_date = logical(),
+    summary_duration_over_24h = logical(),
+    summary_repeated_cumulative = logical(),
+    episode_daily_available = logical(),
+    analysis_eligible_daily = logical(),
+    analysis_ineligibility_reason = character(),
     is_all_apps = logical(),
     is_collection_app = logical(),
     parse_warning = character(),

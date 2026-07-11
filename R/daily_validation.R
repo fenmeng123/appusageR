@@ -286,5 +286,7 @@ appusage_daily_self_check_summary_values <- function(metadata_file = NA_characte
 appusage_attach_daily_self_check_summary <- function(row, metadata_file = NA_character_) {
   values <- appusage_daily_self_check_summary_values(metadata_file)
   for (name in names(values)) row[[name]] <- values[[name]]
+  source_values <- appusage_source_qc_summary_values(metadata_file)
+  for (name in names(source_values)) row[[name]] <- source_values[[name]]
   row
 }

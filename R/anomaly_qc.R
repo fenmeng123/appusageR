@@ -19,6 +19,9 @@
 #' @param meta_diff_ratio Relative meta summary-vs-episode duration difference
 #'   threshold.
 #'
+#' @param source_qc_config Optional named list overriding the coherent 0.3.4-F
+#'   source-anomaly QC thresholds. This changes flags and eligibility only;
+#'   source rows are never removed or rewritten.
 #' @return A compact list of anomaly metrics suitable for JSON metadata.
 #' @export
 qc_appusage_anomalies <- function(data, metadata = NULL,
@@ -27,14 +30,17 @@ qc_appusage_anomalies <- function(data, metadata = NULL,
                                   max_daily_total_ms = 24 * 60 * 60 * 1000,
                                   max_export_lookback_days = 31,
                                   meta_diff_abs_ms = 60 * 1000,
-                                  meta_diff_ratio = 0.20) {
+                                  meta_diff_ratio = 0.20,
+                                  source_qc_config = NULL) {
+  source_qc_config <- appusage_source_qc_config(source_qc_config)
   thresholds <- appusage_anomaly_thresholds(
     max_episode_ms = max_episode_ms,
     max_daily_app_ms = max_daily_app_ms,
     max_daily_total_ms = max_daily_total_ms,
     max_export_lookback_days = max_export_lookback_days,
     meta_diff_abs_ms = meta_diff_abs_ms,
-    meta_diff_ratio = meta_diff_ratio
+    meta_diff_ratio = meta_diff_ratio,
+    source_qc_config = source_qc_config
   )
 
   grains <- appusage_normalize_anomaly_input(data)
@@ -63,6 +69,15 @@ qc_appusage_anomalies <- function(data, metadata = NULL,
     metadata,
     max_export_lookback_days = max_export_lookback_days
   )
+  metrics$source_anomaly_qc <- appusage_source_anomaly_qc(
+    grains,
+    config = source_qc_config,
+    metadata = metadata
+  )
+  metrics <- appusage_add_checks(
+    metrics,
+    appusage_source_qc_anomaly_checks(metrics$source_anomaly_qc)
+  )
 
   metrics$n_anomalies_total <- sum(unlist(metrics$n_anomalies_by_type),
     na.rm = TRUE
@@ -83,14 +98,16 @@ appusage_anomaly_thresholds <- function(max_episode_ms,
                                         max_daily_total_ms,
                                         max_export_lookback_days,
                                         meta_diff_abs_ms,
-                                        meta_diff_ratio) {
+                                        meta_diff_ratio,
+                                        source_qc_config = NULL) {
   list(
     max_episode_ms = max_episode_ms,
     max_daily_app_ms = max_daily_app_ms,
     max_daily_total_ms = max_daily_total_ms,
     max_export_lookback_days = max_export_lookback_days,
     meta_diff_abs_ms = meta_diff_abs_ms,
-    meta_diff_ratio = meta_diff_ratio
+    meta_diff_ratio = meta_diff_ratio,
+    source_qc = appusage_source_qc_config(source_qc_config)
   )
 }
 
@@ -104,7 +121,8 @@ appusage_empty_anomaly_qc <- function(status = "not_run",
       max_daily_total_ms = 24 * 60 * 60 * 1000,
       max_export_lookback_days = 31,
       meta_diff_abs_ms = 60 * 1000,
-      meta_diff_ratio = 0.20
+      meta_diff_ratio = 0.20,
+      source_qc_config = NULL
     )
   }
 
@@ -137,7 +155,11 @@ appusage_empty_anomaly_qc <- function(status = "not_run",
     max_abs_meta_duration_diff_ms = NA_real_,
     max_daily_total_ms_observed = NA_real_,
     max_observed_export_lookback_days = NA_real_,
-    error_message = error_message
+    error_message = error_message,
+    source_anomaly_qc = list(
+      status = "not_run",
+      rule_version = "0.3.4-F"
+    )
   )
 }
 

@@ -12,7 +12,8 @@ qc_appusage_anomalies(
   max_daily_total_ms = 24 * 60 * 60 * 1000,
   max_export_lookback_days = 31,
   meta_diff_abs_ms = 60 * 1000,
-  meta_diff_ratio = 0.2
+  meta_diff_ratio = 0.2,
+  source_qc_config = NULL
 )
 }
 \arguments{
@@ -37,6 +38,10 @@ threshold in milliseconds.}
 
 \item{meta_diff_ratio}{Relative meta summary-vs-episode duration difference
 threshold.}
+
+\item{source_qc_config}{Optional named list overriding the coherent 0.3.4-F
+source-anomaly QC thresholds. This changes flags and eligibility only;
+source rows are never removed or rewritten.}
 }
 \value{
 A compact list of anomaly metrics suitable for JSON metadata.
