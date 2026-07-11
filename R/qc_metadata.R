@@ -977,6 +977,10 @@ qc_summary_row_from_loaded_metadata <- function(metadata, metadata_file) {
   )
   source_values <- appusage_source_qc_summary_from_metadata(metadata)
   for (name in names(source_values)) row[[name]] <- source_values[[name]]
+  provenance_values <- appusage_provenance_summary_values(
+    appusage_metadata_provenance(metadata)
+  )
+  for (name in names(provenance_values)) row[[name]] <- provenance_values[[name]]
   row
 }
 

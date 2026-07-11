@@ -369,6 +369,10 @@ appusage_proc1_row_from_json <- function(json_path,
     row$error_message,
     status = row$status
   )
+  row <- appusage_attach_provenance_summary(
+    row,
+    appusage_metadata_provenance(metadata)
+  )
   row$summary_source <- "reconstructed_proc1_cache"
   row
 }

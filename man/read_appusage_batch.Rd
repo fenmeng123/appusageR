@@ -28,7 +28,8 @@ read_appusage_batch(
   max_workers = 12,
   worker_cap_override = FALSE,
   retry_memory_allocation = TRUE,
-  memory_retry_workers = 1
+  memory_retry_workers = 1,
+  provenance = NULL
 )
 }
 \arguments{
@@ -88,6 +89,9 @@ cap while still respecting available cores and file count.}
 with a reduced worker count.}
 
 \item{memory_retry_workers}{Worker count recorded for memory retries.}
+
+\item{provenance}{Optional implementation provenance supplied by a project
+workflow. Standalone calls compute one provenance record for the batch.}
 }
 \value{
 Invisibly returns a tibble summary. It does not return parsed data.

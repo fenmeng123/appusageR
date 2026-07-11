@@ -12,6 +12,7 @@ write_second_level_batch(
   progress = TRUE,
   parallel = FALSE,
   n_cores = 1,
+  provenance = NULL,
   ...
 )
 }
@@ -34,6 +35,9 @@ pairs when \code{overwrite = FALSE}.}
 
 \item{n_cores}{Number of requested workers when \code{parallel = TRUE}. Effective
 workers are capped at 12 and cannot exceed available logical cores.}
+
+\item{provenance}{Optional implementation provenance supplied by a project
+workflow. Standalone calls compute one provenance record for the batch.}
 
 \item{...}{Additional arguments passed to \code{write_second_level_appusage()}.}
 }

@@ -3,7 +3,7 @@ appusageR
 
 `appusageR` parses, validates, standardizes, and summarizes exported APP
 Usage / Screen Time Android smartphone-use logs for reproducible
-research workflows. Version 0.3.3 provides faithful raw parsers,
+research workflows. Version 0.3.4 provides faithful raw parsers,
 BIDS-like per-source cache files, second-level event/episode/daily
 outputs, breakpoint-aware resume and rerun support, memory-aware
 parallel batch workflows, manual app-category enrichment, project-level
@@ -18,7 +18,7 @@ APP Usage exports measure Android foreground-use duration from Android
 usage statistics. They should not be interpreted directly as attention,
 engagement, or subjective involvement with an app.
 
-The 0.3.3 preprocessing core is designed around auditable per-source
+The 0.3.4 preprocessing core is designed around auditable per-source
 caches:
 
 - raw parsers remain faithful to APP Usage export content;
@@ -67,7 +67,7 @@ contains timestamps or dates.
 
 ## Module-Level Workflow
 
-The preferred 0.3.3 user-facing entry points are:
+The preferred 0.3.4 user-facing entry points are:
 
 - `read_appusage_text()` for raw text I/O;
 - `run_first_level_appusage()` for one source file or text object;
@@ -179,6 +179,35 @@ The summary keeps task index, worker PID, stage, error class, error
 message, diagnostic report path, retry metadata, and final status where
 available. This keeps long batch runs auditable while preserving
 per-source cache files and returned summary order.
+
+## Provenance and Targeted Rebuild Planning
+
+Each workflow run computes one implementation-provenance record. The
+workflow configuration records the current run, while proc-1/proc-2
+metadata and summary rows retain the provenance of the run that created
+each cache. The record includes package/schema versions, effective
+timezone, a workflow run ID, a Git build marker when available, and
+deterministic parser, second-level, and source QC fingerprints.
+Fingerprints describe implementation/configuration only; they do not
+hash raw participant data, filenames, or absolute project paths.
+
+Use the metadata-only planner to preview narrowly targeted recovery
+work:
+
+``` r
+plan <- plan_appusage_project_rebuild(
+  "Study-Example_ProjectID-001",
+  write_plan = FALSE
+)
+
+subset(plan, eligible & requested_action != "none")
+```
+
+Planning is dry-run by default. It reads manifests, summaries, JSON
+metadata, and cache-pair state without loading RDA payloads or modifying
+caches. The plan uses stable `source_record_key`/fingerprint identity
+and identifies the existing filtered helper to use where execution is
+safe; it never starts a full-project overwrite itself.
 
 ## Second-Level Cache Workflow
 

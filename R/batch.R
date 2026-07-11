@@ -39,6 +39,8 @@
 #' @param retry_memory_allocation Whether to retry memory-allocation failures
 #'   with a reduced worker count.
 #' @param memory_retry_workers Worker count recorded for memory retries.
+#' @param provenance Optional implementation provenance supplied by a project
+#'   workflow. Standalone calls compute one provenance record for the batch.
 #'
 #' @return Invisibly returns a tibble summary. It does not return parsed data.
 #' @export
@@ -53,11 +55,13 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
                                 progress = TRUE, progress_every = 100,
                                 parallel = FALSE, n_cores = 1,
                                 resume = FALSE, checkpoint_every = NULL,
-                                max_workers = 12, worker_cap_override = FALSE,
-                                retry_memory_allocation = TRUE,
-                                memory_retry_workers = 1) {
+                                 max_workers = 12, worker_cap_override = FALSE,
+                                 retry_memory_allocation = TRUE,
+                                 memory_retry_workers = 1,
+                                 provenance = NULL) {
   input <- match.arg(input, c("file", "text", "lines"))
   tz <- appusage_resolve_timezone(tz)
+  provenance <- appusage_resolve_run_provenance(provenance, tz = tz)
   if (!identical(type, "auto") && !type %in% c("line", "meta", "day", "app")) {
     cli::cli_abort("`type` must be 'auto', 'line', 'meta', 'day', or 'app'.")
   }
@@ -133,7 +137,8 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
     checkpoint_file = checkpoint_file,
     existing_rows = existing_checkpoint,
     retry_memory_allocation = retry_memory_allocation,
-    memory_retry_workers = memory_retry_workers
+    memory_retry_workers = memory_retry_workers,
+    provenance = provenance
   )
   if (strict) {
     failed <- which(vapply(rows, function(z) !identical(z$status, "success"), logical(1)))
@@ -148,6 +153,7 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
   summary$first_level_selected_workers <- worker_decision$selected_workers
   summary$first_level_worker_cap_reason <- worker_decision$cap_reason
   summary$first_level_worker_cap_override <- worker_decision$worker_cap_override
+  summary <- appusage_attach_provenance_summary(summary, provenance)
   attr(summary, "first_level_worker_decision") <- worker_decision
   if (!is.null(output_project$project_root)) {
     summary$project_root <- output_project$project_root
@@ -184,6 +190,8 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
 #'   `FALSE`.
 #' @param n_cores Number of requested workers when `parallel = TRUE`. Effective
 #'   workers are capped at 12 and cannot exceed available logical cores.
+#' @param provenance Optional implementation provenance supplied by a project
+#'   workflow. Standalone calls compute one provenance record for the batch.
 #' @param ... Additional arguments passed to `write_second_level_appusage()`.
 #'
 #' @return Invisibly returns a tibble summary for second-level writing.
@@ -191,7 +199,7 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
 write_second_level_batch <- function(batch_summary, output_dir = NULL,
                                      overwrite = FALSE, resume = FALSE,
                                      progress = TRUE, parallel = FALSE,
-                                     n_cores = 1, ...) {
+                                     n_cores = 1, provenance = NULL, ...) {
   if (!all(c("status", "data_file") %in% names(batch_summary))) {
     cli::cli_abort("`batch_summary` must come from `read_appusage_batch()`.")
   }
@@ -213,6 +221,9 @@ write_second_level_batch <- function(batch_summary, output_dir = NULL,
   if (!is.null(output_dir) && any(eligible, na.rm = TRUE)) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   }
+  provenance <- appusage_resolve_run_provenance(provenance)
+  second_level_args <- list(...)
+  second_level_args$provenance <- provenance
   rows <- process_second_level_batch_rows(
     batch_summary = batch_summary,
     output_dir = output_dir,
@@ -221,7 +232,7 @@ write_second_level_batch <- function(batch_summary, output_dir = NULL,
     progress = progress,
     parallel = parallel,
     n_workers = n_workers,
-    second_level_args = list(...)
+    second_level_args = second_level_args
   )
   project_root <- infer_project_root_from_summary(batch_summary)
   previous_summary_file <- if (!is.na(project_root)) {
@@ -1031,12 +1042,14 @@ bind_appusage_summary_rows <- function(...) {
 preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
                                     tz, encoding, overwrite, index,
                                     memory_risk_signal = FALSE,
-                                    memory_risk_reason = NA_character_) {
+                                    memory_risk_reason = NA_character_,
+                                    provenance = NULL) {
   warnings <- character()
   started_at <- Sys.time()
   source_file <- source_file_label(x, input)
   participant_id <- id_info$participant_id[[1]]
   participant_id_source <- id_info$participant_id_source[[1]]
+  provenance <- appusage_resolve_run_provenance(provenance, tz = tz)
   detected_type <- NA_character_
   metadata_file <- NA_character_
   data_file <- NA_character_
@@ -1159,7 +1172,8 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           data_file = NA_character_,
           preflight = preflight,
           memory_risk_signal = memory_risk_signal,
-          source_identity = source_identity
+          source_identity = source_identity,
+          provenance = provenance
         )
 
         if (!is.null(output_dir)) {
@@ -1262,13 +1276,14 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
       data_file = NA_character_,
       preflight = preflight,
       memory_risk_signal = memory_risk_signal,
-      source_identity = source_identity
+      source_identity = source_identity,
+      provenance = provenance
     )
     write_metadata_json(error_info, metadata_file)
   }
   preflight_fields <- appusage_preflight_summary_fields(preflight)
   structural_fields <- appusage_structural_quality_summary_fields(structural_quality)
-  data.frame(
+  row <- data.frame(
     index = index,
     participant_id = participant_id,
     participant_id_source = participant_id_source,
@@ -1337,6 +1352,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
     elapsed_sec = as.numeric(difftime(finished_at, started_at, units = "secs")),
     stringsAsFactors = FALSE
   )
+  appusage_attach_provenance_summary(row, provenance)
 }
 
 batch_unsupported_error <- function(detected_type) {
@@ -1462,7 +1478,8 @@ build_metadata <- function(participant_id, participant_id_source, id_info,
                            data, warnings, error, metadata_file, data_file,
                            preflight = NULL,
                            memory_risk_signal = FALSE,
-                           source_identity = list()) {
+                           source_identity = list(),
+                           provenance = NULL) {
   source_meta <- source_metadata(source_file, input)
   compact_preflight <- appusage_compact_source_preflight(preflight)
   source_meta$preflight <- compact_preflight
@@ -1470,7 +1487,7 @@ build_metadata <- function(participant_id, participant_id_source, id_info,
   source_meta$source_cache_key <- source_identity$source_cache_key %||% NA_character_
   parser_diag <- first_level_parser_diagnostics(data, error)
   metadata <- list(
-    schema_version = "0.2.0",
+    schema_version = appusage_output_schema_version(),
     package_version = as.character(utils::packageVersion("appusageR")),
     parser_version = as.character(utils::packageVersion("appusageR")),
     created_at = format(finished_at, "%Y-%m-%dT%H:%M:%OS3%z"),
@@ -1531,7 +1548,8 @@ build_metadata <- function(participant_id, participant_id_source, id_info,
     ),
     anomalies = list(),
     errors = error_metadata(error),
-    warning_messages = unique(warnings)
+    warning_messages = unique(warnings),
+    implementation_provenance = appusage_resolve_run_provenance(provenance, tz = tz)
   )
   metadata$structural_quality <- parser_diag$format_specific$structural_quality %||% list(
     status = "not_applicable"
@@ -2817,7 +2835,8 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
                                parallel, n_cores, checkpoint_every = NULL,
                                checkpoint_file = NULL, existing_rows = NULL,
                                retry_memory_allocation = TRUE,
-                               memory_retry_workers = 1L) {
+                               memory_retry_workers = 1L,
+                               provenance = NULL) {
   memory_risk <- appusage_first_level_memory_risk_signal(
     x = x,
     input = input,
@@ -2858,7 +2877,8 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
           overwrite = TRUE,
           index = i,
           memory_risk_signal = FALSE,
-          memory_risk_reason = "serial_retry"
+          memory_risk_reason = "serial_retry",
+          provenance = provenance
         )
       },
       retry_worker_count = memory_retry_workers,
@@ -2890,7 +2910,8 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
         overwrite = TRUE,
         index = i,
         memory_risk_signal = FALSE,
-        memory_risk_reason = "serial_retry"
+        memory_risk_reason = "serial_retry",
+        provenance = provenance
       )
       rows[[i]] <- appusage_annotate_first_level_row(
         row,
@@ -2920,7 +2941,8 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
         overwrite = overwrite_plan[[i]],
         index = i,
         memory_risk_signal = FALSE,
-        memory_risk_reason = "serial_execution"
+        memory_risk_reason = "serial_execution",
+        provenance = provenance
       )
       rows[[i]] <- retry_one(row, i, worker_count = 1L)
       processed_since_checkpoint <- processed_since_checkpoint + 1L
@@ -2979,7 +3001,8 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
       encoding = encoding,
       overwrite_plan = overwrite_plan,
       memory_risk_signal = memory_risk$active,
-      memory_risk_reason = memory_risk$reason
+      memory_risk_reason = memory_risk$reason,
+      provenance = provenance
     )
     chunk_rows <- parallel::parLapplyLB(cluster, chunk_tasks, function(task) {
       worker_task <- get("appusage_process_first_level_worker_task", envir = asNamespace("appusageR"))
@@ -3009,7 +3032,8 @@ appusage_make_first_level_worker_tasks <- function(indices, x, id_plan, type,
                                                    input, output_dir, tz,
                                                    encoding, overwrite_plan,
                                                    memory_risk_signal = FALSE,
-                                                   memory_risk_reason = NA_character_) {
+                                                    memory_risk_reason = NA_character_,
+                                                    provenance = NULL) {
   lapply(indices, function(i) {
     appusage_make_first_level_worker_task(
       index = i,
@@ -3022,7 +3046,8 @@ appusage_make_first_level_worker_tasks <- function(indices, x, id_plan, type,
       encoding = encoding,
       overwrite = overwrite_plan[[i]],
       memory_risk_signal = memory_risk_signal,
-      memory_risk_reason = memory_risk_reason
+      memory_risk_reason = memory_risk_reason,
+      provenance = provenance
     )
   })
 }
@@ -3031,7 +3056,8 @@ appusage_make_first_level_worker_task <- function(index, x, id_info, type,
                                                   input, output_dir, tz,
                                                   encoding, overwrite,
                                                   memory_risk_signal = FALSE,
-                                                  memory_risk_reason = NA_character_) {
+                                                   memory_risk_reason = NA_character_,
+                                                   provenance = NULL) {
   list(
     index = index,
     x = x,
@@ -3043,7 +3069,8 @@ appusage_make_first_level_worker_task <- function(index, x, id_info, type,
     encoding = encoding,
     overwrite = overwrite,
     memory_risk_signal = memory_risk_signal,
-    memory_risk_reason = memory_risk_reason
+    memory_risk_reason = memory_risk_reason,
+    provenance = provenance
   )
 }
 
@@ -3059,7 +3086,8 @@ appusage_process_first_level_worker_task <- function(task) {
     overwrite = task$overwrite,
     index = task$index,
     memory_risk_signal = task$memory_risk_signal %||% FALSE,
-    memory_risk_reason = task$memory_risk_reason %||% NA_character_
+    memory_risk_reason = task$memory_risk_reason %||% NA_character_,
+    provenance = task$provenance %||% NULL
   )
   appusage_annotate_worker_result(
     row,
@@ -3391,7 +3419,8 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       status = "error",
       error = result$error,
       started_at = started_at,
-      finished_at = finished_at
+      finished_at = finished_at,
+      provenance = second_level_args$provenance %||% NULL
     )
   }
   appusage_attach_daily_self_check_summary(data.frame(

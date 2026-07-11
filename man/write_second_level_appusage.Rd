@@ -28,7 +28,8 @@ write_second_level_appusage(
   max_daily_total_ms = 24 * 60 * 60 * 1000,
   max_export_lookback_days = 31,
   meta_diff_abs_ms = 60 * 1000,
-  meta_diff_ratio = 0.2
+  meta_diff_ratio = 0.2,
+  provenance = NULL
 )
 }
 \arguments{
@@ -82,6 +83,9 @@ by inline daily QC.}
 daily QC controls passed to \code{\link[=qc_appusage_day]{qc_appusage_day()}}.}
 
 \item{max_daily_total_ms, max_export_lookback_days, meta_diff_abs_ms, meta_diff_ratio}{Anomaly/QC thresholds used for inline metadata.}
+
+\item{provenance}{Optional implementation provenance supplied by the project
+workflow. Standalone calls compute one provenance record for this write.}
 }
 \value{
 Invisibly returns the written second-level RDA path.

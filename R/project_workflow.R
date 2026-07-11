@@ -285,6 +285,10 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
   tz <- appusage_resolve_timezone(tz)
   second_level_options <- list(...)
   if (is.null(second_level_options$tz)) second_level_options$tz <- tz
+  run_provenance <- appusage_build_run_provenance(
+    tz = tz,
+    source_qc_config = second_level_options$source_qc_config %||% NULL
+  )
   resolved <- appusage_resolve_project_workflow_inputs(
     project_dir = project_dir,
     raw_data_root = raw_data_root,
@@ -387,7 +391,8 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     ),
     second_level_options = second_level_options,
     qc_options = list(run_qc = run_qc),
-    category_options = list()
+    category_options = list(),
+    provenance = run_provenance
   )
   preflight_resume_state <- appusage_prepare_workflow_resume(
     project,
@@ -465,6 +470,7 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
       benchmark_summary = benchmark$summary,
       benchmark_summary_file = benchmark$file,
       sample_size_flow = flow,
+      implementation_provenance = run_provenance,
       dry_run = TRUE
     )
     class(out) <- c("appusage_project_workflow", "list")
@@ -538,7 +544,8 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
           max_workers = first_level_max_workers,
           worker_cap_override = first_level_worker_cap_override,
           retry_memory_allocation = retry_memory_allocation,
-          memory_retry_workers = memory_retry_workers
+          memory_retry_workers = memory_retry_workers,
+          provenance = run_provenance
         )
         project$project_root <- unique(stats::na.omit(first$project_root))[[1]]
         config$output_study_dir <- project$project_root
@@ -588,6 +595,7 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
           progress = FALSE,
           parallel = parallel,
           n_cores = n_cores,
+          provenance = run_provenance,
           ...
         )
         second <- appusage_attach_diagnostics(
@@ -750,6 +758,7 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     benchmark_summary = benchmark$summary,
     benchmark_summary_file = benchmark$file,
     sample_size_flow = flow,
+    implementation_provenance = run_provenance,
     resumed = resumed,
     dry_run = FALSE
   )
@@ -833,7 +842,14 @@ diagnose_appusage_error <- function(error, source_file = NULL, stage = NULL,
       context,
       "raw_line_window",
       appusage_source_excerpt(source_file)
-    )
+    ),
+    implementation_provenance = if (
+      is.list(context) && is.list(context$implementation_provenance)
+    ) {
+      context$implementation_provenance
+    } else {
+      list()
+    }
   )
   class(out) <- c("appusage_error_context", "list")
   out
@@ -1249,13 +1265,21 @@ appusage_build_workflow_configuration <- function(raw_data_root,
                                                   resume,
                                                   overwrite,
                                                   first_level_options,
-                                                  second_level_options,
-                                                  qc_options,
-                                                  category_options) {
+                                                   second_level_options,
+                                                   qc_options,
+                                                   category_options,
+                                                   provenance = NULL) {
+  provenance <- appusage_resolve_run_provenance(
+    provenance,
+    tz = effective_timezone
+  )
   now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3%z")
   list(
     package_version = as.character(utils::packageVersion("appusageR")),
-    output_schema_version = "0.3.0",
+    output_schema_version = appusage_output_schema_version(),
+    workflow_run_id = provenance$workflow_run_id,
+    current_run_provenance = provenance,
+    run_provenance_history = list(),
     created_at = now,
     latest_run_at = now,
     raw_data_root = appusage_normalize_optional_path(raw_data_root),
@@ -1355,8 +1379,20 @@ appusage_merge_existing_workflow_configuration <- function(config, existing) {
     return(config)
   }
   created_at <- existing$created_at %||% config$created_at
+  history <- existing$run_provenance_history %||% list()
+  previous <- existing$current_run_provenance
+  if (is.list(previous) && is_present_string(previous$workflow_run_id) &&
+    !identical(previous$workflow_run_id, config$current_run_provenance$workflow_run_id)) {
+    existing_ids <- vapply(history, function(x) {
+      as.character(x$workflow_run_id %||% NA_character_)
+    }, character(1))
+    if (!previous$workflow_run_id %in% existing_ids) {
+      history[[length(history) + 1L]] <- previous
+    }
+  }
   merged <- utils::modifyList(existing, config, keep.null = TRUE)
   merged$created_at <- created_at
+  merged$run_provenance_history <- history
   merged
 }
 
@@ -1791,6 +1827,9 @@ appusage_attach_diagnostics <- function(summary, manifest, stage, project,
       stage = stage,
       project = project,
       source_summary = source_summary
+    )
+    context$implementation_provenance <- appusage_read_project_provenance(
+      project$project_root
     )
     error <- simpleError(context$error_message %||% paste(stage, "failed"))
     diag <- diagnose_appusage_error(error,

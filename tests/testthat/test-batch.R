@@ -125,6 +125,29 @@ test_that("read_appusage_batch records empty recognized exports without writing 
   expect_false(dir.exists(file.path(project_root, "proclevel-2")))
 })
 
+test_that("empty raw condition and first-level summary preserve provenance", {
+  condition <- appusageR:::first_level_empty_raw_data_error("line")
+  expect_s3_class(condition, "appusage_empty_raw_data")
+  expect_match(conditionMessage(condition), "parsed raw data are empty")
+
+  provenance <- appusageR:::appusage_build_run_provenance(
+    workflow_run_id = "run-first-summary",
+    git_sha = paste(rep("a", 40), collapse = ""),
+    git_dirty = FALSE,
+    package_root = tempdir()
+  )
+  output_dir <- file.path(
+    tempdir(), paste0("appusage-provenance-summary-", sample.int(1e8, 1L))
+  )
+  summary <- read_appusage_batch(
+    testthat::test_path("fixtures", "line_sample.txt"),
+    output_dir = output_dir,
+    provenance = provenance,
+    progress = FALSE
+  )
+  expect_equal(summary$workflow_run_id[[1L]], "run-first-summary")
+})
+
 test_that("read_appusage_batch uses content before misleading filename type", {
   source <- testthat::test_path("fixtures", "line_sample.txt")
   misleading <- file.path(tempdir(), "AppUsage_meta_2024_10_07_8_0_1.txt")

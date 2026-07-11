@@ -288,5 +288,7 @@ appusage_attach_daily_self_check_summary <- function(row, metadata_file = NA_cha
   for (name in names(values)) row[[name]] <- values[[name]]
   source_values <- appusage_source_qc_summary_values(metadata_file)
   for (name in names(source_values)) row[[name]] <- source_values[[name]]
+  provenance_values <- appusage_provenance_summary_values_from_file(metadata_file)
+  for (name in names(provenance_values)) row[[name]] <- provenance_values[[name]]
   row
 }

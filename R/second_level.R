@@ -200,6 +200,8 @@ make_second_level_appusage <- function(data, export_type = NULL,
 #'   daily QC controls passed to [qc_appusage_day()].
 #' @param max_daily_total_ms,max_export_lookback_days,meta_diff_abs_ms,meta_diff_ratio
 #'   Anomaly/QC thresholds used for inline metadata.
+#' @param provenance Optional implementation provenance supplied by the project
+#'   workflow. Standalone calls compute one provenance record for this write.
 #'
 #' @return Invisibly returns the written second-level RDA path.
 #' @export
@@ -223,13 +225,15 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
                                         drop_likely_total_all_rows = TRUE,
                                         all_row_tolerance = 0.10,
                                         max_daily_total_ms = 24 * 60 * 60 * 1000,
-                                        max_export_lookback_days = 31,
-                                        meta_diff_abs_ms = 60 * 1000,
-                                        meta_diff_ratio = 0.20) {
+                                         max_export_lookback_days = 31,
+                                         meta_diff_abs_ms = 60 * 1000,
+                                         meta_diff_ratio = 0.20,
+                                         provenance = NULL) {
   if (!file.exists(first_level_rda)) {
     cli::cli_abort("First-level RDA file does not exist: {.path {first_level_rda}}")
   }
   tz <- appusage_resolve_timezone(tz)
+  provenance <- appusage_resolve_run_provenance(provenance, tz = tz)
   meta_pairing <- match.arg(meta_pairing)
   meta_daily_source <- match.arg(meta_daily_source)
   started_at <- Sys.time()
@@ -390,6 +394,7 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     inline_qc_started_at = inline_qc_started_at,
     inline_qc_finished_at = inline_qc_finished_at,
     profiling = profiling,
+    provenance = provenance,
     started_at = started_at,
     finished_at = finished_at
   )
@@ -775,9 +780,10 @@ build_second_level_success_metadata <- function(first_metadata = NULL,
                                                 meta_daily_source,
                                                 inline_qc_result = NULL,
                                                 inline_qc_started_at = NULL,
-                                                inline_qc_finished_at = NULL,
+                                                 inline_qc_finished_at = NULL,
                                                  profiling = NULL,
                                                  tz = NULL,
+                                                 provenance = NULL,
                                                  started_at,
                                                 finished_at) {
   first_metadata <- first_metadata %||% read_first_level_metadata_for_second(first_level_rda)
@@ -806,6 +812,7 @@ build_second_level_success_metadata <- function(first_metadata = NULL,
     inline_qc_finished_at = inline_qc_finished_at,
     profiling = profiling,
     tz = tz,
+    provenance = provenance,
     started_at = started_at,
     finished_at = finished_at
   )
@@ -823,7 +830,8 @@ write_second_level_success_metadata <- function(...) {
 write_second_level_status_metadata <- function(batch_summary, index, output_dir,
                                                status, error = NULL,
                                                started_at = Sys.time(),
-                                               finished_at = Sys.time()) {
+                                               finished_at = Sys.time(),
+                                               provenance = NULL) {
   if (is.null(output_dir)) {
     return(NA_character_)
   }
@@ -889,6 +897,7 @@ write_second_level_status_metadata <- function(batch_summary, index, output_dir,
     merge_meta_episodes = FALSE,
     meta_episode_merge_gap_ms = NA_real_,
     meta_daily_source = "summary",
+    provenance = provenance,
     started_at = started_at,
     finished_at = finished_at
   )
@@ -918,6 +927,7 @@ build_second_level_metadata <- function(first_metadata, first_level_rda,
                                         inline_qc_finished_at = NULL,
                                         profiling = NULL,
                                         tz = NULL,
+                                        provenance = NULL,
                                         started_at,
                                         finished_at) {
   metadata <- first_metadata
@@ -930,8 +940,22 @@ build_second_level_metadata <- function(first_metadata, first_level_rda,
   if (is.null(metadata$outputs) || !is.list(metadata$outputs)) {
     metadata$outputs <- list()
   }
-  metadata$schema_version <- "0.2.0"
+  upstream_provenance <- appusage_metadata_provenance(first_metadata)
+  actual_source_qc <- inline_qc_result$anomaly_qc$source_anomaly_qc$config %||% NULL
+  provenance <- appusage_resolve_run_provenance(
+    provenance,
+    tz = effective_timezone,
+    source_qc_config = actual_source_qc
+  )
+  if (!is.null(actual_source_qc)) {
+    provenance$source_qc_config_fingerprint <- appusage_object_fingerprint(
+      appusage_source_qc_config(actual_source_qc, tz = effective_timezone)
+    )
+  }
+  metadata$schema_version <- appusage_output_schema_version()
   metadata$package_version <- as.character(utils::packageVersion("appusageR"))
+  metadata$upstream_implementation_provenance <- upstream_provenance
+  metadata$implementation_provenance <- provenance
   metadata$parser_version <- metadata$parser_version %||%
     as.character(utils::packageVersion("appusageR"))
   metadata$updated_at <- format(finished_at, "%Y-%m-%dT%H:%M:%OS3%z")
