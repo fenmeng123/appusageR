@@ -1040,6 +1040,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
   metadata_file <- NA_character_
   data_file <- NA_character_
   preflight <- NULL
+  structural_quality <- NULL
   source_identity <- appusage_source_identity(
     x = x,
     input = input,
@@ -1054,7 +1055,8 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
         preflight <- appusage_source_preflight(
           x = x,
           input = input,
-          encoding = encoding
+          encoding = encoding,
+          filename_type = id_info$native_export_type_from_filename[[1]]
         )
         if (!identical(preflight$status, "ok")) {
           detected_type <- if (length(preflight$detected_components) == 1L) {
@@ -1073,10 +1075,18 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           input = parse_input,
           type = type,
           encoding = encoding,
-          id_info = id_info
+          id_info = id_info,
+          preflight = preflight
         )
         if (identical(detected_type, "unknown")) {
           stop(batch_unsupported_error(detected_type))
+        }
+        if (isTRUE(preflight$filename_content_disagreement)) {
+          warnings <- c(warnings, paste0(
+            "Filename export type '", preflight$filename_type,
+            "' disagrees with content-selected component '", detected_type,
+            "'; content selection was used."
+          ))
         }
         source_identity <- appusage_source_identity(
           x = x,
@@ -1113,6 +1123,13 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
             strict = TRUE
           )
         )
+        if (identical(detected_type, "line")) {
+          parsed_diagnostics <- parser_diagnostics(parsed_data)
+          structural_quality <- parsed_diagnostics$format_specific$structural_quality %||% list()
+          if (isTRUE(structural_quality$critical)) {
+            stop(appusage_line_structural_quality_error(parsed_diagnostics))
+          }
+        }
 
         first_level_data <- as_first_level_data(parsed_data, detected_type)
         if (first_level_is_empty(first_level_data)) {
@@ -1201,6 +1218,10 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
 
   finished_at <- Sys.time()
   error <- result$error
+  if (is.null(structural_quality) && !is.null(error)) {
+    structural_quality <- error$structural_quality %||%
+      condition_parser_diagnostics(error)$format_specific$structural_quality
+  }
   source_identity <- appusage_source_identity(
     x = x,
     input = input,
@@ -1245,6 +1266,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
     write_metadata_json(error_info, metadata_file)
   }
   preflight_fields <- appusage_preflight_summary_fields(preflight)
+  structural_fields <- appusage_structural_quality_summary_fields(structural_quality)
   data.frame(
     index = index,
     participant_id = participant_id,
@@ -1254,6 +1276,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
     filename_parse_warning = id_info$filename_parse_warning[[1]],
     native_export_file_name = id_info$native_export_file_name[[1]],
     filename_export_type = id_info$native_export_type_from_filename[[1]],
+    native_export_type_raw = id_info$native_export_type_raw[[1]],
     native_export_created_at = id_info$native_export_created_at[[1]],
     export_type_match = filename_export_type_match(id_info, detected_type),
     source_file = source_file,
@@ -1268,6 +1291,26 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
     n_parse_warnings = result$n_parse_warnings,
     preflight_status = preflight_fields$preflight_status,
     detected_components = preflight_fields$detected_components,
+    selected_component = preflight_fields$selected_component,
+    mixed_content = preflight_fields$mixed_content,
+    component_selection_rule = preflight_fields$component_selection_rule,
+    filename_content_disagreement = preflight_fields$filename_content_disagreement,
+    structural_boundary_count = preflight_fields$structural_boundary_count,
+    structural_quality_status = structural_fields$structural_quality_status,
+    structural_quality_critical = structural_fields$structural_quality_critical,
+    structural_quality_warning = structural_fields$structural_quality_warning,
+    structural_valid_interval_ratio = structural_fields$structural_valid_interval_ratio,
+    structural_candidate_rows = structural_fields$structural_candidate_rows,
+    structural_parsed_rows = structural_fields$structural_parsed_rows,
+    structural_missing_timestamp_count = structural_fields$structural_missing_timestamp_count,
+    structural_missing_duration_count = structural_fields$structural_missing_duration_count,
+    structural_header_contamination_count = structural_fields$structural_header_contamination_count,
+    structural_exact_duplicate_count = structural_fields$structural_exact_duplicate_count,
+    structural_exact_duplicate_ratio = structural_fields$structural_exact_duplicate_ratio,
+    structural_malformed_identity_count = structural_fields$structural_malformed_identity_count,
+    structural_date_mismatch_count = structural_fields$structural_date_mismatch_count,
+    structural_critical_reasons = structural_fields$structural_critical_reasons,
+    structural_warning_reasons = structural_fields$structural_warning_reasons,
     preflight_has_record_rows = preflight_fields$preflight_has_record_rows,
     binary_signature = preflight_fields$binary_signature,
     nul_byte_ratio = preflight_fields$nul_byte_ratio,
@@ -1376,18 +1419,24 @@ first_level_empty_raw_data_error <- function(detected_type, diagnostics = NULL) 
   )
 }
 
-first_level_detect_type <- function(x, input, type, encoding, id_info) {
-  if (!identical(type, "auto")) {
-    return(type)
+first_level_detect_type <- function(x, input, type, encoding, id_info,
+                                    preflight = NULL) {
+  native_type_raw <- if ("native_export_type_raw" %in% names(id_info)) {
+    id_info$native_export_type_raw[[1]]
+  } else {
+    NA_character_
   }
-  filename_type <- id_info$native_export_type_from_filename[[1]]
-  if (!is.na(filename_type) && identical(filename_type, "unknown")) {
+  if (is_present_string(native_type_raw) &&
+    identical(tolower(trimws(native_type_raw)), "unlock")) {
     return("unknown")
   }
-  if (!is.na(filename_type) && filename_type %in% c("line", "meta", "day", "app")) {
-    return(filename_type)
+  if (!is.null(preflight) && is_present_string(preflight$selected_component)) {
+    return(preflight$selected_component)
   }
-  detect_appusage_type(x, input = input, encoding = encoding)
+  components <- appusage_detect_components_from_lines(
+    read_appusage_lines(x, input = input, encoding = encoding)
+  )
+  if (length(components) == 1L) components[[1]] else "unknown"
 }
 
 first_level_is_empty <- function(first_level_data) {
@@ -1418,7 +1467,7 @@ build_metadata <- function(participant_id, participant_id_source, id_info,
   source_meta$source_fingerprint <- source_identity$source_fingerprint %||% NA_character_
   source_meta$source_cache_key <- source_identity$source_cache_key %||% NA_character_
   parser_diag <- first_level_parser_diagnostics(data, error)
-  list(
+  metadata <- list(
     schema_version = "0.2.0",
     package_version = as.character(utils::packageVersion("appusageR")),
     parser_version = as.character(utils::packageVersion("appusageR")),
@@ -1438,6 +1487,7 @@ build_metadata <- function(participant_id, participant_id_source, id_info,
       detected_type = export_type,
       content_detected_export_type = export_type,
       native_export_type_from_filename = id_info$native_export_type_from_filename[[1]],
+      native_export_type_raw = id_info$native_export_type_raw[[1]],
       export_type_match = export_type_match,
       type_resolution_rule = first_level_type_resolution_rule(id_info, export_type),
       filename_content_relation = first_level_filename_content_relation(id_info, export_type),
@@ -1446,6 +1496,11 @@ build_metadata <- function(participant_id, participant_id_source, id_info,
       encoding = encoding,
       encoding_diagnostics = compact_preflight$encoding %||% list(),
       detected_components = compact_preflight$detected_components %||% character(),
+      selected_component = compact_preflight$selected_component %||% export_type,
+      mixed_content = compact_preflight$mixed_content %||% FALSE,
+      component_selection_rule = compact_preflight$selection_rule %||% NA_character_,
+      filename_content_disagreement = compact_preflight$filename_content_disagreement %||% FALSE,
+      boundary_diagnostics = compact_preflight$boundary_diagnostics %||% list(),
       timezone = tz
     ),
     processing = list(
@@ -1476,6 +1531,10 @@ build_metadata <- function(participant_id, participant_id_source, id_info,
     errors = error_metadata(error),
     warning_messages = unique(warnings)
   )
+  metadata$structural_quality <- parser_diag$format_specific$structural_quality %||% list(
+    status = "not_applicable"
+  )
+  metadata
 }
 
 first_level_parser_diagnostics <- function(data, error) {
@@ -1526,6 +1585,9 @@ first_level_failure_reason <- function(error) {
   }
   if (inherits(error, "appusage_source_preflight_error")) {
     return(error$source_preflight$failure_family %||% "source_preflight_failure")
+  }
+  if (inherits(error, "appusage_line_structural_quality")) {
+    return("structural_quality_critical")
   }
   error_message <- tryCatch(conditionMessage(error), error = function(e) "")
   if (appusage_is_memory_allocation_text(class(error), error_message)) {

@@ -74,8 +74,11 @@ test_that("source preflight distinguishes unknown header-only valid and mixed co
   expect_equal(header_only$status, "header_only")
   expect_equal(valid$status, "ok")
   expect_equal(valid$detected_components, "line")
-  expect_equal(mixed$status, "mixed_content")
+  expect_equal(mixed$status, "ok")
   expect_setequal(mixed$detected_components, c("line", "meta"))
+  expect_true(mixed$mixed_content)
+  expect_equal(mixed$selected_component, "line")
+  expect_equal(mixed$selection_rule, "single_bounded_component_with_records")
 })
 
 test_that("source preflight failures are terminal and are not memory retried", {

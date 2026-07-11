@@ -316,6 +316,27 @@ appusage_proc1_row_from_json <- function(json_path,
     row$source_cache_key
   )
   row$detected_type <- appusage_first_nonmissing(detected_type, row$detected_type)
+  preflight <- metadata$source$preflight %||% list()
+  row$selected_component <- appusage_first_nonmissing(
+    preflight$selected_component,
+    row$selected_component
+  )
+  row$detected_components <- paste(
+    preflight$detected_components %||% character(),
+    collapse = ";"
+  )
+  row$mixed_content <- isTRUE(preflight$mixed_content %||% FALSE)
+  row$component_selection_rule <- appusage_first_nonmissing(
+    preflight$selection_rule,
+    row$component_selection_rule
+  )
+  row$filename_content_disagreement <- isTRUE(
+    preflight$filename_content_disagreement %||% FALSE
+  )
+  quality <- metadata$structural_quality %||%
+    appusage_nested_value(metadata, c("parser_diagnostics", "format_specific", "structural_quality"), default = list())
+  quality_fields <- appusage_structural_quality_summary_fields(quality)
+  for (name in names(quality_fields)) row[[name]] <- quality_fields[[name]]
   row$content_detected_type <- appusage_first_nonmissing(
     appusage_nested_value(metadata, c("content_detection", "detected_type")),
     row$content_detected_type
@@ -460,6 +481,26 @@ appusage_proc1_problem_row <- function(metadata_file,
     )),
     content_detected_type = NA_character_,
     detected_type = as.character(manifest_value("filename_export_type", NA_character_)),
+    detected_components = NA_character_,
+    selected_component = NA_character_,
+    mixed_content = NA,
+    component_selection_rule = NA_character_,
+    filename_content_disagreement = NA,
+    structural_quality_status = NA_character_,
+    structural_quality_critical = NA,
+    structural_quality_warning = NA,
+    structural_valid_interval_ratio = NA_real_,
+    structural_candidate_rows = NA_integer_,
+    structural_parsed_rows = NA_integer_,
+    structural_missing_timestamp_count = NA_integer_,
+    structural_missing_duration_count = NA_integer_,
+    structural_header_contamination_count = NA_integer_,
+    structural_exact_duplicate_count = NA_integer_,
+    structural_exact_duplicate_ratio = NA_real_,
+    structural_malformed_identity_count = NA_integer_,
+    structural_date_mismatch_count = NA_integer_,
+    structural_critical_reasons = NA_character_,
+    structural_warning_reasons = NA_character_,
     status = status,
     data_file = as.character(data_file),
     metadata_file = as.character(metadata_file),
@@ -553,6 +594,9 @@ appusage_classify_failure_family <- function(error_class = NA_character_,
   )]
   if (length(source_hit) > 0L) {
     return(unname(source_families[[source_hit[[1]]]]))
+  }
+  if (grepl("appusage_line_structural_quality", text, fixed = TRUE)) {
+    return("structural_quality")
   }
 
   if (appusage_is_memory_allocation_text(text)) {

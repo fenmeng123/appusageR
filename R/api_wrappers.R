@@ -98,7 +98,8 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
         preflight <- appusage_source_preflight(
           x = parse_x,
           input = parse_input,
-          encoding = encoding
+          encoding = encoding,
+          filename_type = id_info$native_export_type_from_filename[[1]]
         )
         if (!identical(preflight$status, "ok")) {
           detected_type <- if (length(preflight$detected_components) == 1L) {
@@ -117,10 +118,18 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
           input = parse_input,
           type = type,
           encoding = encoding,
-          id_info = id_info
+          id_info = id_info,
+          preflight = preflight
         )
         if (identical(detected_type, "unknown")) {
           cli::cli_abort("APP Usage export type could not be detected.")
+        }
+        if (isTRUE(preflight$filename_content_disagreement)) {
+          warnings <- c(warnings, paste0(
+            "Filename export type '", preflight$filename_type,
+            "' disagrees with content-selected component '", detected_type,
+            "'; content selection was used."
+          ))
         }
         parsed <- parse_first_level_by_type(
           x = parse_x,
@@ -132,6 +141,13 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
           encoding = encoding,
           strict = strict
         )
+        if (identical(detected_type, "line")) {
+          parsed_diagnostics <- parser_diagnostics(parsed)
+          structural_quality <- parsed_diagnostics$format_specific$structural_quality %||% list()
+          if (isTRUE(structural_quality$critical)) {
+            stop(appusage_line_structural_quality_error(parsed_diagnostics))
+          }
+        }
         first_level_data <- as_first_level_data(parsed, detected_type)
         if (first_level_is_empty(first_level_data)) {
           stop(first_level_empty_raw_data_error(

@@ -125,7 +125,7 @@ test_that("read_appusage_batch records empty recognized exports without writing 
   expect_false(dir.exists(file.path(project_root, "proclevel-2")))
 })
 
-test_that("read_appusage_batch uses native filename type before content detection", {
+test_that("read_appusage_batch uses content before misleading filename type", {
   source <- testthat::test_path("fixtures", "line_sample.txt")
   misleading <- file.path(tempdir(), "AppUsage_meta_2024_10_07_8_0_1.txt")
   file.copy(source, misleading, overwrite = TRUE)
@@ -137,12 +137,13 @@ test_that("read_appusage_batch uses native filename type before content detectio
     progress = FALSE
   )
 
-  expect_equal(summary$detected_type[[1]], "meta")
-  expect_equal(summary$status[[1]], "error")
-  expect_true(is.na(summary$data_file[[1]]))
+  expect_equal(summary$detected_type[[1]], "line")
+  expect_equal(summary$status[[1]], "success")
+  expect_true(file.exists(summary$data_file[[1]]))
   expect_true(file.exists(summary$metadata_file[[1]]))
-  expect_true(isTRUE(summary$export_type_match[[1]]))
-  expect_match(summary$error_message[[1]], "meta-format APP Usage table markers")
+  expect_false(isTRUE(summary$export_type_match[[1]]))
+  expect_true(summary$filename_content_disagreement[[1]])
+  expect_match(summary$warning_messages[[1]], "content-selected component")
 })
 
 test_that("parse_day and parse_app output dates in chronological order", {
@@ -205,7 +206,7 @@ test_that("native and Wenjuanxing filename parsers extract provenance metadata",
   expect_equal(long_wjx$native_export_type_from_filename, "line")
 })
 
-test_that("Unlock native filenames are treated as unsupported first-level input", {
+test_that("Unlock native filenames remain unsupported despite recognized content", {
   source <- testthat::test_path("fixtures", "line_sample.txt")
   unlock_file <- file.path(tempdir(), "1001_AppUsage_Unlock_2024_10_7_8_0_0.txt")
   file.copy(source, unlock_file, overwrite = TRUE)
@@ -219,10 +220,18 @@ test_that("Unlock native filenames are treated as unsupported first-level input"
 
   expect_equal(summary$participant_id[[1]], "1001")
   expect_equal(summary$filename_export_type[[1]], "unknown")
+  expect_equal(tolower(summary$native_export_type_raw[[1]]), "unlock")
   expect_equal(summary$detected_type[[1]], "unknown")
   expect_equal(summary$status[[1]], "error")
   expect_match(summary$error_class[[1]], "appusage_unsupported_type")
   expect_true(is.na(summary$data_file[[1]]))
+  expect_match(summary$detected_components[[1]], "line")
+  expect_equal(summary$selected_component[[1]], "line")
+
+  second <- write_second_level_batch(summary, progress = FALSE)
+  expect_equal(second$second_level_status[[1]], "skipped")
+  expect_equal(second$skip_reason[[1]], "upstream_first_level_error")
+  expect_true(is.na(second$second_level_data_file[[1]]))
 })
 
 test_that("first-level cache summary rebuild detects complete, error, incomplete, and not-processed rows", {
@@ -930,8 +939,8 @@ test_that("dataset description summarizes recognized appusage types and dates", 
     simplifyVector = TRUE
   )
   expect_equal(description$appusage_files$n_recognized_appusage_files, 2)
-  expect_equal(description$appusage_files$n_line, 1)
-  expect_equal(description$appusage_files$n_meta, 1)
+  expect_equal(description$appusage_files$n_line, 2)
+  expect_equal(description$appusage_files$n_meta, 0)
   expect_equal(description$appusage_files$native_export_date_min, "2023-12-15")
   expect_equal(description$appusage_files$native_export_date_max, "2023-12-17")
 })

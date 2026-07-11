@@ -372,6 +372,9 @@ resolve_participant_ids <- function(x, ids = NULL, input = "file",
     filename_parse_warning = vapply(filename_meta, function(z) z$filename_parse_warning, character(1)),
     native_export_file_name = vapply(filename_meta, function(z) z$native_export_file_name, character(1)),
     native_export_type_from_filename = vapply(filename_meta, function(z) z$native_export_type_from_filename, character(1)),
+    native_export_type_raw = vapply(filename_meta, function(z) {
+      z$native_export_type_raw %||% NA_character_
+    }, character(1)),
     native_export_created_at = vapply(filename_meta, function(z) z$native_export_created_at, character(1)),
     native_filename_parse_status = vapply(filename_meta, function(z) z$native_filename_parse_status, character(1)),
     native_filename_parse_warning = vapply(filename_meta, function(z) z$native_filename_parse_warning, character(1))

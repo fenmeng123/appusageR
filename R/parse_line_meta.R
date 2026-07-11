@@ -37,14 +37,31 @@ parse_line <- function(x, input = c("file", "text", "lines"),
   }
 
   source_file <- source_file %||% source_file_label(x, input)
-  blocks <- collect_blocks(mat, header_rows)
+  blocks <- collect_line_blocks(mat, header_rows)
+  candidate_row_count <- line_block_candidate_count(mat, blocks)
   raw <- do.call(rbind, lapply(blocks, parse_line_block, mat = mat))
   out <- finalize_line_tibble(raw, participant_id, source_file, tz = tz)
+  structural_quality <- line_structural_quality(
+    out,
+    candidate_row_count = candidate_row_count,
+    tz = tz
+  )
+  boundaries <- appusage_structural_boundaries(mat)
   diagnostics <- finalize_parser_diagnostics(
     diagnostics,
     raw,
     out,
-    extras = line_format_diagnostics(raw, out)
+    extras = utils::modifyList(
+      line_format_diagnostics(raw, out),
+      list(
+        structural_quality = structural_quality,
+        structural_boundaries = list(
+          rows = as.integer(boundaries$row),
+          types = as.character(boundaries$boundary_type),
+          components = as.character(boundaries$component)
+        )
+      )
+    )
   )
   attach_parser_diagnostics(out, diagnostics)
 }
@@ -153,6 +170,180 @@ line_format_diagnostics <- function(raw, out) {
     } else {
       0L
     }
+  )
+}
+
+collect_line_blocks <- function(mat, header_rows) {
+  boundaries <- appusage_structural_boundaries(mat)
+  boundary_rows <- sort(unique(boundaries$row))
+  lapply(header_rows, function(header_row) {
+    next_boundary <- boundary_rows[boundary_rows > header_row]
+    end <- if (length(next_boundary) == 0L) nrow(mat) else next_boundary[[1]] - 1L
+    list(header_row = header_row, start = header_row + 1L, end = end)
+  })
+}
+
+line_block_candidate_count <- function(mat, blocks) {
+  sum(vapply(blocks, function(block) {
+    rows <- rows_for_block(mat, block)
+    if (nrow(rows) == 0L) return(0L)
+    sum(vapply(seq_len(nrow(rows)), function(i) valid_data_row(rows[i, ]), logical(1)))
+  }, integer(1)))
+}
+
+line_structural_quality_thresholds <- function() {
+  list(
+    valid_interval_critical_min = 0.95,
+    valid_interval_warning_min = 0.99,
+    exact_duplicate_critical_ratio = 0.01
+  )
+}
+
+line_structural_header_pattern <- function() {
+  paste(c(
+    "\u5f00\u59cb\u65f6\u95f4", "\u7ed3\u675f\u65f6\u95f4",
+    "\u5e94\u7528\u540d\u79f0", "\u5e94\u7528\u6807\u8bc6", "\u5e94\u7528\u5305\u540d",
+    "\u4f7f\u7528\u65f6\u957f", "\u683c\u5f0f\u5316\u65f6\u95f4",
+    "\u8868\u4e00", "\u8868\u4e8c", "\u5177\u4f53\u9875\u9762",
+    "\u65f6\u95f4\u6233", "\u914d\u7f6e", "\u65e5\u671f",
+    "\u542f\u52a8\u6b21\u6570", "\u901a\u77e5\u6b21\u6570",
+    "\u8bbe\u5907\u4fe1\u606f", "\u7cfb\u7edf\u4fe1\u606f", "^STEP$", "^DEVICE$", "^SYSTEM$"
+  ), collapse = "|")
+}
+
+line_structural_quality <- function(out, candidate_row_count = nrow(out),
+                                    tz = "Asia/Shanghai",
+                                    thresholds = line_structural_quality_thresholds()) {
+  n <- if (is.data.frame(out)) nrow(out) else 0L
+  if (n == 0L) {
+    return(list(
+      status = "critical", critical = TRUE, warning = FALSE,
+      thresholds = thresholds, n_candidate_rows = as.integer(candidate_row_count),
+      n_parsed_rows = 0L, n_valid_intervals = 0L, valid_interval_ratio = 0,
+      n_missing_start_timestamp = 0L, n_missing_end_timestamp = 0L,
+      n_missing_duration = 0L, n_header_token_contamination = 0L,
+      n_exact_duplicates = 0L, exact_duplicate_ratio = 0,
+      n_malformed_identity = 0L, malformed_identity_ratio = 0,
+      n_source_date_timestamp_mismatch = 0L,
+      critical_reasons = "no_valid_intervals", warning_reasons = character()
+    ))
+  }
+  valid <- !is.na(out$start_ts_ms) & !is.na(out$end_ts_ms) &
+    !is.na(out$duration_ms) & out$end_ts_ms >= out$start_ts_ms &
+    out$duration_ms >= 0
+  identity_text <- paste(out$app_name, out$package_name, sep = "\r")
+  contaminated <- grepl(
+    line_structural_header_pattern(), identity_text,
+    ignore.case = TRUE, perl = TRUE
+  )
+  duplicate_columns <- intersect(
+    c("date", "app_name", "package_name", "start_ts_ms", "end_ts_ms", "duration_ms"),
+    names(out)
+  )
+  exact_duplicates <- duplicated(out[, duplicate_columns, drop = FALSE])
+  package_valid <- !is.na(out$package_name) & (
+    out$package_name == "ALL" |
+      grepl("^(?:[A-Za-z][A-Za-z0-9_-]*[.])+[A-Za-z0-9_.-]+$", out$package_name)
+  )
+  package_valid[is.na(package_valid)] <- FALSE
+  identity_malformed <- is.na(out$app_name) | !nzchar(trimws(out$app_name)) |
+    !package_valid
+  timestamp_date <- as.Date(out$start_datetime, tz = tz)
+  date_mismatch <- !is.na(out$date) & !is.na(timestamp_date) & out$date != timestamp_date
+  valid_ratio <- mean(valid)
+  duplicate_ratio <- mean(exact_duplicates)
+  critical_reasons <- character()
+  if (!any(valid)) critical_reasons <- c(critical_reasons, "no_valid_intervals")
+  if (sum(contaminated, na.rm = TRUE) > 0L) {
+    critical_reasons <- c(critical_reasons, "header_token_contamination")
+  }
+  if (valid_ratio < thresholds$valid_interval_critical_min) {
+    critical_reasons <- c(critical_reasons, "valid_interval_ratio_below_critical")
+  }
+  if (duplicate_ratio > thresholds$exact_duplicate_critical_ratio) {
+    critical_reasons <- c(critical_reasons, "exact_duplicate_ratio_above_critical")
+  }
+  warning_reasons <- character()
+  if (valid_ratio >= thresholds$valid_interval_critical_min &&
+    valid_ratio < thresholds$valid_interval_warning_min) {
+    warning_reasons <- c(warning_reasons, "valid_interval_ratio_warning")
+  }
+  if (sum(exact_duplicates) > 0L &&
+    duplicate_ratio <= thresholds$exact_duplicate_critical_ratio) {
+    warning_reasons <- c(warning_reasons, "exact_duplicates_present")
+  }
+  if (sum(identity_malformed) > 0L) {
+    warning_reasons <- c(warning_reasons, "malformed_identity_present")
+  }
+  if (sum(date_mismatch) > 0L) {
+    warning_reasons <- c(warning_reasons, "source_date_timestamp_date_mismatch")
+  }
+  critical <- length(critical_reasons) > 0L
+  warning <- !critical && length(warning_reasons) > 0L
+  list(
+    status = if (critical) "critical" else if (warning) "warning" else "pass",
+    critical = critical,
+    warning = warning,
+    thresholds = thresholds,
+    n_candidate_rows = as.integer(candidate_row_count),
+    n_parsed_rows = n,
+    n_valid_intervals = sum(valid),
+    valid_interval_ratio = valid_ratio,
+    n_missing_start_timestamp = sum(is.na(out$start_ts_ms)),
+    n_missing_end_timestamp = sum(is.na(out$end_ts_ms)),
+    n_missing_duration = sum(is.na(out$duration_ms)),
+    n_header_token_contamination = sum(contaminated, na.rm = TRUE),
+    n_exact_duplicates = sum(exact_duplicates),
+    exact_duplicate_ratio = duplicate_ratio,
+    n_malformed_identity = sum(identity_malformed),
+    malformed_identity_ratio = mean(identity_malformed),
+    n_source_date_timestamp_mismatch = sum(date_mismatch),
+    critical_reasons = unique(critical_reasons),
+    warning_reasons = unique(warning_reasons)
+  )
+}
+
+appusage_line_structural_quality_error <- function(diagnostics) {
+  quality <- diagnostics$format_specific$structural_quality %||% list()
+  structure(
+    list(
+      message = paste0(
+        "Line export failed structural quality gate: ",
+        paste(quality$critical_reasons %||% "unknown", collapse = "; "), "."
+      ),
+      call = NULL,
+      parser_diagnostics = diagnostics,
+      structural_quality = quality
+    ),
+    class = c("appusage_line_structural_quality", "appusage_parser_error", "error", "condition")
+  )
+}
+
+appusage_structural_quality_summary_fields <- function(quality) {
+  quality <- quality %||% list()
+  has_quality <- length(quality) > 0L && is_present_string(quality$status)
+  missing_timestamp_count <- if (has_quality) {
+    (quality$n_missing_start_timestamp %||% 0L) +
+      (quality$n_missing_end_timestamp %||% 0L)
+  } else {
+    NA_integer_
+  }
+  list(
+    structural_quality_status = quality$status %||% NA_character_,
+    structural_quality_critical = quality$critical %||% NA,
+    structural_quality_warning = quality$warning %||% NA,
+    structural_valid_interval_ratio = quality$valid_interval_ratio %||% NA_real_,
+    structural_candidate_rows = quality$n_candidate_rows %||% NA_integer_,
+    structural_parsed_rows = quality$n_parsed_rows %||% NA_integer_,
+    structural_missing_timestamp_count = missing_timestamp_count,
+    structural_missing_duration_count = quality$n_missing_duration %||% NA_integer_,
+    structural_header_contamination_count = quality$n_header_token_contamination %||% NA_integer_,
+    structural_exact_duplicate_count = quality$n_exact_duplicates %||% NA_integer_,
+    structural_exact_duplicate_ratio = quality$exact_duplicate_ratio %||% NA_real_,
+    structural_malformed_identity_count = quality$n_malformed_identity %||% NA_integer_,
+    structural_date_mismatch_count = quality$n_source_date_timestamp_mismatch %||% NA_integer_,
+    structural_critical_reasons = paste(quality$critical_reasons %||% character(), collapse = ";"),
+    structural_warning_reasons = paste(quality$warning_reasons %||% character(), collapse = ";")
   )
 }
 

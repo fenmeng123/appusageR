@@ -15,10 +15,18 @@ detect_appusage_type <- function(x, input = c("file", "text", "lines"),
                                  encoding = "auto") {
   input <- match.arg(input)
   lines <- read_appusage_lines(x, input = input, encoding = encoding)
-  components <- appusage_detect_components_from_lines(lines)
-  priority <- c("meta", "line", "app", "day")
-  selected <- priority[priority %in% components]
-  if (length(selected) > 0L) selected[[1]] else "unknown"
+  preflight <- appusage_source_preflight(
+    lines,
+    input = "lines",
+    encoding = encoding,
+    filename_type = NA_character_
+  )
+  if (identical(preflight$status, "ok") &&
+    is_present_string(preflight$selected_component)) {
+    preflight$selected_component
+  } else {
+    "unknown"
+  }
 }
 
 appusage_detect_components_from_lines <- function(lines) {
