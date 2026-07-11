@@ -211,6 +211,13 @@ build_appusage_project_manifest <- function(project_dir,
 #' @param max_files Maximum number of `.txt` files to preprocess, selected by
 #'   lexicographic basename order. Intended for bounded smoke tests.
 #' @param self_report_n_max Maximum number of self-report rows to read.
+#' @param self_report_sheet Excel sheet name or index to read from the paired
+#'   self-report workbook. Defaults to the first sheet.
+#' @param self_report_guess_max Number of selected rows used by [readxl::read_excel()]
+#'   for type inference. The default uses the full selected row range: `Inf`
+#'   when `self_report_n_max` is unlimited, otherwise `self_report_n_max`.
+#' @param self_report_col_types Optional readxl-compatible column types. When
+#'   supplied, read/coercion warnings are retained in project diagnostics.
 #' @param resume Whether to reuse compatible existing outputs.
 #' @param export_type_priority Export-type priority for duplicate upload
 #'   candidates.
@@ -251,6 +258,9 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
                                           submit_time_col = NULL,
                                           max_files = Inf,
                                           self_report_n_max = Inf,
+                                          self_report_sheet = 1,
+                                          self_report_guess_max = NULL,
+                                          self_report_col_types = NULL,
                                           resume = TRUE,
                                           export_type_priority = c("line", "meta", "day", "app"),
                                           dry_run = FALSE,
@@ -300,7 +310,17 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
   manifest <- build_appusage_project_manifest(project_dir, self_report_file)
   manifest <- appusage_limit_manifest_files(manifest, max_files = max_files)
   n_appusage <- sum(manifest$is_txt %in% TRUE, na.rm = TRUE)
-  n_survey <- appusage_count_self_report_rows(self_report_file, self_report_n_max)
+  self_report_read <- appusage_read_self_report_workbook(
+    self_report = self_report_file,
+    sheet = self_report_sheet,
+    n_max = self_report_n_max,
+    guess_max = self_report_guess_max,
+    col_types = self_report_col_types,
+    diagnostics_dir = file.path(project$project_root, "diagnostics"),
+    emit_warning = TRUE
+  )
+  self_report_data <- self_report_read$data
+  n_survey <- nrow(self_report_data)
   txt_files <- manifest$source_file[manifest$is_txt %in% TRUE]
   first_level_worker_decision <- appusage_first_level_worker_decision(
     parallel = parallel,
@@ -339,6 +359,10 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     submit_time_col = submit_time_col,
     max_files = max_files,
     self_report_n_max = self_report_n_max,
+    self_report_sheet = self_report_sheet,
+    self_report_guess_max = self_report_guess_max,
+    self_report_col_types = self_report_col_types,
+    self_report_read = appusage_compact_self_report_read_diagnostics(self_report_read),
     export_type_priority = export_type_priority,
     resume = resume,
     overwrite = overwrite,
@@ -362,6 +386,23 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     qc_options = list(run_qc = run_qc),
     category_options = list()
   )
+  preflight_resume_state <- appusage_prepare_workflow_resume(
+    project,
+    config,
+    resume,
+    overwrite
+  )
+  config <- appusage_merge_existing_workflow_configuration(
+    config,
+    preflight_resume_state$existing_config
+  )
+  config <- appusage_initialize_workflow_state(
+    config,
+    n_cores = n_cores,
+    first_level_worker_decision = first_level_worker_decision,
+    parallel = parallel
+  )
+  configuration_file <- appusage_write_workflow_configuration(config)
   if (isTRUE(resume) && !isTRUE(overwrite)) {
     appusage_rebuild_first_level_summary_if_needed(
       project_dir = project$project_root,
@@ -370,10 +411,13 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     )
   }
   resume_state <- appusage_prepare_workflow_resume(project, config, resume, overwrite)
+  config <- appusage_record_discovered_workflow_checkpoints(config, resume_state)
+  configuration_file <- appusage_write_workflow_configuration(config)
 
   if (isTRUE(dry_run)) {
     diagnostics <- appusage_prepare_diagnostics(project$project_root)
     manifest_file <- appusage_write_project_manifest(manifest, diagnostics$diagnostics_dir)
+    config <- appusage_workflow_state_dry_run(config)
     configuration_file <- appusage_write_workflow_configuration(config)
     flow <- appusage_console_sample_size_flow(
       first = NULL,
@@ -412,6 +456,8 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
       matched_self_report = NULL,
       matched_self_report_file = NA_character_,
       match_diagnostics = NULL,
+      self_report_read_diagnostics = self_report_read$diagnostics,
+      self_report_read_diagnostics_file = self_report_read$diagnostics_file,
       first_level_worker_decision = first_level_worker_decision,
       benchmark_summary = benchmark$summary,
       benchmark_summary_file = benchmark$file,
@@ -437,162 +483,217 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     first <- appusage_read_summary_csv(file.path(project$project_root, "analytic_summary_table_proclevel-1.csv"))
     second <- appusage_read_summary_csv(file.path(project$project_root, "analytic_summary_table_proclevel-2.csv"))
     qc <- if (isTRUE(run_qc)) second else NULL
-  } else {
-    if (isTRUE(resume_state$use_existing_first_level)) {
-      resumed <- TRUE
-      first <- appusage_read_summary_csv(
-        file.path(project$project_root, "analytic_summary_table_proclevel-1.csv")
-      )
-      if (nrow(first) == 0) {
-        cli::cli_abort("Existing first-level summary is empty. Use `overwrite = TRUE` to recreate the selected output study folder.")
-      }
-      config$output_study_dir <- project$project_root
-      diagnostics <- appusage_prepare_diagnostics(project$project_root)
-      manifest_file <- appusage_write_project_manifest(manifest, diagnostics$diagnostics_dir)
-      appusage_console_emit_stage_summary(
-        progress = progress,
-        summary = first,
-        stage_label = "first-level",
-        total = n_appusage,
-        project_root = project$project_root,
-        status_col = "status"
-      )
-      appusage_abort_if_strict_failures(first, strict, "first_level")
-    } else {
-      first <- read_appusage_batch(
-        txt_files,
-        output_dir = output_root,
-        project_name = project$output_project_name,
-        project_id = project$output_project_id,
-        type = type,
-        input = "file",
-        tz = tz,
-        encoding = encoding,
-        strict = FALSE,
-        overwrite = overwrite,
-        progress = FALSE,
-        parallel = parallel,
-        n_cores = n_cores,
-        resume = resume,
-        checkpoint_every = first_level_checkpoint_every,
-        max_workers = first_level_max_workers,
-        worker_cap_override = first_level_worker_cap_override,
-        retry_memory_allocation = retry_memory_allocation,
-        memory_retry_workers = memory_retry_workers
-      )
-      project$project_root <- unique(stats::na.omit(first$project_root))[[1]]
-      config$output_study_dir <- project$project_root
-      diagnostics <- appusage_prepare_diagnostics(project$project_root)
-      manifest_file <- appusage_write_project_manifest(manifest, diagnostics$diagnostics_dir)
-      first <- appusage_attach_diagnostics(
-        summary = first,
-        manifest = manifest,
-        stage = "first_level",
-        project = project,
-        diagnostics = diagnostics
-        ,
-        diagnostic_verbosity = diagnostic_verbosity
-      )
-      utils::write.csv(first,
-        file.path(project$project_root, "analytic_summary_table_proclevel-1.csv"),
-        row.names = FALSE,
-        na = ""
-      )
-      appusage_console_emit_stage_summary(
-        progress = progress,
-        summary = first,
-        stage_label = "first-level",
-        total = n_appusage,
-        project_root = project$project_root,
-        status_col = "status"
-      )
-      appusage_abort_if_strict_failures(first, strict, "first_level")
+    completed_stages <- c("first_level", "second_level")
+    if (isTRUE(run_qc)) {
+      completed_stages <- c(completed_stages, "qc")
     }
+    for (stage in completed_stages) {
+      config <- appusage_workflow_state_complete(config, stage)
+    }
+    configuration_file <- appusage_write_workflow_configuration(config)
+  } else {
+    config <- appusage_workflow_state_begin(config, "first_level")
+    configuration_file <- appusage_write_workflow_configuration(config)
+    tryCatch({
+      if (isTRUE(resume_state$use_existing_first_level)) {
+        resumed <- TRUE
+        first <- appusage_read_summary_csv(
+          file.path(project$project_root, "analytic_summary_table_proclevel-1.csv")
+        )
+        if (nrow(first) == 0) {
+          cli::cli_abort("Existing first-level summary is empty. Use `overwrite = TRUE` to recreate the selected output study folder.")
+        }
+        config$output_study_dir <- project$project_root
+        diagnostics <- appusage_prepare_diagnostics(project$project_root)
+        manifest_file <- appusage_write_project_manifest(manifest, diagnostics$diagnostics_dir)
+        appusage_console_emit_stage_summary(
+          progress = progress,
+          summary = first,
+          stage_label = "first-level",
+          total = n_appusage,
+          project_root = project$project_root,
+          status_col = "status"
+        )
+        appusage_abort_if_strict_failures(first, strict, "first_level")
+      } else {
+        first <- read_appusage_batch(
+          txt_files,
+          output_dir = output_root,
+          project_name = project$output_project_name,
+          project_id = project$output_project_id,
+          type = type,
+          input = "file",
+          tz = tz,
+          encoding = encoding,
+          strict = FALSE,
+          overwrite = overwrite,
+          progress = FALSE,
+          parallel = parallel,
+          n_cores = n_cores,
+          resume = resume,
+          checkpoint_every = first_level_checkpoint_every,
+          max_workers = first_level_max_workers,
+          worker_cap_override = first_level_worker_cap_override,
+          retry_memory_allocation = retry_memory_allocation,
+          memory_retry_workers = memory_retry_workers
+        )
+        project$project_root <- unique(stats::na.omit(first$project_root))[[1]]
+        config$output_study_dir <- project$project_root
+        diagnostics <- appusage_prepare_diagnostics(project$project_root)
+        manifest_file <- appusage_write_project_manifest(manifest, diagnostics$diagnostics_dir)
+        first <- appusage_attach_diagnostics(
+          summary = first,
+          manifest = manifest,
+          stage = "first_level",
+          project = project,
+          diagnostics = diagnostics,
+          diagnostic_verbosity = diagnostic_verbosity
+        )
+        utils::write.csv(first,
+          file.path(project$project_root, "analytic_summary_table_proclevel-1.csv"),
+          row.names = FALSE,
+          na = ""
+        )
+        appusage_console_emit_stage_summary(
+          progress = progress,
+          summary = first,
+          stage_label = "first-level",
+          total = n_appusage,
+          project_root = project$project_root,
+          status_col = "status"
+        )
+        appusage_abort_if_strict_failures(first, strict, "first_level")
+      }
+    }, error = function(e) {
+      appusage_mark_workflow_stage_failed_safely(
+        configuration_file,
+        "first_level",
+        e
+      )
+      stop(e)
+    })
+    config <- appusage_workflow_state_complete(config, "first_level")
+    configuration_file <- appusage_write_workflow_configuration(config)
 
     if (isTRUE(run_second_level)) {
-      second <- write_second_level_batch(first,
-        overwrite = overwrite,
-        resume = resume,
-        progress = FALSE,
-        parallel = parallel,
-        n_cores = n_cores,
-        ...
-      )
-      second <- appusage_attach_diagnostics(
-        summary = second,
-        manifest = manifest,
-        stage = "second_level",
-        project = project,
-        diagnostics = diagnostics,
-        source_summary = first,
-        diagnostic_verbosity = diagnostic_verbosity
-      )
-      utils::write.csv(second,
-        file.path(project$project_root, "analytic_summary_table_proclevel-2.csv"),
-        row.names = FALSE,
-        na = ""
-      )
-      appusage_console_emit_stage_summary(
-        progress = progress,
-        summary = second,
-        stage_label = "second-level",
-        total = n_appusage,
-        project_root = project$project_root,
-        status_col = "status"
-      )
-      appusage_abort_if_strict_failures(second, strict, "second_level")
+      config <- appusage_workflow_state_begin(config, "second_level")
+      configuration_file <- appusage_write_workflow_configuration(config)
+      tryCatch({
+        second <- write_second_level_batch(first,
+          overwrite = overwrite,
+          resume = resume,
+          progress = FALSE,
+          parallel = parallel,
+          n_cores = n_cores,
+          ...
+        )
+        second <- appusage_attach_diagnostics(
+          summary = second,
+          manifest = manifest,
+          stage = "second_level",
+          project = project,
+          diagnostics = diagnostics,
+          source_summary = first,
+          diagnostic_verbosity = diagnostic_verbosity
+        )
+        utils::write.csv(second,
+          file.path(project$project_root, "analytic_summary_table_proclevel-2.csv"),
+          row.names = FALSE,
+          na = ""
+        )
+        appusage_console_emit_stage_summary(
+          progress = progress,
+          summary = second,
+          stage_label = "second-level",
+          total = n_appusage,
+          project_root = project$project_root,
+          status_col = "status"
+        )
+        appusage_abort_if_strict_failures(second, strict, "second_level")
+      }, error = function(e) {
+        appusage_mark_workflow_stage_failed_safely(
+          configuration_file,
+          "second_level",
+          e
+        )
+        stop(e)
+      })
+      config <- appusage_workflow_state_complete(config, "second_level")
+      configuration_file <- appusage_write_workflow_configuration(config)
     }
 
     if (isTRUE(run_qc) && !is.null(second)) {
-      qc <- if (appusage_second_summary_has_inline_qc(second)) {
-        second
-      } else {
-        write_qc_metadata_batch(project$project_root,
-          strict = FALSE,
-          progress = FALSE,
-          overwrite = TRUE
+      config <- appusage_workflow_state_begin(config, "qc")
+      configuration_file <- appusage_write_workflow_configuration(config)
+      tryCatch({
+        qc <- if (appusage_second_summary_has_inline_qc(second)) {
+          second
+        } else {
+          write_qc_metadata_batch(project$project_root,
+            strict = FALSE,
+            progress = FALSE,
+            overwrite = TRUE
+          )
+        }
+        qc <- appusage_attach_diagnostics(
+          summary = qc,
+          manifest = manifest,
+          stage = "qc",
+          project = project,
+          diagnostics = diagnostics,
+          source_summary = first,
+          diagnostic_verbosity = diagnostic_verbosity
         )
-      }
-      qc <- appusage_attach_diagnostics(
-        summary = qc,
-        manifest = manifest,
-        stage = "qc",
-        project = project,
-        diagnostics = diagnostics,
-        source_summary = first,
-        diagnostic_verbosity = diagnostic_verbosity
-      )
-      qc <- appusage_merge_qc_with_second_level_skips(qc, second)
-      utils::write.csv(qc,
-        file.path(project$project_root, "analytic_summary_table_proclevel-2.csv"),
-        row.names = FALSE,
-        na = ""
-      )
-      appusage_console_emit_stage_summary(
-        progress = progress,
-        summary = qc,
-        stage_label = "QC-daily-qc-v1",
-        total = n_appusage,
-        project_root = project$project_root,
-        status_col = "qc_status"
-      )
-      appusage_abort_if_strict_failures(qc, strict, "qc")
+        qc <- appusage_merge_qc_with_second_level_skips(qc, second)
+        utils::write.csv(qc,
+          file.path(project$project_root, "analytic_summary_table_proclevel-2.csv"),
+          row.names = FALSE,
+          na = ""
+        )
+        appusage_console_emit_stage_summary(
+          progress = progress,
+          summary = qc,
+          stage_label = "QC-daily-qc-v1",
+          total = n_appusage,
+          project_root = project$project_root,
+          status_col = "qc_status"
+        )
+        appusage_abort_if_strict_failures(qc, strict, "qc")
+      }, error = function(e) {
+        appusage_mark_workflow_stage_failed_safely(configuration_file, "qc", e)
+        stop(e)
+      })
+      config <- appusage_workflow_state_complete(config, "qc")
+      configuration_file <- appusage_write_workflow_configuration(config)
     }
   }
 
+  config <- appusage_workflow_state_begin(config, "self_report_matching")
   configuration_file <- appusage_write_workflow_configuration(config)
-  match_result <- appusage_maybe_match_self_report(
-    self_report_file = self_report_file,
-    manifest = manifest,
-    project = project,
-    first = first,
-    second = second,
-    sequence_col = sequence_col,
-    upload_col = upload_col,
-    submit_time_col = submit_time_col,
-    self_report_n_max = self_report_n_max,
-    export_type_priority = export_type_priority
+  match_result <- tryCatch(
+    appusage_maybe_match_self_report(
+      self_report = self_report_data,
+      self_report_file = self_report_file,
+      manifest = manifest,
+      project = project,
+      first = first,
+      second = second,
+      sequence_col = sequence_col,
+      upload_col = upload_col,
+      submit_time_col = submit_time_col,
+      export_type_priority = export_type_priority
+    ),
+    error = function(e) {
+      appusage_mark_workflow_stage_failed_safely(
+        configuration_file,
+        "self_report_matching",
+        e
+      )
+      stop(e)
+    }
   )
+  config <- appusage_workflow_state_complete(config, "self_report_matching")
+  configuration_file <- appusage_write_workflow_configuration(config)
   if (is_present_string(match_result$matched_self_report_file)) {
     appusage_console_matching_stage(
       progress = progress,
@@ -625,6 +726,8 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     manifest = manifest,
     first_level_worker_decision = first_level_worker_decision
   )
+  config <- appusage_workflow_state_completed(config)
+  configuration_file <- appusage_write_workflow_configuration(config)
 
   out <- list(
     project_dir = project$project_root,
@@ -638,6 +741,8 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     matched_self_report = match_result$matched_self_report,
     matched_self_report_file = match_result$matched_self_report_file,
     match_diagnostics = match_result$diagnostics,
+    self_report_read_diagnostics = self_report_read$diagnostics,
+    self_report_read_diagnostics_file = self_report_read$diagnostics_file,
     first_level_worker_decision = first_level_worker_decision,
     benchmark_summary = benchmark$summary,
     benchmark_summary_file = benchmark$file,
@@ -792,6 +897,9 @@ format_appusage_issue_report <- function(error_context) {
 #' @param participant_id_col Optional study participant ID column name.
 #' @param sheet Excel sheet passed to [readxl::read_excel()] when `self_report`
 #'   is a path.
+#' @param guess_max Number of rows used for column-type inference. By default,
+#'   all selected rows are used.
+#' @param col_types Optional readxl-compatible column types.
 #' @param ... Additional arguments passed to [readxl::read_excel()].
 #'
 #' @return A one-row tibble with preflight diagnostics.
@@ -799,9 +907,13 @@ format_appusage_issue_report <- function(error_context) {
 preflight_self_report_matching <- function(self_report, sequence_col,
                                            upload_col,
                                            participant_id_col = NULL,
-                                           sheet = 1, ...) {
+                                           sheet = 1,
+                                           guess_max = NULL,
+                                           col_types = NULL, ...) {
   data <- appusage_read_self_report_preflight(self_report,
     sheet = sheet,
+    guess_max = guess_max,
+    col_types = col_types,
     ...
   )
   requested <- c(sequence_col, upload_col, participant_id_col)
@@ -1123,9 +1235,13 @@ appusage_build_workflow_configuration <- function(raw_data_root,
                                                   sequence_col,
                                                   upload_col,
                                                   submit_time_col,
-                                                  max_files,
-                                                  self_report_n_max,
-                                                  export_type_priority,
+                                                   max_files,
+                                                   self_report_n_max,
+                                                   self_report_sheet,
+                                                   self_report_guess_max,
+                                                   self_report_col_types,
+                                                   self_report_read,
+                                                   export_type_priority,
                                                   resume,
                                                   overwrite,
                                                   first_level_options,
@@ -1150,6 +1266,10 @@ appusage_build_workflow_configuration <- function(raw_data_root,
     submit_time_col = submit_time_col %||% NA_character_,
     max_files = max_files,
     self_report_n_max = self_report_n_max,
+    self_report_sheet = self_report_sheet,
+    self_report_guess_max = if (is.null(self_report_guess_max)) NA_real_ else self_report_guess_max,
+    self_report_col_types = if (is.null(self_report_col_types)) character() else as.character(self_report_col_types),
+    self_report_read = self_report_read,
     export_type_priority = export_type_priority,
     resume = isTRUE(resume),
     overwrite = isTRUE(overwrite),
@@ -1160,15 +1280,372 @@ appusage_build_workflow_configuration <- function(raw_data_root,
   )
 }
 
+appusage_workflow_timestamp <- function() {
+  format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3%z")
+}
+
+appusage_second_level_worker_decision <- function(parallel, n_cores) {
+  requested <- suppressWarnings(as.integer(n_cores))
+  available <- suppressWarnings(as.integer(parallel::detectCores(logical = TRUE)))
+  if (length(available) != 1L || is.na(available) || available < 1L) {
+    available <- 1L
+  }
+  selected <- if (isTRUE(parallel)) {
+    min(requested, available, 12L)
+  } else {
+    1L
+  }
+  reason <- if (!isTRUE(parallel)) {
+    "serial_default"
+  } else if (selected < requested) {
+    "available_core_or_ordinary_12_worker_cap"
+  } else {
+    "requested_workers"
+  }
+  list(
+    requested_workers = requested,
+    available_logical_cores = available,
+    selected_workers = as.integer(selected),
+    cap_reason = reason,
+    worker_cap_override = FALSE
+  )
+}
+
+appusage_initialize_workflow_state <- function(config, n_cores,
+                                               first_level_worker_decision,
+                                               parallel) {
+  existing <- config$workflow_state
+  now <- appusage_workflow_timestamp()
+  state <- existing %||% list()
+  state$run_status <- "initialized"
+  state$current_stage <- "initialized"
+  state$last_completed_stage <- state$last_completed_stage %||% NA_character_
+  state$run_started_at <- now
+  state$run_updated_at <- now
+  state$stage_started_at <- state$stage_started_at %||% list()
+  state$stage_completed_at <- state$stage_completed_at %||% list()
+  state$stage_failed_at <- state$stage_failed_at %||% list()
+  state$stage_status <- state$stage_status %||% list()
+  state$requested_shared_n_cores <- as.integer(n_cores)
+  state$first_level_worker_decision <- first_level_worker_decision
+  state$second_level_worker_decision <- appusage_second_level_worker_decision(
+    parallel,
+    n_cores
+  )
+  state$checkpoints <- state$checkpoints %||% list()
+  state$checkpoints$first_level <- state$checkpoints$first_level %||% list(
+    path = NA_character_, status = "not_written", row_count = 0L,
+    updated_at = NA_character_
+  )
+  state$checkpoints$second_level <- state$checkpoints$second_level %||% list(
+    path = NA_character_, status = "not_written", row_count = 0L,
+    updated_at = NA_character_
+  )
+  config$workflow_state <- state
+  config
+}
+
+appusage_merge_existing_workflow_configuration <- function(config, existing) {
+  if (is.null(existing)) {
+    return(config)
+  }
+  created_at <- existing$created_at %||% config$created_at
+  merged <- utils::modifyList(existing, config, keep.null = TRUE)
+  merged$created_at <- created_at
+  merged
+}
+
+appusage_workflow_state_begin <- function(config, stage) {
+  now <- appusage_workflow_timestamp()
+  config$workflow_state$run_status <- "running"
+  config$workflow_state$current_stage <- stage
+  config$workflow_state$run_updated_at <- now
+  config$workflow_state$stage_started_at[[stage]] <- now
+  config$workflow_state$stage_status[[stage]] <- "running"
+  config
+}
+
+appusage_workflow_state_complete <- function(config, stage) {
+  now <- appusage_workflow_timestamp()
+  config$workflow_state$current_stage <- NA_character_
+  config$workflow_state$last_completed_stage <- stage
+  config$workflow_state$run_updated_at <- now
+  config$workflow_state$stage_completed_at[[stage]] <- now
+  config$workflow_state$stage_status[[stage]] <- "completed"
+  config
+}
+
+appusage_workflow_state_failed <- function(config, stage, error) {
+  now <- appusage_workflow_timestamp()
+  config$workflow_state$run_status <- "failed"
+  config$workflow_state$current_stage <- stage
+  config$workflow_state$run_updated_at <- now
+  config$workflow_state$stage_failed_at[[stage]] <- now
+  config$workflow_state$stage_status[[stage]] <- "failed"
+  config$workflow_state$last_error <- list(
+    stage = stage,
+    condition_class = paste(class(error), collapse = ","),
+    condition_message = conditionMessage(error),
+    condition_call = if (is.null(conditionCall(error))) {
+      NA_character_
+    } else {
+      deparse_one_call(conditionCall(error))
+    },
+    timestamp = now
+  )
+  config
+}
+
+appusage_workflow_state_completed <- function(config) {
+  config <- appusage_workflow_state_complete(config, "completed")
+  config$workflow_state$run_status <- "completed"
+  config$workflow_state$current_stage <- "completed"
+  config
+}
+
+appusage_workflow_state_dry_run <- function(config) {
+  now <- appusage_workflow_timestamp()
+  config$workflow_state$run_status <- "dry_run"
+  config$workflow_state$current_stage <- "dry_run"
+  config$workflow_state$run_updated_at <- now
+  config$workflow_state$stage_status$dry_run <- "completed"
+  config$workflow_state$stage_completed_at$dry_run <- now
+  config
+}
+
+appusage_workflow_config_transaction_paths <- function(config_file) {
+  token <- paste(
+    format(Sys.time(), "%Y%m%dT%H%M%OS6"),
+    Sys.getpid(),
+    basename(tempfile(pattern = "config-")),
+    sep = "-"
+  )
+  token <- gsub("[^A-Za-z0-9._-]", "-", token)
+  list(
+    temporary = file.path(
+      dirname(config_file),
+      paste0(".", basename(config_file), ".appusage-tmp-", token)
+    ),
+    backup = file.path(
+      dirname(config_file),
+      paste0(".", basename(config_file), ".appusage-backup-", token)
+    )
+  )
+}
+
+appusage_promote_workflow_file <- function(from, to) {
+  isTRUE(file.rename(from, to))
+}
+
+appusage_validate_workflow_configuration_rds <- function(path,
+                                                         expected_output_dir) {
+  config <- readRDS(path)
+  if (!is.list(config)) {
+    stop("Workflow configuration is not a list.")
+  }
+  if (!appusage_normalized_paths_equal(
+    config$output_study_dir,
+    expected_output_dir
+  )) {
+    stop("Workflow configuration output study directory failed validation.")
+  }
+  config
+}
+
+appusage_atomic_write_workflow_configuration <- function(config, config_file) {
+  dir.create(dirname(config_file), recursive = TRUE, showWarnings = FALSE)
+  transaction <- appusage_workflow_config_transaction_paths(config_file)
+  old_backed <- FALSE
+  committed <- FALSE
+  on.exit({
+    if (!committed && old_backed && file.exists(transaction$backup) &&
+      !file.exists(config_file)) {
+      tryCatch(
+        appusage_promote_workflow_file(transaction$backup, config_file),
+        error = function(e) FALSE
+      )
+    }
+    appusage_cleanup_paths(c(
+      transaction$temporary,
+      if (committed) transaction$backup else character()
+    ))
+  }, add = TRUE)
+  saveRDS(config, transaction$temporary)
+  appusage_validate_workflow_configuration_rds(
+    transaction$temporary,
+    config$output_study_dir
+  )
+  if (file.exists(config_file)) {
+    if (!appusage_promote_workflow_file(config_file, transaction$backup)) {
+      stop("Could not back up the existing workflow configuration.")
+    }
+    old_backed <- TRUE
+  }
+  if (!appusage_promote_workflow_file(transaction$temporary, config_file)) {
+    stop("Could not promote the workflow configuration.")
+  }
+  validation_error <- tryCatch(
+    {
+      appusage_validate_workflow_configuration_rds(
+        config_file,
+        config$output_study_dir
+      )
+      NULL
+    },
+    error = identity
+  )
+  if (!is.null(validation_error)) {
+    unlink(config_file, force = TRUE)
+    if (old_backed && file.exists(transaction$backup)) {
+      tryCatch(
+        appusage_promote_workflow_file(transaction$backup, config_file),
+        error = function(e) FALSE
+      )
+    }
+    stop(validation_error)
+  }
+  committed <- TRUE
+  normalizePath(config_file, winslash = "/", mustWork = FALSE)
+}
+
+appusage_record_workflow_config_failure <- function(project_root, error,
+                                                    context) {
+  tryCatch({
+    diagnostics_dir <- file.path(project_root, "diagnostics")
+    dir.create(diagnostics_dir, recursive = TRUE, showWarnings = FALSE)
+    path <- tempfile(
+      pattern = paste0("workflow_configuration_", context, "_"),
+      tmpdir = diagnostics_dir,
+      fileext = ".json"
+    )
+    write_metadata_json(list(
+      stage = "workflow_configuration",
+      context = context,
+      timestamp = appusage_workflow_timestamp(),
+      condition_class = paste(class(error), collapse = ","),
+      condition_message = conditionMessage(error)
+    ), path)
+    invisible(path)
+  }, error = function(e) invisible(NA_character_))
+}
+
+appusage_mark_workflow_stage_failed_safely <- function(config_file, stage,
+                                                       error) {
+  tryCatch({
+    config <- readRDS(config_file)
+    config <- appusage_workflow_state_failed(config, stage, error)
+    appusage_write_workflow_configuration(config)
+  }, error = function(config_error) {
+    appusage_record_workflow_config_failure(
+      dirname(config_file),
+      config_error,
+      paste0(stage, "_failure_update")
+    )
+    invisible(NA_character_)
+  })
+}
+
+appusage_run_workflow_stage <- function(config, stage, fun) {
+  config <- appusage_workflow_state_begin(config, stage)
+  config_file <- appusage_write_workflow_configuration(config)
+  value <- tryCatch(
+    fun(),
+    error = function(e) {
+      appusage_mark_workflow_stage_failed_safely(config_file, stage, e)
+      stop(e)
+    }
+  )
+  config <- appusage_workflow_state_complete(config, stage)
+  appusage_write_workflow_configuration(config)
+  list(value = value, config = config)
+}
+
+appusage_refresh_workflow_checkpoint <- function(project_root, stage,
+                                                 checkpoint_path,
+                                                 row_count,
+                                                 status = "available") {
+  config_file <- file.path(project_root, "workflow_configuration.rds")
+  if (!file.exists(config_file)) {
+    return(invisible(FALSE))
+  }
+  config <- readRDS(config_file)
+  config$workflow_state <- config$workflow_state %||% list()
+  config$workflow_state$checkpoints <- config$workflow_state$checkpoints %||% list()
+  config$workflow_state$checkpoints[[stage]] <- list(
+    path = normalizePath(checkpoint_path, winslash = "/", mustWork = FALSE),
+    status = status,
+    row_count = as.integer(row_count),
+    updated_at = appusage_workflow_timestamp()
+  )
+  config$workflow_state$run_updated_at <- appusage_workflow_timestamp()
+  appusage_write_workflow_configuration(config)
+  invisible(TRUE)
+}
+
+appusage_refresh_workflow_checkpoint_safely <- function(project_root, stage,
+                                                        checkpoint_path,
+                                                        row_count,
+                                                        status = "available") {
+  tryCatch(
+    appusage_refresh_workflow_checkpoint(
+      project_root,
+      stage,
+      checkpoint_path,
+      row_count,
+      status
+    ),
+    error = function(e) {
+      appusage_record_workflow_config_failure(
+        project_root,
+        e,
+        paste0(stage, "_checkpoint_refresh")
+      )
+      invisible(FALSE)
+    }
+  )
+}
+
+appusage_record_discovered_workflow_checkpoints <- function(config,
+                                                            resume_state) {
+  for (stage in c("first_level", "second_level")) {
+    field <- paste0(stage, "_checkpoint")
+    path <- resume_state[[field]]
+    if (!is_present_string(path) || !file.exists(path)) {
+      next
+    }
+    row_count <- tryCatch(
+      nrow(utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)),
+      error = function(e) NA_integer_
+    )
+    config$workflow_state$checkpoints[[stage]] <- list(
+      path = normalizePath(path, winslash = "/", mustWork = FALSE),
+      status = "discovered",
+      row_count = as.integer(row_count),
+      updated_at = appusage_workflow_timestamp()
+    )
+  }
+  config
+}
+
 appusage_prepare_workflow_resume <- function(project, config, resume, overwrite) {
   config_file <- file.path(project$project_root, "workflow_configuration.rds")
   first_summary_file <- file.path(project$project_root, "analytic_summary_table_proclevel-1.csv")
   second_summary_file <- file.path(project$project_root, "analytic_summary_table_proclevel-2.csv")
+  first_checkpoint_file <- file.path(
+    project$project_root,
+    "analytic_summary_table_proclevel-1.checkpoint.csv"
+  )
+  second_checkpoint <- appusage_read_latest_second_level_checkpoint(file.path(
+    project$project_root,
+    "analytic_summary_table_proclevel-2.checkpoint.csv"
+  ))
   if (isTRUE(overwrite) || !dir.exists(project$project_root)) {
     return(list(
       existing_config = NULL,
       use_existing_first_level = FALSE,
-      use_existing_second_level = FALSE
+      use_existing_second_level = FALSE,
+      first_level_checkpoint = NA_character_,
+      second_level_checkpoint = NA_character_
     ))
   }
   if (!file.exists(config_file)) {
@@ -1176,7 +1653,13 @@ appusage_prepare_workflow_resume <- function(project, config, resume, overwrite)
       existing_config = NULL,
       use_existing_first_level = isTRUE(resume) &&
         appusage_first_level_summary_complete(first_summary_file),
-      use_existing_second_level = FALSE
+      use_existing_second_level = FALSE,
+      first_level_checkpoint = if (file.exists(first_checkpoint_file)) {
+        normalizePath(first_checkpoint_file, winslash = "/", mustWork = FALSE)
+      } else {
+        NA_character_
+      },
+      second_level_checkpoint = second_checkpoint$path %||% NA_character_
     ))
   }
   existing <- readRDS(config_file)
@@ -1199,7 +1682,13 @@ appusage_prepare_workflow_resume <- function(project, config, resume, overwrite)
   list(
     existing_config = existing,
     use_existing_first_level = use_existing_first,
-    use_existing_second_level = use_existing
+    use_existing_second_level = use_existing,
+    first_level_checkpoint = if (file.exists(first_checkpoint_file)) {
+      normalizePath(first_checkpoint_file, winslash = "/", mustWork = FALSE)
+    } else {
+      NA_character_
+    },
+    second_level_checkpoint = second_checkpoint$path %||% NA_character_
   )
 }
 
@@ -1207,21 +1696,49 @@ appusage_workflow_config_differences <- function(existing, current) {
   fields <- c(
     "raw_data_root", "resolved_project_dir", "resolved_self_report_file",
     "project_id", "project_name", "output_root", "sequence_col",
-    "upload_col", "submit_time_col", "max_files", "self_report_n_max"
+    "upload_col", "submit_time_col", "max_files", "self_report_n_max",
+    "self_report_sheet", "self_report_guess_max", "self_report_col_types"
+  )
+  defaults <- list(
+    self_report_sheet = 1,
+    self_report_guess_max = NA_real_,
+    self_report_col_types = character()
   )
   fields[vapply(fields, function(field) {
     old <- existing[[field]]
     new <- current[[field]]
+    if (is.null(old) && field %in% names(defaults)) old <- defaults[[field]]
+    if (is.null(new) && field %in% names(defaults)) new <- defaults[[field]]
     !identical(as.character(old), as.character(new))
   }, logical(1))]
 }
 
 appusage_write_workflow_configuration <- function(config) {
   dir.create(config$output_study_dir, recursive = TRUE, showWarnings = FALSE)
-  config$latest_run_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3%z")
   config_file <- file.path(config$output_study_dir, "workflow_configuration.rds")
-  saveRDS(config, config_file)
-  normalizePath(config_file, winslash = "/", mustWork = FALSE)
+  existing <- if (file.exists(config_file)) {
+    tryCatch(readRDS(config_file), error = function(e) NULL)
+  } else {
+    NULL
+  }
+  existing_checkpoints <- existing$workflow_state$checkpoints %||% NULL
+  if (!is.null(existing_checkpoints)) {
+    config$workflow_state$checkpoints <- config$workflow_state$checkpoints %||% list()
+    for (stage in names(existing_checkpoints)) {
+      existing_checkpoint <- existing_checkpoints[[stage]]
+      current_checkpoint <- config$workflow_state$checkpoints[[stage]]
+      existing_updated <- existing_checkpoint$updated_at %||% NA_character_
+      current_updated <- current_checkpoint$updated_at %||% NA_character_
+      use_existing <- is.null(current_checkpoint) ||
+        (!is.na(existing_updated) &&
+          (is.na(current_updated) || existing_updated > current_updated))
+      if (use_existing) {
+        config$workflow_state$checkpoints[[stage]] <- existing_checkpoint
+      }
+    }
+  }
+  config$latest_run_at <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3%z")
+  appusage_atomic_write_workflow_configuration(config, config_file)
 }
 
 appusage_read_summary_csv <- function(path) {
@@ -1961,18 +2478,224 @@ appusage_format_issue_fields <- function(x, fields) {
   }, character(1))
 }
 
-appusage_read_self_report_preflight <- function(self_report, sheet, ...) {
+appusage_read_excel_impl <- function(...) {
+  readxl::read_excel(...)
+}
+
+appusage_effective_self_report_guess_max <- function(n_max = Inf,
+                                                      guess_max = NULL) {
+  if (!is.null(guess_max)) {
+    if (length(guess_max) != 1L || is.na(guess_max) ||
+      !is.numeric(guess_max) || guess_max < 1) {
+      cli::cli_abort("`guess_max` must be one positive number or `Inf`.")
+    }
+    return(guess_max)
+  }
+  if (is.finite(n_max)) {
+    return(as.integer(min(n_max, .Machine$integer.max)))
+  }
+  Inf
+}
+
+appusage_self_report_warning_category <- function(condition) {
+  message <- conditionMessage(condition)
+  if (grepl("expecting|coerc|type", message, ignore.case = TRUE)) {
+    return("type_coercion")
+  }
+  if (grepl("parse|cell", message, ignore.case = TRUE)) {
+    return("cell_parse")
+  }
+  "readxl_warning"
+}
+
+appusage_self_report_diagnostic_value <- function(x) {
+  if (length(x) == 1L && is.numeric(x) && is.infinite(x)) "Inf" else x
+}
+
+appusage_readxl_guess_max_argument <- function(effective_guess_max) {
+  if (is.infinite(effective_guess_max)) {
+    # An xlsx worksheet cannot exceed 1,048,576 rows. Passing this finite
+    # ceiling gives readxl full-sheet inference without its very-large-Inf
+    # safety warning; xls sheets have a lower limit.
+    return(1048576L)
+  }
+  effective_guess_max
+}
+
+appusage_write_self_report_read_diagnostics <- function(diagnostics,
+                                                        diagnostics_dir) {
+  if (!is_present_string(diagnostics_dir)) {
+    return(NA_character_)
+  }
+  dir.create(diagnostics_dir, recursive = TRUE, showWarnings = FALSE)
+  path <- file.path(diagnostics_dir, "self_report_read.json")
+  jsonlite::write_json(
+    diagnostics,
+    path = path,
+    auto_unbox = TRUE,
+    pretty = TRUE,
+    na = "null"
+  )
+  normalizePath(path, winslash = "/", mustWork = FALSE)
+}
+
+appusage_read_self_report_workbook <- function(self_report, sheet = 1,
+                                                n_max = Inf,
+                                                guess_max = NULL,
+                                                col_types = NULL,
+                                                diagnostics_dir = NULL,
+                                                emit_warning = TRUE, ...) {
+  effective_guess_max <- appusage_effective_self_report_guess_max(
+    n_max = n_max,
+    guess_max = guess_max
+  )
+  if (!is.null(col_types) && !is.character(col_types)) {
+    cli::cli_abort("`col_types` must be `NULL` or a readxl-compatible character vector.")
+  }
   if (is.data.frame(self_report)) {
-    return(self_report)
-  }
-  if (is.character(self_report) && length(self_report) == 1 &&
-    file.exists(self_report)) {
-    return(as.data.frame(readxl::read_excel(self_report,
+    diagnostics <- list(
+      stage = "self_report_read",
+      timestamp = appusage_workflow_timestamp(),
+      source_workbook = NA_character_,
       sheet = sheet,
-      ...
-    )))
+      n_rows = nrow(self_report),
+      n_columns = ncol(self_report),
+      effective_guess_max = appusage_self_report_diagnostic_value(effective_guess_max),
+      explicit_col_types = if (is.null(col_types)) NULL else as.character(col_types),
+      warning_count = 0L,
+      warnings = list(),
+      read_status = "in_memory"
+    )
+    return(list(
+      data = as.data.frame(self_report),
+      diagnostics = diagnostics,
+      diagnostics_file = NA_character_
+    ))
   }
-  cli::cli_abort("`self_report` must be a data frame or an existing Excel file path.")
+  if (!is_present_string(self_report)) {
+    diagnostics <- list(
+      stage = "self_report_read",
+      timestamp = appusage_workflow_timestamp(),
+      source_workbook = NA_character_,
+      sheet = sheet,
+      n_rows = 0L,
+      n_columns = 0L,
+      effective_guess_max = appusage_self_report_diagnostic_value(effective_guess_max),
+      explicit_col_types = if (is.null(col_types)) NULL else as.character(col_types),
+      warning_count = 0L,
+      warnings = list(),
+      read_status = "not_requested"
+    )
+    return(list(
+      data = data.frame(),
+      diagnostics = diagnostics,
+      diagnostics_file = NA_character_
+    ))
+  }
+  if (!is.character(self_report) || length(self_report) != 1L ||
+    !file.exists(self_report)) {
+    cli::cli_abort("`self_report` must be a data frame or an existing Excel file path.")
+  }
+
+  source_workbook <- normalizePath(self_report, winslash = "/", mustWork = FALSE)
+  warnings <- list()
+  args <- list(...)
+  args$path <- self_report
+  args$sheet <- sheet
+  args$n_max <- if (is.finite(n_max)) as.integer(n_max) else Inf
+  args$guess_max <- appusage_readxl_guess_max_argument(effective_guess_max)
+  if (!is.null(col_types)) args$col_types <- col_types
+
+  read_error <- NULL
+  data <- tryCatch(
+    withCallingHandlers(
+      as.data.frame(do.call(appusage_read_excel_impl, args)),
+      warning = function(w) {
+        warnings[[length(warnings) + 1L]] <<- list(
+          timestamp = appusage_workflow_timestamp(),
+          message = conditionMessage(w),
+          category = appusage_self_report_warning_category(w),
+          condition_class = class(w)
+        )
+        invokeRestart("muffleWarning")
+      }
+    ),
+    error = function(e) {
+      read_error <<- e
+      NULL
+    }
+  )
+  diagnostics <- list(
+    stage = "self_report_read",
+    timestamp = appusage_workflow_timestamp(),
+    source_workbook = source_workbook,
+    sheet = sheet,
+    n_rows = if (is.null(data)) NA_integer_ else nrow(data),
+    n_columns = if (is.null(data)) NA_integer_ else ncol(data),
+    effective_guess_max = appusage_self_report_diagnostic_value(effective_guess_max),
+    explicit_col_types = if (is.null(col_types)) NULL else as.character(col_types),
+    warning_count = length(warnings),
+    warnings = warnings,
+    read_status = if (is.null(read_error)) "success" else "error",
+    error_condition_class = if (is.null(read_error)) NULL else class(read_error),
+    error_condition_message = if (is.null(read_error)) NULL else conditionMessage(read_error),
+    error_condition_call = if (is.null(read_error) || is.null(conditionCall(read_error))) {
+      NULL
+    } else {
+      paste(deparse(conditionCall(read_error)), collapse = " ")
+    }
+  )
+  diagnostics_file <- tryCatch(
+    appusage_write_self_report_read_diagnostics(diagnostics, diagnostics_dir),
+    error = function(e) NA_character_
+  )
+  if (!is.null(read_error)) {
+    stop(read_error)
+  }
+  if (length(warnings) > 0L && isTRUE(emit_warning)) {
+    location <- if (is_present_string(diagnostics_file)) {
+      paste0(" Diagnostics: ", diagnostics_file)
+    } else {
+      ""
+    }
+    warning(
+      sprintf(
+        "Self-report workbook read produced %d warning(s).%s",
+        length(warnings),
+        location
+      ),
+      call. = FALSE
+    )
+  }
+  list(
+    data = data,
+    diagnostics = diagnostics,
+    diagnostics_file = diagnostics_file
+  )
+}
+
+appusage_compact_self_report_read_diagnostics <- function(read_result) {
+  diagnostics <- read_result$diagnostics
+  list(
+    read_status = diagnostics$read_status,
+    n_rows = diagnostics$n_rows,
+    n_columns = diagnostics$n_columns,
+    effective_guess_max = diagnostics$effective_guess_max,
+    warning_count = diagnostics$warning_count,
+    diagnostics_file = read_result$diagnostics_file
+  )
+}
+
+appusage_read_self_report_preflight <- function(self_report, sheet,
+                                                guess_max = NULL,
+                                                col_types = NULL, ...) {
+  appusage_read_self_report_workbook(
+    self_report = self_report,
+    sheet = sheet,
+    guess_max = guess_max,
+    col_types = col_types,
+    ...
+  )$data
 }
 
 appusage_count_missing <- function(x) {
@@ -1992,11 +2715,10 @@ appusage_count_duplicates <- function(x) {
   sum(duplicated(x_chr))
 }
 
-appusage_maybe_match_self_report <- function(self_report_file, manifest,
+appusage_maybe_match_self_report <- function(self_report, self_report_file, manifest,
                                              project, first, second,
                                              sequence_col, upload_col,
                                              submit_time_col,
-                                             self_report_n_max,
                                              export_type_priority) {
   if (!is_present_string(self_report_file) || !is_present_string(upload_col)) {
     return(list(
@@ -2006,7 +2728,7 @@ appusage_maybe_match_self_report <- function(self_report_file, manifest,
     ))
   }
   matched <- appusage_match_self_report_table(
-    self_report = self_report_file,
+    self_report = self_report,
     manifest = manifest,
     project_root = project$project_root,
     first = first,
@@ -2014,7 +2736,6 @@ appusage_maybe_match_self_report <- function(self_report_file, manifest,
     sequence_col = sequence_col,
     upload_col = upload_col,
     submit_time_col = submit_time_col,
-    self_report_n_max = self_report_n_max,
     export_type_priority = export_type_priority,
     project_id = project$project_id,
     project_name = project$project_name
@@ -2101,18 +2822,10 @@ appusage_match_self_report_table <- function(self_report, manifest,
 }
 
 appusage_read_self_report_rows <- function(self_report, n_max = Inf) {
-  if (is.data.frame(self_report)) {
-    data <- self_report
-  } else if (is.character(self_report) && length(self_report) == 1 && file.exists(self_report)) {
-    if (is.finite(n_max)) {
-      data <- as.data.frame(readxl::read_excel(self_report, n_max = as.integer(n_max)))
-    } else {
-      data <- as.data.frame(readxl::read_excel(self_report))
-    }
-  } else {
-    cli::cli_abort("`self_report` must be a data frame or existing Excel path.")
-  }
-  data
+  appusage_read_self_report_workbook(
+    self_report = self_report,
+    n_max = n_max
+  )$data
 }
 
 appusage_sequence_vector <- function(x) {

@@ -226,9 +226,15 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
   if ((file.exists(output_file) || file.exists(metadata_file)) && !isTRUE(overwrite)) {
     stop(batch_cache_exists_error(paste(c(output_file, metadata_file), collapse = "; ")))
   }
+  appusage_cleanup_second_level_transaction_artifacts(output_file, metadata_file)
+  transaction <- appusage_second_level_transaction_paths(output_file, metadata_file)
+  on.exit(
+    appusage_cleanup_paths(c(transaction$temp_rda, transaction$temp_json)),
+    add = TRUE
+  )
   data <- second
   save_started_at <- Sys.time()
-  save(data, file = output_file)
+  appusage_save_second_level_data(data, transaction$temp_rda)
   save_finished_at <- Sys.time()
   inline_qc_result <- NULL
   inline_qc_started_at <- NULL
@@ -299,7 +305,7 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
   finished_at <- Sys.time()
   profiling <- second_level_profile(
     first_level_rda = first_level_rda,
-    second_level_rda = output_file,
+    second_level_rda = transaction$temp_rda,
     second_level_data = second,
     started_at = started_at,
     finished_at = finished_at,
@@ -312,7 +318,7 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     inline_qc_started_at = inline_qc_started_at,
     inline_qc_finished_at = inline_qc_finished_at
   )
-  write_second_level_success_metadata(
+  metadata <- build_second_level_success_metadata(
     first_metadata = first_metadata,
     first_level_rda = first_level_rda,
     second_level_rda = output_file,
@@ -333,6 +339,17 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     profiling = profiling,
     started_at = started_at,
     finished_at = finished_at
+  )
+  write_metadata_json(metadata, transaction$temp_json)
+  appusage_validate_second_level_success_metadata(
+    transaction$temp_json,
+    output_file,
+    metadata_file
+  )
+  appusage_publish_second_level_pair(
+    transaction = transaction,
+    output_file = output_file,
+    metadata_file = metadata_file
   )
   invisible(normalizePath(output_file, winslash = "/", mustWork = FALSE))
 }
@@ -386,6 +403,247 @@ second_level_metadata_path <- function(second_level_rda) {
   )
 }
 
+appusage_second_level_transaction_id <- function() {
+  token <- paste(
+    format(Sys.time(), "%Y%m%dT%H%M%OS6"),
+    Sys.getpid(),
+    basename(tempfile(pattern = "txn-")),
+    sep = "-"
+  )
+  gsub("[^A-Za-z0-9._-]", "-", token)
+}
+
+appusage_second_level_transaction_paths <- function(output_file, metadata_file) {
+  token <- appusage_second_level_transaction_id()
+  list(
+    temp_rda = file.path(
+      dirname(output_file),
+      paste0(".", basename(output_file), ".appusage-tmp-", token)
+    ),
+    temp_json = file.path(
+      dirname(metadata_file),
+      paste0(".", basename(metadata_file), ".appusage-tmp-", token)
+    ),
+    backup_rda = file.path(
+      dirname(output_file),
+      paste0(".", basename(output_file), ".appusage-backup-", token)
+    ),
+    backup_json = file.path(
+      dirname(metadata_file),
+      paste0(".", basename(metadata_file), ".appusage-backup-", token)
+    )
+  )
+}
+
+appusage_second_level_owned_artifacts <- function(output_file, metadata_file) {
+  directory <- dirname(output_file)
+  if (!dir.exists(directory)) {
+    return(character())
+  }
+  candidates <- list.files(directory, full.names = TRUE, all.files = TRUE)
+  prefixes <- c(
+    paste0(".", basename(output_file), ".appusage-"),
+    paste0(".", basename(metadata_file), ".appusage-")
+  )
+  candidates[vapply(
+    basename(candidates),
+    function(path) any(startsWith(path, prefixes)),
+    logical(1)
+  )]
+}
+
+appusage_cleanup_paths <- function(paths) {
+  paths <- unique(paths[!is.na(paths) & nzchar(paths)])
+  if (length(paths) > 0L) {
+    unlink(paths, force = TRUE)
+  }
+  invisible(NULL)
+}
+
+appusage_cleanup_second_level_transaction_artifacts <- function(
+    output_file, metadata_file) {
+  appusage_cleanup_paths(appusage_second_level_owned_artifacts(
+    output_file,
+    metadata_file
+  ))
+}
+
+appusage_file_size_bytes <- function(path) {
+  info <- suppressWarnings(file.info(path))
+  if (nrow(info) == 0L || !"size" %in% names(info)) {
+    return(NA_real_)
+  }
+  suppressWarnings(as.numeric(info$size[[1]]))
+}
+
+appusage_validate_nonempty_file <- function(path, label) {
+  size <- appusage_file_size_bytes(path)
+  if (!file.exists(path) || is.na(size) || size <= 0) {
+    stop(label, " was not written as a non-empty file.")
+  }
+  invisible(path)
+}
+
+appusage_save_second_level_data <- function(data, path) {
+  save(data, file = path)
+  appusage_validate_nonempty_file(path, "Second-level RDA temporary artifact")
+  invisible(path)
+}
+
+appusage_normalized_paths_equal <- function(x, y) {
+  is_present_string(x) && is_present_string(y) && identical(
+    normalizePath(x, winslash = "/", mustWork = FALSE),
+    normalizePath(y, winslash = "/", mustWork = FALSE)
+  )
+}
+
+appusage_validate_second_level_success_metadata <- function(
+    path, output_file, metadata_file) {
+  appusage_validate_nonempty_file(path, "Second-level JSON temporary artifact")
+  metadata <- jsonlite::read_json(path, simplifyVector = TRUE)
+  status <- appusage_nested_value(metadata, c("processing", "second_level_status"))
+  recorded_rda <- appusage_nested_value(metadata, c("outputs", "second_level_rda"))
+  recorded_json <- appusage_nested_value(metadata, c("outputs", "metadata_json"))
+  if (!identical(as.character(status), "success")) {
+    stop("Second-level success metadata does not contain success status.")
+  }
+  if (!appusage_normalized_paths_equal(recorded_rda, output_file)) {
+    stop("Second-level success metadata RDA path failed validation.")
+  }
+  if (!is_present_string(recorded_json)) {
+    stop("Second-level success metadata JSON path is missing.")
+  }
+  if (!appusage_normalized_paths_equal(recorded_json, metadata_file)) {
+    stop("Second-level success metadata JSON path failed validation.")
+  }
+  metadata
+}
+
+appusage_promote_file <- function(from, to) {
+  isTRUE(file.rename(from, to))
+}
+
+appusage_publish_second_level_pair <- function(transaction, output_file,
+                                               metadata_file) {
+  old_json_backed <- FALSE
+  old_rda_backed <- FALSE
+  new_rda_published <- FALSE
+  committed <- FALSE
+  rollback <- function() {
+    if (file.exists(metadata_file)) {
+      unlink(metadata_file, force = TRUE)
+    }
+    if (new_rda_published && file.exists(output_file)) {
+      unlink(output_file, force = TRUE)
+    }
+    rda_ready <- !old_rda_backed
+    if (old_rda_backed && file.exists(transaction$backup_rda)) {
+      rda_ready <- tryCatch(
+        appusage_promote_file(transaction$backup_rda, output_file),
+        error = function(e) FALSE
+      )
+    }
+    if (old_json_backed && rda_ready && file.exists(output_file) &&
+      file.exists(transaction$backup_json)) {
+      tryCatch(
+        appusage_promote_file(transaction$backup_json, metadata_file),
+        error = function(e) FALSE
+      )
+    }
+    invisible(NULL)
+  }
+  on.exit({
+    if (!committed) {
+      rollback()
+    }
+    appusage_cleanup_paths(c(
+      transaction$temp_rda,
+      transaction$temp_json,
+      if (committed) transaction$backup_rda else character(),
+      if (committed) transaction$backup_json else character()
+    ))
+  }, add = TRUE)
+
+  if (file.exists(metadata_file)) {
+    if (!appusage_promote_file(metadata_file, transaction$backup_json)) {
+      stop("Could not back up the existing second-level success JSON marker.")
+    }
+    old_json_backed <- TRUE
+  }
+  if (file.exists(output_file)) {
+    if (!appusage_promote_file(output_file, transaction$backup_rda)) {
+      stop("Could not back up the existing second-level RDA.")
+    }
+    old_rda_backed <- TRUE
+  }
+  if (!appusage_promote_file(transaction$temp_rda, output_file)) {
+    stop("Could not promote the second-level RDA.")
+  }
+  new_rda_published <- TRUE
+  if (!appusage_promote_file(transaction$temp_json, metadata_file)) {
+    stop("Could not promote the second-level success JSON marker.")
+  }
+  committed <- TRUE
+  invisible(list(rda = output_file, json = metadata_file))
+}
+
+appusage_atomic_write_metadata_json <- function(metadata, metadata_file) {
+  output_file <- sub("[.]json$", ".rda", metadata_file)
+  appusage_cleanup_second_level_transaction_artifacts(output_file, metadata_file)
+  transaction <- appusage_second_level_transaction_paths(output_file, metadata_file)
+  old_backed <- FALSE
+  committed <- FALSE
+  write_metadata_json(metadata, transaction$temp_json)
+  appusage_validate_nonempty_file(
+    transaction$temp_json,
+    "Second-level status JSON temporary artifact"
+  )
+  jsonlite::read_json(transaction$temp_json, simplifyVector = TRUE)
+  on.exit({
+    if (!committed && old_backed && file.exists(transaction$backup_json) &&
+      !file.exists(metadata_file)) {
+      tryCatch(
+        appusage_promote_file(transaction$backup_json, metadata_file),
+        error = function(e) FALSE
+      )
+    }
+    appusage_cleanup_paths(c(
+      transaction$temp_json,
+      if (committed) transaction$backup_json else character()
+    ))
+  }, add = TRUE)
+  if (file.exists(metadata_file)) {
+    if (!appusage_promote_file(metadata_file, transaction$backup_json)) {
+      stop("Could not back up the existing second-level status JSON.")
+    }
+    old_backed <- TRUE
+  }
+  if (!appusage_promote_file(transaction$temp_json, metadata_file)) {
+    stop("Could not promote the second-level status JSON.")
+  }
+  committed <- TRUE
+  normalizePath(metadata_file, winslash = "/", mustWork = FALSE)
+}
+
+appusage_valid_second_level_success_pair <- function(metadata_file) {
+  if (!file.exists(metadata_file)) {
+    return(FALSE)
+  }
+  output_file <- sub("[.]json$", ".rda", metadata_file)
+  rda_size <- appusage_file_size_bytes(output_file)
+  if (!file.exists(output_file) || is.na(rda_size) || rda_size <= 0) {
+    return(FALSE)
+  }
+  tryCatch({
+    appusage_validate_second_level_success_metadata(
+      metadata_file,
+      output_file,
+      metadata_file
+    )
+    TRUE
+  }, error = function(e) FALSE)
+}
+
 first_level_metadata_path <- function(first_level_rda) {
   entities <- parse_appusage_filename(first_level_rda)
   file.path(
@@ -437,7 +695,7 @@ read_first_level_metadata_for_second <- function(first_level_rda) {
   )
 }
 
-write_second_level_success_metadata <- function(first_metadata = NULL,
+build_second_level_success_metadata <- function(first_metadata = NULL,
                                                 first_level_rda,
                                                 second_level_rda,
                                                 second_level_data,
@@ -485,7 +743,14 @@ write_second_level_success_metadata <- function(first_metadata = NULL,
     started_at = started_at,
     finished_at = finished_at
   )
-  write_metadata_json(metadata, metadata_file)
+  metadata
+}
+
+write_second_level_success_metadata <- function(...) {
+  arguments <- list(...)
+  metadata <- do.call(build_second_level_success_metadata, arguments)
+  metadata_file <- second_level_metadata_path(arguments$second_level_rda)
+  appusage_atomic_write_metadata_json(metadata, metadata_file)
   invisible(metadata_file)
 }
 
@@ -541,8 +806,10 @@ write_second_level_status_metadata <- function(batch_summary, index, output_dir,
     started_at = started_at,
     finished_at = finished_at
   )
-  write_metadata_json(metadata, metadata_file)
-  normalizePath(metadata_file, winslash = "/", mustWork = FALSE)
+  if (appusage_valid_second_level_success_pair(metadata_file)) {
+    return(normalizePath(metadata_file, winslash = "/", mustWork = FALSE))
+  }
+  appusage_atomic_write_metadata_json(metadata, metadata_file)
 }
 
 build_second_level_metadata <- function(first_metadata, first_level_rda,

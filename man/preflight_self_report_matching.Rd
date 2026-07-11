@@ -10,6 +10,8 @@ preflight_self_report_matching(
   upload_col,
   participant_id_col = NULL,
   sheet = 1,
+  guess_max = NULL,
+  col_types = NULL,
   ...
 )
 }
@@ -24,6 +26,11 @@ preflight_self_report_matching(
 
 \item{sheet}{Excel sheet passed to \code{\link[readxl:read_excel]{readxl::read_excel()}} when \code{self_report}
 is a path.}
+
+\item{guess_max}{Number of rows used for column-type inference. By default,
+all selected rows are used.}
+
+\item{col_types}{Optional readxl-compatible column types.}
 
 \item{...}{Additional arguments passed to \code{\link[readxl:read_excel]{readxl::read_excel()}}.}
 }

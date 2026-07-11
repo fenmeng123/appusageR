@@ -289,6 +289,251 @@ test_that("write_second_level_appusage writes paired proc-2 RDA and JSON", {
   expect_equal(metadata$counts$n_daily_rows, 1)
 })
 
+test_that("second-level pair publication commits success JSON last", {
+  first <- list(line = parse_line(testthat::test_path("fixtures", "line_sample.txt")))
+  output_dir <- file.path(
+    tempdir(),
+    paste0("appusage_second_atomic_success_", sample.int(1e8, 1))
+  )
+  dir.create(output_dir, recursive = TRUE)
+  first_file <- file.path(output_dir, "sub-atomic_type-line_proc-1.rda")
+  data <- first
+  save(data, file = first_file)
+  output_file <- file.path(output_dir, "sub-atomic_type-line_proc-2.rda")
+  metadata_file <- file.path(output_dir, "sub-atomic_type-line_proc-2.json")
+  promotions <- character()
+  promote <- appusage_promote_file
+  testthat::local_mocked_bindings(
+    appusage_promote_file = function(from, to) {
+      promotions <<- c(promotions, normalizePath(to, winslash = "/", mustWork = FALSE))
+      promote(from, to)
+    },
+    .package = "appusageR"
+  )
+
+  result <- write_second_level_appusage(first_file, overwrite = TRUE)
+
+  expect_equal(normalizePath(result, winslash = "/"), normalizePath(output_file, winslash = "/"))
+  expect_equal(
+    tail(promotions, 2L),
+    normalizePath(c(output_file, metadata_file), winslash = "/", mustWork = FALSE)
+  )
+  env <- new.env(parent = emptyenv())
+  expect_identical(load(output_file, envir = env), "data")
+  expect_named(env$data, c("event", "episode", "daily"))
+  metadata <- jsonlite::read_json(metadata_file, simplifyVector = TRUE)
+  expect_equal(metadata$processing$second_level_status, "success")
+  expect_equal(
+    normalizePath(metadata$outputs$second_level_rda, winslash = "/"),
+    normalizePath(output_file, winslash = "/")
+  )
+  expect_length(
+    appusage_second_level_owned_artifacts(output_file, metadata_file),
+    0L
+  )
+})
+
+test_that("success metadata requires matching canonical JSON path", {
+  first <- list(line = parse_line(testthat::test_path("fixtures", "line_sample.txt")))
+  output_dir <- file.path(
+    tempdir(),
+    paste0("appusage_second_json_path_", sample.int(1e8, 1))
+  )
+  dir.create(output_dir, recursive = TRUE)
+  first_file <- file.path(output_dir, "sub-json-path_type-line_proc-1.rda")
+  data <- first
+  save(data, file = first_file)
+  output_file <- write_second_level_appusage(first_file, overwrite = TRUE)
+  metadata_file <- second_level_metadata_path(output_file)
+  valid_metadata <- jsonlite::read_json(metadata_file, simplifyVector = FALSE)
+
+  missing_metadata <- valid_metadata
+  missing_metadata$outputs$metadata_json <- NULL
+  write_metadata_json(missing_metadata, metadata_file)
+  expect_error(
+    appusage_validate_second_level_success_metadata(
+      metadata_file,
+      output_file,
+      metadata_file
+    ),
+    "JSON path is missing"
+  )
+  missing_status <- second_level_existing_cache_status(first_file, output_dir)
+  expect_equal(missing_status$status, "incomplete")
+  expect_equal(missing_status$reason, "missing_metadata_json_path")
+
+  mismatched_metadata <- valid_metadata
+  mismatched_metadata$outputs$metadata_json <- file.path(output_dir, "other.json")
+  write_metadata_json(mismatched_metadata, metadata_file)
+  expect_error(
+    appusage_validate_second_level_success_metadata(
+      metadata_file,
+      output_file,
+      metadata_file
+    ),
+    "JSON path failed validation"
+  )
+  mismatch_status <- second_level_existing_cache_status(first_file, output_dir)
+  expect_equal(mismatch_status$status, "incomplete")
+  expect_equal(mismatch_status$reason, "metadata_json_mismatch")
+
+  write_metadata_json(valid_metadata, metadata_file)
+  expect_equal(
+    second_level_existing_cache_status(first_file, output_dir)$status,
+    "complete"
+  )
+  testthat::local_mocked_bindings(
+    appusage_file_size_bytes = function(path) NA_real_,
+    .package = "appusageR"
+  )
+  expect_false(appusage_valid_second_level_success_pair(metadata_file))
+})
+
+test_that("failure before success JSON promotion cannot create a complete pair", {
+  first <- list(line = parse_line(testthat::test_path("fixtures", "line_sample.txt")))
+  output_dir <- file.path(
+    tempdir(),
+    paste0("appusage_second_atomic_fail_", sample.int(1e8, 1))
+  )
+  dir.create(output_dir, recursive = TRUE)
+  first_file <- file.path(output_dir, "sub-fail_type-line_proc-1.rda")
+  data <- first
+  save(data, file = first_file)
+  output_file <- file.path(output_dir, "sub-fail_type-line_proc-2.rda")
+  metadata_file <- file.path(output_dir, "sub-fail_type-line_proc-2.json")
+  promote <- appusage_promote_file
+  testthat::local_mocked_bindings(
+    appusage_promote_file = function(from, to) {
+      if (appusage_normalized_paths_equal(to, metadata_file)) {
+        return(FALSE)
+      }
+      promote(from, to)
+    },
+    .package = "appusageR"
+  )
+
+  expect_error(
+    write_second_level_appusage(first_file, overwrite = TRUE),
+    "success JSON marker"
+  )
+
+  expect_false(file.exists(metadata_file))
+  expect_false(identical(
+    second_level_existing_cache_status(first_file, output_dir)$status,
+    "complete"
+  ))
+  expect_length(
+    appusage_second_level_owned_artifacts(output_file, metadata_file),
+    0L
+  )
+})
+
+test_that("overwrite publication failure restores the prior valid pair", {
+  first <- list(line = parse_line(testthat::test_path("fixtures", "line_sample.txt")))
+  output_dir <- file.path(
+    tempdir(),
+    paste0("appusage_second_atomic_rollback_", sample.int(1e8, 1))
+  )
+  dir.create(output_dir, recursive = TRUE)
+  first_file <- file.path(output_dir, "sub-rollback_type-line_proc-1.rda")
+  data <- first
+  save(data, file = first_file)
+  output_file <- write_second_level_appusage(first_file, overwrite = TRUE)
+  metadata_file <- second_level_metadata_path(output_file)
+  old_hashes <- unname(tools::md5sum(c(output_file, metadata_file)))
+  promote <- appusage_promote_file
+  failed_once <- FALSE
+  testthat::local_mocked_bindings(
+    appusage_promote_file = function(from, to) {
+      if (!failed_once && appusage_normalized_paths_equal(to, metadata_file)) {
+        failed_once <<- TRUE
+        return(FALSE)
+      }
+      promote(from, to)
+    },
+    .package = "appusageR"
+  )
+
+  expect_error(
+    write_second_level_appusage(first_file, overwrite = TRUE),
+    "success JSON marker"
+  )
+
+  expect_equal(unname(tools::md5sum(c(output_file, metadata_file))), old_hashes)
+  expect_equal(
+    second_level_existing_cache_status(first_file, output_dir)$status,
+    "complete"
+  )
+  expect_length(
+    appusage_second_level_owned_artifacts(output_file, metadata_file),
+    0L
+  )
+})
+
+test_that("second-level writes clean only target-owned stale artifacts", {
+  first <- list(line = parse_line(testthat::test_path("fixtures", "line_sample.txt")))
+  output_dir <- file.path(
+    tempdir(),
+    paste0("appusage_second_stale_", sample.int(1e8, 1))
+  )
+  dir.create(output_dir, recursive = TRUE)
+  first_file <- file.path(output_dir, "sub-stale_type-line_proc-1.rda")
+  data <- first
+  save(data, file = first_file)
+  output_file <- file.path(output_dir, "sub-stale_type-line_proc-2.rda")
+  metadata_file <- file.path(output_dir, "sub-stale_type-line_proc-2.json")
+  stale <- c(
+    file.path(output_dir, paste0(".", basename(output_file), ".appusage-tmp-old")),
+    file.path(output_dir, paste0(".", basename(metadata_file), ".appusage-backup-old"))
+  )
+  unrelated <- file.path(output_dir, ".unrelated.tmp")
+  invisible(lapply(stale, function(path) writeLines("stale", path)))
+  writeLines("keep", unrelated)
+
+  write_second_level_appusage(first_file, overwrite = TRUE)
+
+  expect_false(any(file.exists(stale)))
+  expect_true(file.exists(unrelated))
+  expect_length(
+    appusage_second_level_owned_artifacts(output_file, metadata_file),
+    0L
+  )
+})
+
+test_that("second-level error status JSON is atomically published", {
+  output_dir <- file.path(
+    tempdir(),
+    paste0("appusage_second_status_atomic_", sample.int(1e8, 1))
+  )
+  dir.create(output_dir, recursive = TRUE)
+  first_file <- file.path(output_dir, "sub-error_type-line_proc-1.rda")
+  data <- list(line = data.frame())
+  save(data, file = first_file)
+  batch <- data.frame(
+    participant_id = "error",
+    detected_type = "line",
+    data_file = first_file,
+    metadata_file = NA_character_,
+    stringsAsFactors = FALSE
+  )
+
+  metadata_file <- write_second_level_status_metadata(
+    batch,
+    index = 1L,
+    output_dir = output_dir,
+    status = "error",
+    error = simpleError("synthetic conversion error")
+  )
+
+  metadata <- jsonlite::read_json(metadata_file, simplifyVector = TRUE)
+  expect_equal(metadata$processing$second_level_status, "error")
+  output_file <- sub("[.]json$", ".rda", metadata_file)
+  expect_length(
+    appusage_second_level_owned_artifacts(output_file, metadata_file),
+    0L
+  )
+})
+
 test_that("line episode-to-daily aggregation preserves grouped totals and diagnostics", {
   line <- tibble::tibble(
     date = as.Date(c("2024-01-01", "2024-01-01", "2024-01-01", "2024-01-02")),

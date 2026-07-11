@@ -989,6 +989,113 @@ load_proc2_data_for_test <- function(path) {
   env$data
 }
 
+second_level_parallel_row_for_test <- function(batch, index) {
+  appusage_annotate_worker_result(
+    data.frame(
+      index = batch$index[[index]],
+      participant_id = batch$participant_id[[index]],
+      detected_type = batch$detected_type[[index]],
+      status = "success",
+      skip_reason = NA_character_,
+      first_level_data_file = batch$data_file[[index]],
+      second_level_data_file = paste0(batch$data_file[[index]], ".proc2.rda"),
+      second_level_metadata_file = NA_character_,
+      error_class = NA_character_,
+      error_message = NA_character_,
+      started_at = "2026-07-10 10:00:00.000 +0800",
+      finished_at = "2026-07-10 10:00:01.000 +0800",
+      elapsed_sec = 1,
+      stringsAsFactors = FALSE
+    ),
+    stage = "second-level",
+    task_index = index,
+    worker_pid = 1234L
+  )
+}
+
+write_complete_proc2_cache_for_test <- function(batch, index, output_dir) {
+  paths <- second_level_expected_paths(batch$data_file[[index]], output_dir)
+  data <- list(event = data.frame(), episode = data.frame(), daily = data.frame())
+  save(data, file = paths$rda_file)
+  metadata <- list(
+    identity = list(
+      participant_id = batch$participant_id[[index]],
+      participant_id_source = "test",
+      wenjuanxing_sequence_id = NA_integer_
+    ),
+    export = list(
+      detected_type = batch$detected_type[[index]],
+      filename_export_type = batch$detected_type[[index]],
+      export_type_match = TRUE
+    ),
+    processing = list(
+      first_level_status = "success",
+      second_level_status = "success"
+    ),
+    outputs = list(
+      first_level_rda = normalizePath(
+        batch$data_file[[index]],
+        winslash = "/",
+        mustWork = FALSE
+      ),
+      first_level_json = NA_character_,
+      second_level_rda = normalizePath(
+        paths$rda_file,
+        winslash = "/",
+        mustWork = FALSE
+      ),
+      metadata_json = normalizePath(
+        paths$json_file,
+        winslash = "/",
+        mustWork = FALSE
+      )
+    ),
+    counts = list(
+      n_event_rows = 0L,
+      n_episode_rows = 0L,
+      n_daily_rows = 0L,
+      n_anomalies = 0L,
+      n_parse_warnings = 0L
+    ),
+    qc = list(qc_status = "not_run"),
+    app_categories = list(app_category_status = "not_run")
+  )
+  write_metadata_json(metadata, paths$json_file)
+  paths
+}
+
+test_that("second-level transport classification and retry counts are narrow", {
+  expect_true(appusage_is_cluster_transport_error(
+    simpleError("error reading from connection")
+  ))
+  expect_true(appusage_is_cluster_transport_error(
+    simpleError("error in unserialize(node$con)")
+  ))
+  expect_false(appusage_is_cluster_transport_error(
+    simpleError("parser failed on malformed duration")
+  ))
+  expect_false(appusage_is_cluster_transport_error(
+    simpleError("one node produced an error: parser failed")
+  ))
+  expect_true(appusage_is_cluster_transport_error(
+    simpleError("cluster setup failed")
+  ))
+  expect_true(appusage_is_cluster_transport_error(
+    simpleError("three workers failed to connect")
+  ))
+  expect_true(appusage_is_cluster_transport_error(simpleError(
+    "cannot open the connection",
+    call = quote(parallel::makePSOCKcluster(4L))
+  )))
+  expect_false(appusage_is_cluster_transport_error(simpleError(
+    "cannot open the connection",
+    call = quote(file("missing.txt"))
+  )))
+  expect_equal(appusage_second_level_retry_worker_counts(8L), c(8L, 4L, 1L))
+  expect_equal(appusage_second_level_retry_worker_counts(2L), c(2L, 1L))
+  expect_equal(appusage_second_level_retry_worker_counts(1L), 1L)
+})
+
 test_that("second-level parallel mode preserves serial outputs on fixtures", {
   detected_cores <- parallel::detectCores(logical = TRUE)
   testthat::skip_if(is.na(detected_cores) || detected_cores < 2L)
@@ -1287,4 +1394,709 @@ test_that("second-level parallel worker errors are captured in non-strict summar
   expect_false(is.na(error_row$worker_pid[[1]]))
   expect_true(!is.na(error_row$error_class[[1]]) && nzchar(error_row$error_class[[1]]))
   expect_true(file.exists(error_row$second_level_metadata_file[[1]]))
+})
+
+test_that("PSOCK cleanup failures cannot mask the original condition", {
+  original <- simpleError(
+    "original parallel transport failure",
+    call = quote(parallel::parLapplyLB(cluster, tasks, worker))
+  )
+  class(original) <- c("simulated_cluster_transport_error", class(original))
+  cleanup_calls <- 0L
+  run_with_cleanup <- function() {
+    on.exit(
+      appusage_stop_cluster_safely(
+        cluster = structure(list(), class = "fake_cluster"),
+        stop_cluster = function(cluster) {
+          cleanup_calls <<- cleanup_calls + 1L
+          stop("cleanup failure")
+        }
+      ),
+      add = TRUE
+    )
+    stop(original)
+  }
+
+  observed <- tryCatch(run_with_cleanup(), error = identity)
+
+  expect_s3_class(observed, "simulated_cluster_transport_error")
+  expect_identical(conditionMessage(observed), conditionMessage(original))
+  expect_identical(conditionCall(observed), conditionCall(original))
+  expect_equal(cleanup_calls, 1L)
+})
+
+test_that("second-level cluster failures preserve the condition and write diagnostics", {
+  detected_cores <- parallel::detectCores(logical = TRUE)
+  testthat::skip_if(is.na(detected_cores) || detected_cores < 2L)
+  project_root <- file.path(
+    tempdir(),
+    paste0("appusage_second_cluster_failure_", sample.int(1e8, 1))
+  )
+  output_dir <- file.path(project_root, "proclevel-2")
+  proc1_dir <- file.path(project_root, "proclevel-1")
+  dir.create(output_dir, recursive = TRUE)
+  dir.create(proc1_dir, recursive = TRUE)
+  first_files <- file.path(
+    proc1_dir,
+    c("sub-one_type-line_proc-1.rda", "sub-two_type-line_proc-1.rda")
+  )
+  data <- list(event = data.frame(), episode = data.frame(), daily = data.frame())
+  for (path in first_files) {
+    save(data, file = path)
+  }
+  batch <- data.frame(
+    index = 1:2,
+    participant_id = c("one", "two"),
+    detected_type = "line",
+    status = "success",
+    data_file = first_files,
+    stringsAsFactors = FALSE
+  )
+  original <- simpleError(
+    "simulated second-level cluster transport failure",
+    call = quote(parallel::parLapplyLB(cluster, tasks, worker))
+  )
+  class(original) <- c("simulated_cluster_transport_error", class(original))
+  testthat::local_mocked_bindings(
+    appusage_parallel_lapply_lb = function(cluster, tasks, fun) stop(original),
+    appusage_execute_second_level_serial = function(...) stop(original),
+    .package = "appusageR"
+  )
+
+  observed <- tryCatch(
+    process_second_level_batch_rows(
+      batch_summary = batch,
+      output_dir = output_dir,
+      overwrite = TRUE,
+      resume = FALSE,
+      progress = FALSE,
+      parallel = TRUE,
+      n_workers = 2L,
+      second_level_args = list()
+    ),
+    error = identity
+  )
+
+  expect_s3_class(observed, "simulated_cluster_transport_error")
+  expect_identical(conditionMessage(observed), conditionMessage(original))
+  expect_identical(conditionCall(observed), conditionCall(original))
+  diagnostic_files <- list.files(
+    file.path(project_root, "diagnostics"),
+    pattern = "^second_level_cluster_failure_.*[.]json$",
+    full.names = TRUE
+  )
+  expect_length(diagnostic_files, 3L)
+  diagnostics <- lapply(
+    diagnostic_files,
+    jsonlite::read_json,
+    simplifyVector = TRUE
+  )
+  diagnostic <- diagnostics[[which(vapply(
+    diagnostics,
+    function(x) as.integer(x$retry_attempt) == 0L,
+    logical(1)
+  ))[[1]]]]
+  required_fields <- c(
+    "stage", "timestamp", "condition_class", "condition_message",
+    "condition_call", "current_task_indices", "planned_task_indices",
+    "worker_count", "output_path", "project_path", "package_version"
+  )
+  expect_true(all(required_fields %in% names(diagnostic)))
+  expect_equal(diagnostic$stage, "second-level")
+  expect_match(diagnostic$condition_class, "simulated_cluster_transport_error")
+  expect_equal(diagnostic$condition_message, conditionMessage(original))
+  expect_match(diagnostic$condition_call, "parLapplyLB")
+  expect_setequal(as.integer(diagnostic$current_task_indices), 1:2)
+  expect_setequal(as.integer(diagnostic$planned_task_indices), 1:2)
+  expect_equal(as.integer(diagnostic$worker_count), 2L)
+  expect_equal(diagnostic$output_path, normalizePath(output_dir, winslash = "/"))
+  expect_equal(diagnostic$project_path, normalizePath(project_root, winslash = "/"))
+  expect_true(nzchar(diagnostic$timestamp))
+  expect_true(nzchar(diagnostic$package_version))
+})
+
+test_that("second-level transport recovery rescans caches and retains safer workers", {
+  project_root <- file.path(
+    tempdir(),
+    paste0("appusage_second_recovery_", sample.int(1e8, 1))
+  )
+  proc1_dir <- file.path(project_root, "proclevel-1")
+  output_dir <- file.path(project_root, "proclevel-2")
+  dir.create(proc1_dir, recursive = TRUE)
+  dir.create(output_dir, recursive = TRUE)
+  first_files <- file.path(
+    proc1_dir,
+    sprintf("sub-%02d_type-line_proc-1.rda", 1:5)
+  )
+  for (path in first_files) {
+    writeBin(as.raw(1:5), path)
+  }
+  batch <- data.frame(
+    index = 1:5,
+    participant_id = as.character(1:5),
+    detected_type = "line",
+    status = "success",
+    data_file = first_files,
+    stringsAsFactors = FALSE
+  )
+  starts <- integer()
+  stops <- integer()
+  submitted <- list()
+  worker_counts <- integer()
+  first_error <- simpleError("error reading from connection")
+  class(first_error) <- c("appusage_psock_transport_error", class(first_error))
+  retry_error <- simpleError("error in unserialize(node$con)")
+  call_count <- 0L
+  testthat::local_mocked_bindings(
+    appusage_start_second_level_cluster = function(worker_count, export_env) {
+      starts <<- c(starts, worker_count)
+      structure(
+        list(id = length(starts), worker_count = worker_count),
+        class = "fake_appusage_cluster"
+      )
+    },
+    appusage_stop_cluster_safely = function(cluster, ...) {
+      stops <<- c(stops, cluster$id)
+      invisible(NULL)
+    },
+    appusage_parallel_lapply_lb = function(cluster, tasks, fun) {
+      call_count <<- call_count + 1L
+      submitted[[call_count]] <<- tasks
+      worker_counts <<- c(worker_counts, cluster$worker_count)
+      if (call_count == 1L) {
+        write_complete_proc2_cache_for_test(batch, tasks[[1]], output_dir)
+        stop(first_error)
+      }
+      if (call_count == 2L) {
+        stop(retry_error)
+      }
+      lapply(tasks, function(i) {
+        write_complete_proc2_cache_for_test(batch, i, output_dir)
+        appusage_annotate_worker_result(
+          write_second_level_one(
+            batch_summary = batch,
+            index = i,
+            output_dir = output_dir,
+            overwrite = FALSE,
+            resume = TRUE,
+            second_level_args = list()
+          ),
+          stage = "second-level",
+          task_index = i,
+          worker_pid = 1234L
+        )
+      })
+    },
+    .package = "appusageR"
+  )
+
+  rows <- process_second_level_batch_rows(
+    batch_summary = batch,
+    output_dir = output_dir,
+    overwrite = TRUE,
+    resume = FALSE,
+    progress = FALSE,
+    parallel = TRUE,
+    n_workers = 4L,
+    second_level_args = list(),
+    checkpoint_chunk_multiplier = 1L
+  )
+
+  expect_equal(starts, c(4L, 4L, 2L))
+  expect_equal(worker_counts, c(4L, 4L, 2L, 2L))
+  expect_false(1L %in% submitted[[2]])
+  expect_false(1L %in% submitted[[3]])
+  expect_equal(vapply(rows, function(row) row$index[[1]], integer(1)), 1:5)
+  expect_equal(sort(stops), 1:3)
+  expect_equal(length(unique(stops)), length(stops))
+  checkpoint_base <- appusage_second_level_checkpoint_base_path(batch, output_dir)
+  latest <- appusage_read_latest_second_level_checkpoint(checkpoint_base)
+  expect_equal(nrow(latest$summary), 5L)
+})
+
+test_that("initial and replacement setup transport failures enter recovery", {
+  project_root <- file.path(
+    tempdir(),
+    paste0("appusage_second_setup_recovery_", sample.int(1e8, 1))
+  )
+  proc1_dir <- file.path(project_root, "proclevel-1")
+  output_dir <- file.path(project_root, "proclevel-2")
+  dir.create(proc1_dir, recursive = TRUE)
+  dir.create(output_dir, recursive = TRUE)
+  first_files <- file.path(
+    proc1_dir,
+    sprintf("sub-%02d_type-line_proc-1.rda", 1:2)
+  )
+  for (path in first_files) {
+    writeBin(as.raw(1:5), path)
+  }
+  batch <- data.frame(
+    index = 1:2,
+    participant_id = as.character(1:2),
+    detected_type = "line",
+    status = "success",
+    data_file = first_files,
+    stringsAsFactors = FALSE
+  )
+  initial_error <- simpleError("cluster setup failed: workers failed to connect")
+  class(initial_error) <- c("appusage_psock_transport_error", class(initial_error))
+  replacement_error <- simpleError("cannot open socket connection")
+  starts <- integer()
+  stopped <- integer()
+  testthat::local_mocked_bindings(
+    appusage_start_second_level_cluster = function(worker_count, export_env) {
+      starts <<- c(starts, worker_count)
+      if (length(starts) == 1L) {
+        stop(initial_error)
+      }
+      if (length(starts) == 2L) {
+        stop(replacement_error)
+      }
+      structure(
+        list(id = length(starts), worker_count = worker_count),
+        class = "fake_appusage_cluster"
+      )
+    },
+    appusage_stop_cluster_safely = function(cluster, ...) {
+      stopped <<- c(stopped, cluster$id)
+      invisible(NULL)
+    },
+    appusage_parallel_lapply_lb = function(cluster, tasks, fun) {
+      lapply(tasks, function(i) {
+        write_complete_proc2_cache_for_test(batch, i, output_dir)
+        appusage_annotate_worker_result(
+          write_second_level_one(
+            batch_summary = batch,
+            index = i,
+            output_dir = output_dir,
+            overwrite = FALSE,
+            resume = TRUE,
+            second_level_args = list()
+          ),
+          stage = "second-level",
+          task_index = i,
+          worker_pid = 1234L
+        )
+      })
+    },
+    .package = "appusageR"
+  )
+
+  rows <- process_second_level_batch_rows(
+    batch_summary = batch,
+    output_dir = output_dir,
+    overwrite = TRUE,
+    resume = FALSE,
+    progress = FALSE,
+    parallel = TRUE,
+    n_workers = 4L,
+    second_level_args = list(),
+    checkpoint_chunk_multiplier = 1L
+  )
+
+  expect_equal(starts, c(4L, 4L, 2L))
+  expect_equal(stopped, 3L)
+  expect_equal(vapply(rows, function(row) row$index[[1]], integer(1)), 1:2)
+  latest <- appusage_read_latest_second_level_checkpoint(
+    appusage_second_level_checkpoint_base_path(batch, output_dir)
+  )
+  expect_equal(nrow(latest$summary), 2L)
+})
+
+test_that("non-transport setup failures are diagnosed without retry", {
+  project_root <- file.path(
+    tempdir(),
+    paste0("appusage_second_setup_nontransport_", sample.int(1e8, 1))
+  )
+  proc1_dir <- file.path(project_root, "proclevel-1")
+  output_dir <- file.path(project_root, "proclevel-2")
+  dir.create(proc1_dir, recursive = TRUE)
+  dir.create(output_dir, recursive = TRUE)
+  first_files <- file.path(
+    proc1_dir,
+    sprintf("sub-%02d_type-line_proc-1.rda", 1:2)
+  )
+  for (path in first_files) {
+    writeBin(as.raw(1:5), path)
+  }
+  batch <- data.frame(
+    index = 1:2,
+    participant_id = as.character(1:2),
+    detected_type = "line",
+    status = "success",
+    data_file = first_files,
+    stringsAsFactors = FALSE
+  )
+  original <- simpleError("Package appusageR is not available on the parallel worker.")
+  starts <- 0L
+  testthat::local_mocked_bindings(
+    appusage_start_second_level_cluster = function(worker_count, export_env) {
+      starts <<- starts + 1L
+      stop(original)
+    },
+    .package = "appusageR"
+  )
+
+  observed <- tryCatch(
+    process_second_level_batch_rows(
+      batch_summary = batch,
+      output_dir = output_dir,
+      overwrite = TRUE,
+      resume = FALSE,
+      progress = FALSE,
+      parallel = TRUE,
+      n_workers = 4L,
+      second_level_args = list(),
+      checkpoint_chunk_multiplier = 1L
+    ),
+    error = identity
+  )
+
+  expect_identical(observed, original)
+  expect_equal(starts, 1L)
+  diagnostics <- list.files(
+    file.path(project_root, "diagnostics"),
+    pattern = "^second_level_cluster_failure_.*[.]json$",
+    full.names = TRUE
+  )
+  expect_length(diagnostics, 1L)
+})
+
+test_that("all setup recovery strategies rethrow the first setup condition", {
+  project_root <- file.path(
+    tempdir(),
+    paste0("appusage_second_setup_failure_", sample.int(1e8, 1))
+  )
+  proc1_dir <- file.path(project_root, "proclevel-1")
+  output_dir <- file.path(project_root, "proclevel-2")
+  dir.create(proc1_dir, recursive = TRUE)
+  dir.create(output_dir, recursive = TRUE)
+  first_files <- file.path(
+    proc1_dir,
+    sprintf("sub-%02d_type-line_proc-1.rda", 1:2)
+  )
+  for (path in first_files) {
+    writeBin(as.raw(1:5), path)
+  }
+  batch <- data.frame(
+    index = 1:2,
+    participant_id = as.character(1:2),
+    detected_type = "line",
+    status = "success",
+    data_file = first_files,
+    stringsAsFactors = FALSE
+  )
+  first_error <- simpleError("cluster setup failed: workers failed to connect")
+  class(first_error) <- c("appusage_psock_transport_error", class(first_error))
+  later_error <- simpleError("cannot open socket connection")
+  starts <- integer()
+  testthat::local_mocked_bindings(
+    appusage_start_second_level_cluster = function(worker_count, export_env) {
+      starts <<- c(starts, worker_count)
+      if (length(starts) == 1L) {
+        stop(first_error)
+      }
+      stop(later_error)
+    },
+    appusage_execute_second_level_serial = function(...) stop(later_error),
+    .package = "appusageR"
+  )
+
+  observed <- tryCatch(
+    process_second_level_batch_rows(
+      batch_summary = batch,
+      output_dir = output_dir,
+      overwrite = TRUE,
+      resume = FALSE,
+      progress = FALSE,
+      parallel = TRUE,
+      n_workers = 4L,
+      second_level_args = list(),
+      checkpoint_chunk_multiplier = 1L
+    ),
+    error = identity
+  )
+
+  expect_identical(observed, first_error)
+  expect_equal(starts, c(4L, 4L, 2L))
+  diagnostics <- list.files(
+    file.path(project_root, "diagnostics"),
+    pattern = "^second_level_cluster_failure_.*[.]json$",
+    full.names = TRUE
+  )
+  expect_length(diagnostics, 4L)
+  diagnostic_rows <- lapply(
+    diagnostics,
+    jsonlite::read_json,
+    simplifyVector = TRUE
+  )
+  expect_true(all(vapply(
+    diagnostic_rows,
+    function(x) identical(x$initial_condition_message, conditionMessage(first_error)),
+    logical(1)
+  )))
+})
+
+test_that("diagnostic-writing failures cannot replace cluster conditions", {
+  original <- simpleError("original cluster failure")
+  class(original) <- c("simulated_cluster_transport_error", class(original))
+  testthat::local_mocked_bindings(
+    appusage_write_second_level_cluster_diagnostic_safely = function(...) {
+      stop("diagnostic writer failure")
+    },
+    .package = "appusageR"
+  )
+
+  observed <- tryCatch(
+    appusage_signal_second_level_cluster_error(
+      error = original,
+      output_dir = tempdir(),
+      current_task_indices = 1L,
+      planned_task_indices = 1:2,
+      worker_count = 2L
+    ),
+    error = identity
+  )
+
+  expect_s3_class(observed, "simulated_cluster_transport_error")
+  expect_identical(conditionMessage(observed), conditionMessage(original))
+})
+
+test_that("second-level parallel chunks checkpoint progress and preserve input order", {
+  detected_cores <- parallel::detectCores(logical = TRUE)
+  testthat::skip_if(is.na(detected_cores) || detected_cores < 2L)
+  project_root <- file.path(
+    tempdir(),
+    paste0("appusage_second_chunks_", sample.int(1e8, 1))
+  )
+  proc1_dir <- file.path(project_root, "proclevel-1")
+  output_dir <- file.path(project_root, "proclevel-2")
+  dir.create(proc1_dir, recursive = TRUE)
+  dir.create(output_dir, recursive = TRUE)
+  first_files <- file.path(
+    proc1_dir,
+    sprintf("sub-%02d_type-line_proc-1.rda", 1:5)
+  )
+  for (i in seq_along(first_files)) {
+    writeBin(as.raw(rep(i, 6L - i)), first_files[[i]])
+  }
+  batch <- data.frame(
+    index = 1:5,
+    participant_id = as.character(1:5),
+    detected_type = "line",
+    status = "success",
+    data_file = first_files,
+    stringsAsFactors = FALSE
+  )
+  submitted_chunks <- list()
+  checkpoint_writes <- integer()
+  write_checkpoint <- appusage_write_second_level_checkpoint
+  testthat::local_mocked_bindings(
+    appusage_parallel_lapply_lb = function(cluster, tasks, fun) {
+      submitted_chunks[[length(submitted_chunks) + 1L]] <<- tasks
+      lapply(tasks, function(i) second_level_parallel_row_for_test(batch, i))
+    },
+    appusage_write_second_level_checkpoint = function(summary, ...) {
+      checkpoint_writes <<- c(checkpoint_writes, nrow(summary))
+      write_checkpoint(summary, ...)
+    },
+    .package = "appusageR"
+  )
+
+  rows <- process_second_level_batch_rows(
+    batch_summary = batch,
+    output_dir = output_dir,
+    overwrite = TRUE,
+    resume = FALSE,
+    progress = FALSE,
+    parallel = TRUE,
+    n_workers = 2L,
+    second_level_args = list(),
+    checkpoint_chunk_multiplier = 1L
+  )
+
+  expect_equal(length(submitted_chunks), 3L)
+  expect_equal(checkpoint_writes, c(2L, 4L, 5L))
+  expect_equal(vapply(rows, function(row) row$index[[1]], integer(1)), 1:5)
+  checkpoint_base <- appusage_second_level_checkpoint_base_path(batch, output_dir)
+  checkpoint_files <- sort(appusage_second_level_checkpoint_files(checkpoint_base))
+  expect_length(checkpoint_files, 2L)
+  checkpoint_rows <- vapply(
+    checkpoint_files,
+    function(path) nrow(appusage_validate_second_level_checkpoint(path)),
+    integer(1)
+  )
+  expect_equal(unname(checkpoint_rows), c(4L, 5L))
+  latest <- appusage_read_latest_second_level_checkpoint(checkpoint_base)
+  expect_equal(nrow(latest$summary), 5L)
+  expect_equal(as.integer(latest$summary$index), 1:5)
+})
+
+test_that("second-level checkpoint run ids and paths are collision resistant", {
+  ids <- replicate(25L, appusage_second_level_checkpoint_run_id())
+  expect_length(unique(ids), length(ids))
+  expect_true(all(grepl("^[A-Za-z0-9._-]+$", ids)))
+  base_path <- file.path(
+    tempdir(),
+    "analytic_summary_table_proclevel-2.checkpoint.csv"
+  )
+  paths <- vapply(
+    ids,
+    function(run_id) {
+      appusage_second_level_checkpoint_version_path(base_path, run_id, 1L)
+    },
+    character(1)
+  )
+  expect_length(unique(paths), length(paths))
+})
+
+test_that("later second-level chunk failures retain earlier checkpoints", {
+  detected_cores <- parallel::detectCores(logical = TRUE)
+  testthat::skip_if(is.na(detected_cores) || detected_cores < 2L)
+  project_root <- file.path(
+    tempdir(),
+    paste0("appusage_second_chunk_failure_", sample.int(1e8, 1))
+  )
+  proc1_dir <- file.path(project_root, "proclevel-1")
+  output_dir <- file.path(project_root, "proclevel-2")
+  dir.create(proc1_dir, recursive = TRUE)
+  dir.create(output_dir, recursive = TRUE)
+  first_files <- file.path(
+    proc1_dir,
+    sprintf("sub-%02d_type-line_proc-1.rda", 1:5)
+  )
+  for (path in first_files) {
+    writeBin(as.raw(1:5), path)
+  }
+  batch <- data.frame(
+    index = 1:5,
+    participant_id = as.character(1:5),
+    detected_type = "line",
+    status = "success",
+    data_file = first_files,
+    stringsAsFactors = FALSE
+  )
+  processing_order <- second_level_processing_order(batch)
+  expected_chunks <- split(processing_order, ceiling(seq_along(processing_order) / 2L))
+  call_count <- 0L
+  original <- simpleError("simulated later chunk transport failure")
+  class(original) <- c("simulated_cluster_transport_error", class(original))
+  safe_stop <- appusage_stop_cluster_safely
+  testthat::local_mocked_bindings(
+    appusage_parallel_lapply_lb = function(cluster, tasks, fun) {
+      call_count <<- call_count + 1L
+      if (call_count >= 2L) {
+        stop(original)
+      }
+      lapply(tasks, function(i) second_level_parallel_row_for_test(batch, i))
+    },
+    appusage_execute_second_level_serial = function(...) stop(original),
+    appusage_stop_cluster_safely = function(cluster, ...) {
+      safe_stop(cluster)
+      stop("simulated cleanup failure")
+    },
+    .package = "appusageR"
+  )
+
+  observed <- tryCatch(
+    process_second_level_batch_rows(
+      batch_summary = batch,
+      output_dir = output_dir,
+      overwrite = TRUE,
+      resume = FALSE,
+      progress = FALSE,
+      parallel = TRUE,
+      n_workers = 2L,
+      second_level_args = list(),
+      checkpoint_chunk_multiplier = 1L
+    ),
+    error = identity
+  )
+
+  expect_s3_class(observed, "simulated_cluster_transport_error")
+  checkpoint_base <- appusage_second_level_checkpoint_base_path(batch, output_dir)
+  checkpoint_files <- appusage_second_level_checkpoint_files(checkpoint_base)
+  expect_length(checkpoint_files, 1L)
+  checkpoint <- appusage_read_latest_second_level_checkpoint(checkpoint_base)
+  expect_equal(nrow(checkpoint$summary), length(expected_chunks[[1]]))
+  diagnostics <- list.files(
+    file.path(project_root, "diagnostics"),
+    pattern = "^second_level_cluster_failure_.*[.]json$",
+    full.names = TRUE
+  )
+  expect_length(diagnostics, 3L)
+  diagnostic_rows <- lapply(
+    diagnostics,
+    jsonlite::read_json,
+    simplifyVector = TRUE
+  )
+  diagnostic <- diagnostic_rows[[which(vapply(
+    diagnostic_rows,
+    function(x) as.integer(x$retry_attempt) == 0L,
+    logical(1)
+  ))[[1]]]]
+  expect_setequal(
+    as.integer(diagnostic$current_task_indices),
+    as.integer(expected_chunks[[2]])
+  )
+  expect_setequal(
+    as.integer(diagnostic$planned_task_indices),
+    as.integer(processing_order)
+  )
+  retry_workers <- sort(vapply(
+    diagnostic_rows[vapply(
+      diagnostic_rows,
+      function(x) as.integer(x$retry_attempt) > 0L,
+      logical(1)
+    )],
+    function(x) as.integer(x$worker_count),
+    integer(1)
+  ), decreasing = TRUE)
+  expect_equal(retry_workers, c(2L, 1L))
+  expect_true(all(vapply(
+    diagnostic_rows,
+    function(x) identical(x$initial_condition_message, conditionMessage(original)),
+    logical(1)
+  )))
+})
+
+test_that("atomic second-level checkpoint failures preserve valid versions", {
+  checkpoint_dir <- file.path(
+    tempdir(),
+    paste0("appusage_atomic_checkpoint_", sample.int(1e8, 1))
+  )
+  dir.create(checkpoint_dir, recursive = TRUE)
+  base_path <- file.path(
+    checkpoint_dir,
+    "analytic_summary_table_proclevel-2.checkpoint.csv"
+  )
+  initial <- data.frame(index = 1:2, status = "success")
+  valid_path <- appusage_write_second_level_checkpoint(
+    initial,
+    base_path,
+    run_id = "test",
+    chunk_index = 1L
+  )
+
+  expect_error(
+    appusage_write_second_level_checkpoint(
+      data.frame(index = 1:4, status = "success"),
+      base_path,
+      run_id = "test",
+      chunk_index = 2L,
+      promote_file = function(from, to) FALSE
+    ),
+    "Could not promote"
+  )
+
+  expect_true(file.exists(valid_path))
+  expect_equal(nrow(appusage_validate_second_level_checkpoint(valid_path)), 2L)
+  failed_path <- appusage_second_level_checkpoint_version_path(
+    base_path,
+    "test",
+    2L
+  )
+  expect_false(file.exists(failed_path))
+  partials <- list.files(checkpoint_dir, pattern = "[.]tmp$", full.names = TRUE)
+  expect_length(partials, 0L)
 })

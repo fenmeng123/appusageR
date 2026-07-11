@@ -1350,6 +1350,656 @@ write_metadata_json <- function(info, metadata_file) {
   )
 }
 
+appusage_stop_cluster_safely <- function(cluster,
+                                         stop_cluster = parallel::stopCluster) {
+  tryCatch(
+    {
+      stop_cluster(cluster)
+      invisible(NULL)
+    },
+    error = function(e) invisible(e)
+  )
+}
+
+appusage_parallel_lapply_lb <- function(cluster, tasks, fun) {
+  parallel::parLapplyLB(cluster, tasks, fun)
+}
+
+appusage_is_cluster_transport_error <- function(error) {
+  if (inherits(error, c(
+    "appusage_psock_transport_error",
+    "simulated_cluster_transport_error"
+  ))) {
+    return(TRUE)
+  }
+  message <- tolower(conditionMessage(error))
+  condition_call <- conditionCall(error)
+  call_text <- if (is.null(condition_call)) {
+    ""
+  } else {
+    tolower(paste(deparse(condition_call), collapse = " "))
+  }
+  patterns <- c(
+    "error (reading|writing) from connection",
+    "error in unserialize",
+    "unserialize\\(",
+    "invalid connection",
+    "socket connection",
+    "broken pipe",
+    "connection reset",
+    "connection.*closed",
+    "node.*(died|dead|unavailable)",
+    "node.*failed to (send|receive|connect)",
+    "worker.*(died|dead|terminated|unavailable)",
+    "workers?.*failed to connect",
+    "failed to connect.*workers?",
+    "cluster setup failed",
+    "cannot open.*socket connection",
+    "socketconnection"
+  )
+  if (any(vapply(patterns, grepl, logical(1), x = message, perl = TRUE))) {
+    return(TRUE)
+  }
+  psock_call <- grepl(
+    "socketconnection|makepsockcluster|newpsocknode|makecluster",
+    call_text,
+    perl = TRUE
+  )
+  psock_call && grepl("cannot open.*connection", message, perl = TRUE)
+}
+
+appusage_second_level_retry_worker_counts <- function(worker_count) {
+  worker_count <- suppressWarnings(as.integer(worker_count))
+  if (length(worker_count) != 1L || is.na(worker_count) || worker_count < 1L) {
+    stop("`worker_count` must be a positive integer.")
+  }
+  unique(as.integer(c(
+    worker_count,
+    max(1L, floor(worker_count / 2L)),
+    1L
+  )))
+}
+
+appusage_start_second_level_cluster <- function(worker_count, export_env) {
+  package_root <- get("package_root", envir = export_env, inherits = FALSE)
+  cluster <- parallel::makeCluster(worker_count)
+  initialized <- FALSE
+  on.exit({
+    if (!initialized) {
+      tryCatch(
+        appusage_stop_cluster_safely(cluster),
+        error = function(e) invisible(e)
+      )
+    }
+  }, add = TRUE)
+  parallel::clusterExport(
+    cluster,
+    varlist = c(
+      "batch_summary", "output_dir", "overwrite", "resume",
+      "second_level_args"
+    ),
+    envir = export_env
+  )
+  parallel::clusterCall(cluster, function(package_root) {
+    if (!requireNamespace("appusageR", quietly = TRUE)) {
+      if (requireNamespace("pkgload", quietly = TRUE) &&
+        file.exists(file.path(package_root, "DESCRIPTION"))) {
+        pkgload::load_all(package_root, quiet = TRUE)
+      } else {
+        stop("Package appusageR is not available on the parallel worker.")
+      }
+    }
+    NULL
+  }, package_root)
+  initialized <- TRUE
+  cluster
+}
+
+appusage_execute_second_level_chunk <- function(
+    cluster, task_indices, batch_summary, output_dir, overwrite, resume,
+    second_level_args) {
+  appusage_parallel_lapply_lb(cluster, task_indices, function(i) {
+    worker <- get("write_second_level_one", envir = asNamespace("appusageR"))
+    annotator <- get("appusage_annotate_worker_result", envir = asNamespace("appusageR"))
+    row <- worker(
+      batch_summary = batch_summary,
+      index = i,
+      output_dir = output_dir,
+      overwrite = overwrite,
+      resume = resume,
+      second_level_args = second_level_args
+    )
+    annotator(
+      row,
+      stage = "second-level",
+      task_index = i,
+      worker_pid = Sys.getpid()
+    )
+  })
+}
+
+appusage_execute_second_level_serial <- function(
+    task_indices, batch_summary, output_dir, overwrite, resume,
+    second_level_args) {
+  lapply(task_indices, function(i) {
+    appusage_annotate_worker_result(
+      write_second_level_one(
+        batch_summary = batch_summary,
+        index = i,
+        output_dir = output_dir,
+        overwrite = overwrite,
+        resume = resume,
+        second_level_args = second_level_args
+      ),
+      stage = "second-level",
+      task_index = i,
+      worker_pid = Sys.getpid()
+    )
+  })
+}
+
+appusage_write_second_level_cluster_diagnostic <- function(
+    error, output_dir, current_task_indices, planned_task_indices,
+    worker_count, initial_error = error, retry_attempt = 0L,
+    pending_task_indices = current_task_indices,
+    completed_via_cache_indices = integer()) {
+  output_path <- normalizePath(output_dir, winslash = "/", mustWork = FALSE)
+  project_path <- normalizePath(dirname(output_path), winslash = "/", mustWork = FALSE)
+  diagnostics_dir <- file.path(project_path, "diagnostics")
+  dir.create(diagnostics_dir, recursive = TRUE, showWarnings = FALSE)
+  diagnostic_file <- tempfile(
+    pattern = paste0(
+      "second_level_cluster_failure_",
+      format(Sys.time(), "%Y%m%dT%H%M%S"),
+      "_"
+    ),
+    tmpdir = diagnostics_dir,
+    fileext = ".json"
+  )
+  condition_call <- conditionCall(error)
+  diagnostic <- list(
+    stage = "second-level",
+    failure_scope = "cluster",
+    timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%OS3 %z"),
+    condition_class = paste(class(error), collapse = ","),
+    condition_message = conditionMessage(error),
+    condition_call = if (is.null(condition_call)) {
+      NA_character_
+    } else {
+      deparse_one_call(condition_call)
+    },
+    initial_condition_class = paste(class(initial_error), collapse = ","),
+    initial_condition_message = conditionMessage(initial_error),
+    initial_condition_call = if (is.null(conditionCall(initial_error))) {
+      NA_character_
+    } else {
+      deparse_one_call(conditionCall(initial_error))
+    },
+    retry_attempt = as.integer(retry_attempt),
+    current_task_indices = as.integer(current_task_indices),
+    planned_task_indices = as.integer(planned_task_indices),
+    pending_task_indices = as.integer(pending_task_indices),
+    completed_via_cache_indices = as.integer(completed_via_cache_indices),
+    current_task_scope = "submitted_batch",
+    worker_count = as.integer(worker_count),
+    output_path = output_path,
+    project_path = project_path,
+    package_version = as.character(utils::packageVersion("appusageR"))
+  )
+  write_metadata_json(diagnostic, diagnostic_file)
+  normalizePath(diagnostic_file, winslash = "/", mustWork = FALSE)
+}
+
+appusage_write_second_level_cluster_diagnostic_safely <- function(...) {
+  tryCatch(
+    appusage_write_second_level_cluster_diagnostic(...),
+    error = function(e) NA_character_
+  )
+}
+
+appusage_signal_second_level_cluster_error <- function(
+    error, output_dir, current_task_indices, planned_task_indices,
+    worker_count) {
+  tryCatch(
+    appusage_write_second_level_cluster_diagnostic_safely(
+      error = error,
+      output_dir = output_dir,
+      current_task_indices = current_task_indices,
+      planned_task_indices = planned_task_indices,
+      worker_count = worker_count
+    ),
+    error = function(e) NA_character_
+  )
+  stop(error)
+}
+
+appusage_rescan_second_level_chunk <- function(
+    batch_summary, task_indices, output_dir, second_level_args) {
+  completed_rows <- list()
+  completed_indices <- integer()
+  pending_indices <- integer()
+  for (i in task_indices) {
+    first_file <- batch_summary$data_file[[i]]
+    upstream_success <- identical(batch_summary$status[[i]], "success") &&
+      is_present_string(first_file) && file.exists(first_file)
+    cache <- if (upstream_success) {
+      second_level_existing_cache_status(
+        first_level_rda = first_file,
+        output_dir = output_dir,
+        batch_summary = batch_summary,
+        index = i
+      )
+    } else {
+      list(status = "missing")
+    }
+    if (identical(cache$status, "complete")) {
+      completed_indices <- c(completed_indices, i)
+      completed_rows[[as.character(i)]] <- appusage_annotate_worker_result(
+        write_second_level_one(
+          batch_summary = batch_summary,
+          index = i,
+          output_dir = output_dir,
+          overwrite = FALSE,
+          resume = TRUE,
+          second_level_args = second_level_args
+        ),
+        stage = "second-level",
+        task_index = i,
+        worker_pid = Sys.getpid()
+      )
+    } else {
+      pending_indices <- c(pending_indices, i)
+    }
+  }
+  list(
+    completed_rows = completed_rows,
+    completed_indices = as.integer(completed_indices),
+    pending_indices = as.integer(pending_indices)
+  )
+}
+
+appusage_rescan_second_level_chunk_safely <- function(
+    batch_summary, task_indices, output_dir, second_level_args) {
+  tryCatch(
+    appusage_rescan_second_level_chunk(
+      batch_summary,
+      task_indices,
+      output_dir,
+      second_level_args
+    ),
+    error = function(e) list(
+      completed_rows = list(),
+      completed_indices = integer(),
+      pending_indices = as.integer(task_indices)
+    )
+  )
+}
+
+appusage_merge_recovered_second_level_rows <- function(
+    task_indices, cache_scan, attempted_indices = integer(),
+    attempted_rows = list()) {
+  attempted_by_index <- if (length(attempted_indices) > 0L) {
+    stats::setNames(attempted_rows, as.character(attempted_indices))
+  } else {
+    list()
+  }
+  lapply(task_indices, function(i) {
+    key <- as.character(i)
+    if (!is.null(cache_scan$completed_rows[[key]])) {
+      return(cache_scan$completed_rows[[key]])
+    }
+    attempted_by_index[[key]]
+  })
+}
+
+appusage_recover_second_level_chunk <- function(
+    first_error, task_indices, planned_task_indices, worker_count,
+    batch_summary, output_dir, overwrite, second_level_args, export_env) {
+  scan <- appusage_rescan_second_level_chunk_safely(
+    batch_summary,
+    task_indices,
+    output_dir,
+    second_level_args
+  )
+  tryCatch(
+    appusage_write_second_level_cluster_diagnostic_safely(
+      error = first_error,
+      initial_error = first_error,
+      output_dir = output_dir,
+      current_task_indices = task_indices,
+      planned_task_indices = planned_task_indices,
+      pending_task_indices = scan$pending_indices,
+      completed_via_cache_indices = scan$completed_indices,
+      worker_count = worker_count,
+      retry_attempt = 0L
+    ),
+    error = function(e) NA_character_
+  )
+  if (length(scan$pending_indices) == 0L) {
+    return(list(
+      rows = appusage_merge_recovered_second_level_rows(task_indices, scan),
+      cluster = NULL,
+      worker_count = worker_count
+    ))
+  }
+
+  retry_counts <- appusage_second_level_retry_worker_counts(worker_count)
+  for (attempt in seq_along(retry_counts)) {
+    attempt_workers <- retry_counts[[attempt]]
+    attempt_indices <- scan$pending_indices
+    attempt_cluster <- NULL
+    attempt_error <- NULL
+    attempt_rows <- NULL
+    if (attempt_workers == 1L) {
+      attempt_rows <- tryCatch(
+        appusage_execute_second_level_serial(
+          attempt_indices,
+          batch_summary,
+          output_dir,
+          overwrite = overwrite,
+          resume = TRUE,
+          second_level_args = second_level_args
+        ),
+        error = function(e) {
+          attempt_error <<- e
+          NULL
+        }
+      )
+    } else {
+      attempt_cluster <- tryCatch(
+        appusage_start_second_level_cluster(attempt_workers, export_env),
+        error = function(e) {
+          attempt_error <<- e
+          NULL
+        }
+      )
+      if (is.null(attempt_error)) {
+        attempt_rows <- tryCatch(
+          appusage_execute_second_level_chunk(
+            attempt_cluster,
+            attempt_indices,
+            batch_summary,
+            output_dir,
+            overwrite = overwrite,
+            resume = TRUE,
+            second_level_args = second_level_args
+          ),
+          error = function(e) {
+            attempt_error <<- e
+            NULL
+          }
+        )
+      }
+    }
+
+    if (is.null(attempt_error)) {
+      post_scan <- appusage_rescan_second_level_chunk_safely(
+        batch_summary,
+        task_indices,
+        output_dir,
+        second_level_args
+      )
+      return(list(
+        rows = appusage_merge_recovered_second_level_rows(
+          task_indices,
+          post_scan,
+          attempted_indices = attempt_indices,
+          attempted_rows = attempt_rows
+        ),
+        cluster = attempt_cluster,
+        worker_count = attempt_workers
+      ))
+    }
+
+    if (!is.null(attempt_cluster)) {
+      owned_cluster <- attempt_cluster
+      attempt_cluster <- NULL
+      tryCatch(
+        appusage_stop_cluster_safely(owned_cluster),
+        error = function(e) invisible(e)
+      )
+    }
+    scan <- appusage_rescan_second_level_chunk_safely(
+      batch_summary,
+      task_indices,
+      output_dir,
+      second_level_args
+    )
+    tryCatch(
+      appusage_write_second_level_cluster_diagnostic_safely(
+        error = attempt_error,
+        initial_error = first_error,
+        output_dir = output_dir,
+        current_task_indices = attempt_indices,
+        planned_task_indices = planned_task_indices,
+        pending_task_indices = scan$pending_indices,
+        completed_via_cache_indices = scan$completed_indices,
+        worker_count = attempt_workers,
+        retry_attempt = attempt
+      ),
+      error = function(e) NA_character_
+    )
+    if (!appusage_is_cluster_transport_error(attempt_error)) {
+      stop(first_error)
+    }
+    if (length(scan$pending_indices) == 0L) {
+      return(list(
+        rows = appusage_merge_recovered_second_level_rows(task_indices, scan),
+        cluster = NULL,
+        worker_count = attempt_workers
+      ))
+    }
+  }
+  stop(first_error)
+}
+
+appusage_second_level_chunk_size <- function(worker_count, multiplier = 6L) {
+  worker_count <- suppressWarnings(as.integer(worker_count))
+  multiplier <- suppressWarnings(as.integer(multiplier))
+  if (length(worker_count) != 1L || is.na(worker_count) || worker_count < 1L) {
+    stop("`worker_count` must be a positive integer.")
+  }
+  if (length(multiplier) != 1L || is.na(multiplier) || multiplier < 1L) {
+    stop("`multiplier` must be a positive integer.")
+  }
+  as.integer(worker_count * multiplier)
+}
+
+appusage_second_level_checkpoint_base_path <- function(batch_summary,
+                                                        output_dir) {
+  project_root <- infer_project_root_from_summary(batch_summary)
+  if (!is_present_string(project_root)) {
+    project_root <- dirname(normalizePath(
+      output_dir,
+      winslash = "/",
+      mustWork = FALSE
+    ))
+  }
+  file.path(project_root, "analytic_summary_table_proclevel-2.checkpoint.csv")
+}
+
+appusage_second_level_checkpoint_summary <- function(rows, batch_summary) {
+  completed_rows <- Filter(Negate(is.null), rows)
+  if (length(completed_rows) == 0L) {
+    return(tibble::tibble())
+  }
+  metadata_files <- unique(unlist(lapply(completed_rows, function(row) {
+    if (!"second_level_metadata_file" %in% names(row)) {
+      return(character())
+    }
+    path <- row$second_level_metadata_file[[1]]
+    if (!is_present_string(path) || !file.exists(path)) {
+      return(character())
+    }
+    as.character(path)
+  }), use.names = FALSE))
+  combine_second_level_batch_summary(
+    proc2_metadata = metadata_files,
+    rows = completed_rows,
+    batch_summary = batch_summary
+  )
+}
+
+appusage_second_level_checkpoint_version_path <- function(base_path, run_id,
+                                                          chunk_index) {
+  stem <- tools::file_path_sans_ext(basename(base_path))
+  file.path(
+    dirname(base_path),
+    sprintf(
+      "%s.run-%s.chunk-%06d.csv",
+      stem,
+      run_id,
+      as.integer(chunk_index)
+    )
+  )
+}
+
+appusage_second_level_checkpoint_run_id <- function() {
+  nonce <- basename(tempfile(pattern = "nonce-"))
+  run_id <- paste(
+    format(Sys.time(), "%Y%m%dT%H%M%OS6"),
+    Sys.getpid(),
+    nonce,
+    sep = "-"
+  )
+  gsub("[^A-Za-z0-9._-]", "-", run_id)
+}
+
+appusage_validate_second_level_checkpoint <- function(
+    path, expected_names = NULL, expected_rows = NULL,
+    read_csv = utils::read.csv) {
+  checkpoint <- read_csv(
+    path,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  if (!is.data.frame(checkpoint)) {
+    stop("Second-level checkpoint is not a data frame.")
+  }
+  if (!is.null(expected_names) && !identical(names(checkpoint), expected_names)) {
+    stop("Second-level checkpoint columns failed validation.")
+  }
+  if (!is.null(expected_rows) && nrow(checkpoint) != expected_rows) {
+    stop("Second-level checkpoint row count failed validation.")
+  }
+  checkpoint
+}
+
+appusage_write_second_level_checkpoint <- function(
+    summary, base_path, run_id, chunk_index,
+    write_csv = utils::write.csv,
+    read_csv = utils::read.csv,
+    promote_file = file.rename) {
+  dir.create(dirname(base_path), recursive = TRUE, showWarnings = FALSE)
+  final_path <- appusage_second_level_checkpoint_version_path(
+    base_path,
+    run_id,
+    chunk_index
+  )
+  if (file.exists(final_path)) {
+    stop("Second-level checkpoint version already exists: ", final_path)
+  }
+  temporary_path <- tempfile(
+    pattern = paste0(".", basename(base_path), "."),
+    tmpdir = dirname(base_path),
+    fileext = ".tmp"
+  )
+  on.exit(unlink(temporary_path, force = TRUE), add = TRUE)
+  write_csv(summary, temporary_path, row.names = FALSE, na = "")
+  appusage_validate_second_level_checkpoint(
+    temporary_path,
+    expected_names = names(summary),
+    expected_rows = nrow(summary),
+    read_csv = read_csv
+  )
+  promoted <- isTRUE(promote_file(temporary_path, final_path))
+  if (!promoted || !file.exists(final_path)) {
+    stop("Could not promote the validated second-level checkpoint.")
+  }
+  tryCatch(
+    appusage_validate_second_level_checkpoint(
+      final_path,
+      expected_names = names(summary),
+      expected_rows = nrow(summary),
+      read_csv = read_csv
+    ),
+    error = function(e) {
+      unlink(final_path, force = TRUE)
+      stop(e)
+    }
+  )
+  appusage_prune_second_level_checkpoints(base_path, keep = 2L)
+  appusage_refresh_workflow_checkpoint_safely(
+    project_root = dirname(base_path),
+    stage = "second_level",
+    checkpoint_path = final_path,
+    row_count = nrow(summary)
+  )
+  normalizePath(final_path, winslash = "/", mustWork = FALSE)
+}
+
+appusage_second_level_checkpoint_files <- function(base_path) {
+  if (!dir.exists(dirname(base_path))) {
+    return(character())
+  }
+  stem <- tools::file_path_sans_ext(basename(base_path))
+  candidates <- list.files(dirname(base_path), full.names = TRUE)
+  candidates[
+    startsWith(basename(candidates), paste0(stem, ".run-")) &
+      endsWith(basename(candidates), ".csv")
+  ]
+}
+
+appusage_prune_second_level_checkpoints <- function(base_path, keep = 2L) {
+  keep <- suppressWarnings(as.integer(keep))
+  if (length(keep) != 1L || is.na(keep) || keep < 1L) {
+    stop("`keep` must be a positive integer.")
+  }
+  candidates <- appusage_second_level_checkpoint_files(base_path)
+  if (length(candidates) <= keep) {
+    return(invisible(candidates))
+  }
+  info <- file.info(candidates)
+  candidates <- candidates[order(info$mtime, basename(candidates), decreasing = TRUE)]
+  valid <- vapply(candidates, function(path) {
+    !is.null(tryCatch(
+      appusage_validate_second_level_checkpoint(path),
+      error = function(e) NULL
+    ))
+  }, logical(1))
+  retained <- candidates[valid][seq_len(min(keep, sum(valid)))]
+  obsolete <- setdiff(candidates, retained)
+  if (length(obsolete) > 0L) {
+    unlink(obsolete, force = TRUE)
+  }
+  invisible(retained)
+}
+
+appusage_read_latest_second_level_checkpoint <- function(base_path) {
+  candidates <- appusage_second_level_checkpoint_files(base_path)
+  if (file.exists(base_path)) {
+    candidates <- c(candidates, base_path)
+  }
+  if (length(candidates) == 0L) {
+    return(NULL)
+  }
+  info <- file.info(candidates)
+  candidates <- candidates[order(info$mtime, basename(candidates), decreasing = TRUE)]
+  for (path in candidates) {
+    checkpoint <- tryCatch(
+      appusage_validate_second_level_checkpoint(path),
+      error = function(e) NULL
+    )
+    if (!is.null(checkpoint)) {
+      return(list(
+        path = normalizePath(path, winslash = "/", mustWork = FALSE),
+        summary = checkpoint
+      ))
+    }
+  }
+  NULL
+}
+
 parsed_n_warnings <- function(parsed_data) {
   if (is.data.frame(parsed_data) && "parse_warning" %in% names(parsed_data)) {
     return(sum(!is.na(parsed_data$parse_warning)))
@@ -1493,7 +2143,8 @@ resolve_appusage_parallel_workers <- function(parallel, n_cores,
 process_second_level_batch_rows <- function(batch_summary, output_dir,
                                             overwrite, resume, progress,
                                             parallel, n_workers,
-                                            second_level_args) {
+                                            second_level_args,
+                                            checkpoint_chunk_multiplier = 6L) {
   n <- nrow(batch_summary)
   if (!isTRUE(parallel) || n <= 1 || n_workers == 1) {
     rows <- vector("list", n)
@@ -1519,59 +2170,158 @@ process_second_level_batch_rows <- function(batch_summary, output_dir,
       n, n_workers
     ))
   }
-  cluster <- parallel::makeCluster(n_workers)
-  on.exit(parallel::stopCluster(cluster), add = TRUE)
-  package_root <- appusage_package_root_for_workers()
-  parallel::clusterExport(
-    cluster,
-    varlist = c(
-      "batch_summary", "output_dir", "overwrite", "resume",
-      "second_level_args", "package_root"
-    ),
-    envir = environment()
+  processing_order <- second_level_processing_order(batch_summary)
+  rows <- vector("list", n)
+  checkpoint_base_path <- appusage_second_level_checkpoint_base_path(
+    batch_summary,
+    output_dir
   )
-  parallel::clusterEvalQ(cluster, {
-    if (!requireNamespace("appusageR", quietly = TRUE)) {
-      if (requireNamespace("pkgload", quietly = TRUE) &&
-        file.exists(file.path(package_root, "DESCRIPTION"))) {
-        pkgload::load_all(package_root, quiet = TRUE)
-      } else {
-        stop("Package appusageR is not available on the parallel worker.")
+  checkpoint_run_id <- appusage_second_level_checkpoint_run_id()
+  package_root <- appusage_package_root_for_workers()
+  cluster <- NULL
+  active_worker_count <- n_workers
+  export_env <- environment()
+  stop_owned_cluster <- function() {
+    if (is.null(cluster)) {
+      return(invisible(NULL))
+    }
+    owned_cluster <- cluster
+    cluster <<- NULL
+    tryCatch(
+      appusage_stop_cluster_safely(owned_cluster),
+      error = function(e) invisible(e)
+    )
+    invisible(NULL)
+  }
+  on.exit(stop_owned_cluster(), add = TRUE)
+  chunk_size <- appusage_second_level_chunk_size(
+    n_workers,
+    checkpoint_chunk_multiplier
+  )
+  chunks <- split(
+    processing_order,
+    ceiling(seq_along(processing_order) / chunk_size)
+  )
+  for (chunk_index in seq_along(chunks)) {
+    chunk <- chunks[[chunk_index]]
+    chunk_rows <- NULL
+    if (active_worker_count == 1L) {
+      chunk_rows <- appusage_execute_second_level_serial(
+        chunk,
+        batch_summary,
+        output_dir,
+        overwrite = overwrite,
+        resume = resume,
+        second_level_args = second_level_args
+      )
+    } else {
+      if (is.null(cluster)) {
+        setup_result <- tryCatch(
+          list(
+            cluster = appusage_start_second_level_cluster(
+              active_worker_count,
+              export_env
+            ),
+            error = NULL
+          ),
+          error = function(e) list(cluster = NULL, error = e)
+        )
+        if (is.null(setup_result$error)) {
+          cluster <- setup_result$cluster
+        } else if (appusage_is_cluster_transport_error(setup_result$error)) {
+          recovery <- appusage_recover_second_level_chunk(
+            first_error = setup_result$error,
+            task_indices = chunk,
+            planned_task_indices = processing_order,
+            worker_count = active_worker_count,
+            batch_summary = batch_summary,
+            output_dir = output_dir,
+            overwrite = overwrite,
+            second_level_args = second_level_args,
+            export_env = export_env
+          )
+          chunk_rows <- recovery$rows
+          cluster <- recovery$cluster
+          active_worker_count <- recovery$worker_count
+        } else {
+          appusage_signal_second_level_cluster_error(
+            error = setup_result$error,
+            output_dir = output_dir,
+            current_task_indices = chunk,
+            planned_task_indices = processing_order,
+            worker_count = active_worker_count
+          )
+        }
+      }
+      if (is.null(chunk_rows)) {
+        chunk_result <- tryCatch(
+          list(
+            rows = appusage_execute_second_level_chunk(
+              cluster,
+              chunk,
+              batch_summary,
+              output_dir,
+              overwrite = overwrite,
+              resume = resume,
+              second_level_args = second_level_args
+            ),
+            error = NULL
+          ),
+          error = function(e) list(rows = NULL, error = e)
+        )
+        if (is.null(chunk_result$error)) {
+          chunk_rows <- chunk_result$rows
+        } else {
+          first_error <- chunk_result$error
+          stop_owned_cluster()
+          if (!appusage_is_cluster_transport_error(first_error)) {
+            appusage_signal_second_level_cluster_error(
+              error = first_error,
+              output_dir = output_dir,
+              current_task_indices = chunk,
+              planned_task_indices = processing_order,
+              worker_count = active_worker_count
+            )
+          }
+          recovery <- appusage_recover_second_level_chunk(
+            first_error = first_error,
+            task_indices = chunk,
+            planned_task_indices = processing_order,
+            worker_count = active_worker_count,
+            batch_summary = batch_summary,
+            output_dir = output_dir,
+            overwrite = overwrite,
+            second_level_args = second_level_args,
+            export_env = export_env
+          )
+          chunk_rows <- recovery$rows
+          cluster <- recovery$cluster
+          active_worker_count <- recovery$worker_count
+        }
       }
     }
-    NULL
-  })
-  processing_order <- second_level_processing_order(batch_summary)
-  ordered_rows <- parallel::parLapplyLB(cluster, processing_order, function(i) {
-    worker <- get("write_second_level_one", envir = asNamespace("appusageR"))
-    annotator <- get("appusage_annotate_worker_result", envir = asNamespace("appusageR"))
-    row <- worker(
-      batch_summary = batch_summary,
-      index = i,
-      output_dir = output_dir,
-      overwrite = overwrite,
-      resume = resume,
-      second_level_args = second_level_args
-    )
-    annotator(
-      row,
-      stage = "second-level",
-      task_index = i,
-      worker_pid = Sys.getpid()
-    )
-  })
-  rows <- vector("list", n)
-  rows[processing_order] <- ordered_rows
-  if (isTRUE(progress)) {
-    for (i in seq_along(rows)) {
-      appusage_emit_parallel_progress(
-        progress = progress,
-        stage = "second-level",
-        row = rows[[i]],
-        index = i,
-        total = n
-      )
+    rows[chunk] <- chunk_rows
+    if (isTRUE(progress)) {
+      for (i in chunk) {
+        appusage_emit_parallel_progress(
+          progress = progress,
+          stage = "second-level",
+          row = rows[[i]],
+          index = i,
+          total = n
+        )
+      }
     }
+    checkpoint_summary <- appusage_second_level_checkpoint_summary(
+      rows,
+      batch_summary
+    )
+    appusage_write_second_level_checkpoint(
+      checkpoint_summary,
+      checkpoint_base_path,
+      run_id = checkpoint_run_id,
+      chunk_index = chunk_index
+    )
   }
   rows
 }
@@ -1861,7 +2611,7 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
     ))
   }
   cluster <- parallel::makeCluster(n_cores)
-  on.exit(parallel::stopCluster(cluster), add = TRUE)
+  on.exit(appusage_stop_cluster_safely(cluster), add = TRUE)
   package_root <- appusage_package_root_for_workers()
   parallel::clusterExport(
     cluster,
@@ -2309,6 +3059,10 @@ second_level_existing_cache_status <- function(first_level_rda, output_dir = NUL
     reason <- if (rda_exists) "rda_only_partial_cache" else "json_only_partial_cache"
     return(c(paths, list(status = "incomplete", reason = reason)))
   }
+  rda_size <- appusage_file_size_bytes(paths$rda_file)
+  if (is.na(rda_size) || rda_size <= 0) {
+    return(c(paths, list(status = "incomplete", reason = "empty_proc2_rda")))
+  }
   metadata <- tryCatch(
     jsonlite::read_json(paths$json_file, simplifyVector = TRUE),
     error = function(e) NULL
@@ -2323,13 +3077,25 @@ second_level_existing_cache_status <- function(first_level_rda, output_dir = NUL
   expected_first <- normalizePath(first_level_rda, winslash = "/", mustWork = FALSE)
   recorded_first <- appusage_nested_value(metadata, c("outputs", "first_level_rda"))
   recorded_second <- appusage_nested_value(metadata, c("outputs", "second_level_rda"))
+  recorded_metadata <- appusage_nested_value(metadata, c("outputs", "metadata_json"))
   if (is_present_string(recorded_first) &&
     !identical(normalizePath(recorded_first, winslash = "/", mustWork = FALSE), expected_first)) {
     return(c(paths, list(status = "incomplete", reason = "first_level_rda_mismatch")))
   }
-  if (is_present_string(recorded_second) &&
-    !identical(normalizePath(recorded_second, winslash = "/", mustWork = FALSE), paths$rda_file)) {
+  if (!is_present_string(recorded_second)) {
+    return(c(paths, list(status = "incomplete", reason = "missing_second_level_rda_path")))
+  }
+  if (!identical(normalizePath(recorded_second, winslash = "/", mustWork = FALSE), paths$rda_file)) {
     return(c(paths, list(status = "incomplete", reason = "second_level_rda_mismatch")))
+  }
+  if (!is_present_string(recorded_metadata)) {
+    return(c(paths, list(status = "incomplete", reason = "missing_metadata_json_path")))
+  }
+  if (!identical(
+    normalizePath(recorded_metadata, winslash = "/", mustWork = FALSE),
+    paths$json_file
+  )) {
+    return(c(paths, list(status = "incomplete", reason = "metadata_json_mismatch")))
   }
   if (!is.null(batch_summary) && !is.null(index)) {
     recorded_id <- appusage_nested_value(metadata, c("identity", "participant_id"))

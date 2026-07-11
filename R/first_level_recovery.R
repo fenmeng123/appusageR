@@ -892,6 +892,12 @@ appusage_write_first_level_checkpoint <- function(rows, path) {
   }
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   utils::write.csv(summary, path, row.names = FALSE, na = "")
+  appusage_refresh_workflow_checkpoint_safely(
+    project_root = dirname(path),
+    stage = "first_level",
+    checkpoint_path = path,
+    row_count = nrow(summary)
+  )
   invisible(path)
 }
 

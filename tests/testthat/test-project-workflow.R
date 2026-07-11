@@ -254,6 +254,51 @@ test_that("project workflow can skip complete first-level summary and run second
   expect_equal(resumed$second_level$status[[1]], "success")
 })
 
+test_that("project workflow resumes from an early config without completed stage", {
+  raw_root <- file.path(tempdir(), paste0("appusage_project_early_config_raw_", sample.int(1e8, 1)))
+  project_dir <- file.path(raw_root, "ProjectName-StudyA_ProjectID-123")
+  dir.create(project_dir, recursive = TRUE)
+  file.copy(
+    testthat::test_path("fixtures", "line_sample.txt"),
+    file.path(project_dir, "1001_AppUsage_line_2024_1_2_3_4_5.txt")
+  )
+  output_root <- file.path(tempdir(), paste0("appusage_project_early_config_", sample.int(1e8, 1)))
+  first_run <- run_appusage_project_workflow(
+    project_dir = project_dir,
+    project_id = "123",
+    project_name = "StudyA",
+    output_root = output_root,
+    run_second_level = FALSE,
+    run_qc = FALSE,
+    overwrite = TRUE,
+    progress = FALSE
+  )
+  config <- readRDS(first_run$configuration_file)
+  config$workflow_state$run_status <- "initialized"
+  config$workflow_state$current_stage <- "initialized"
+  config$workflow_state$last_completed_stage <- NA_character_
+  config$workflow_state$stage_completed_at <- list()
+  config$workflow_state$stage_status <- list()
+  appusage_write_workflow_configuration(config)
+
+  resumed <- run_appusage_project_workflow(
+    project_dir = project_dir,
+    project_id = "123",
+    project_name = "StudyA",
+    output_root = output_root,
+    run_second_level = FALSE,
+    run_qc = FALSE,
+    resume = TRUE,
+    overwrite = FALSE,
+    progress = FALSE
+  )
+
+  expect_true(isTRUE(resumed$resumed))
+  expect_equal(resumed$first_level$status[[1]], "success")
+  resumed_config <- readRDS(resumed$configuration_file)
+  expect_equal(resumed_config$workflow_state$run_status, "completed")
+})
+
 test_that("project workflow records first-level worker controls and decision", {
   raw_root <- file.path(tempdir(), paste0("appusage_project_worker_raw_", sample.int(1e8, 1)))
   project_dir <- file.path(raw_root, "ProjectName-StudyA_ProjectID-123")
@@ -290,6 +335,218 @@ test_that("project workflow records first-level worker controls and decision", {
   expect_equal(config$first_level_options$worker_decision$selected_workers, 1L)
   expect_true(config$first_level_options$worker_decision$worker_cap_override)
   expect_equal(result$first_level_worker_decision$cap_reason, "explicit_worker_cap_override")
+})
+
+test_that("workflow config exists before first-level work and records failures", {
+  raw_root <- file.path(tempdir(), paste0("appusage_config_early_raw_", sample.int(1e8, 1)))
+  project_dir <- file.path(raw_root, "ProjectName-StudyA_ProjectID-123")
+  dir.create(project_dir, recursive = TRUE)
+  file.copy(
+    testthat::test_path("fixtures", "line_sample.txt"),
+    file.path(project_dir, "1001_AppUsage_line_2024_1_2_3_4_5.txt")
+  )
+  output_root <- file.path(tempdir(), paste0("appusage_config_early_", sample.int(1e8, 1)))
+  project_root <- file.path(output_root, "ProjectName-StudyA_ProjectID-123")
+  config_file <- file.path(project_root, "workflow_configuration.rds")
+  observed_before_work <- FALSE
+  original <- simpleError("synthetic first-level failure")
+  testthat::local_mocked_bindings(
+    read_appusage_batch = function(...) {
+      observed_before_work <<- file.exists(config_file) &&
+        identical(readRDS(config_file)$workflow_state$current_stage, "first_level")
+      stop(original)
+    },
+    .package = "appusageR"
+  )
+
+  observed <- tryCatch(
+    run_appusage_project_workflow(
+      project_dir = project_dir,
+      project_id = "123",
+      project_name = "StudyA",
+      output_root = output_root,
+      run_second_level = FALSE,
+      run_qc = FALSE,
+      overwrite = TRUE,
+      progress = FALSE
+    ),
+    error = identity
+  )
+
+  expect_identical(observed, original)
+  expect_true(observed_before_work)
+  config <- readRDS(config_file)
+  expect_equal(config$workflow_state$run_status, "failed")
+  expect_equal(config$workflow_state$current_stage, "first_level")
+  expect_equal(config$workflow_state$stage_status$first_level, "failed")
+  expect_equal(config$workflow_state$last_error$condition_message, conditionMessage(original))
+})
+
+test_that("second-level failures leave first-level completed and preserve condition", {
+  raw_root <- file.path(tempdir(), paste0("appusage_config_second_raw_", sample.int(1e8, 1)))
+  project_dir <- file.path(raw_root, "ProjectName-StudyA_ProjectID-123")
+  dir.create(project_dir, recursive = TRUE)
+  file.copy(
+    testthat::test_path("fixtures", "line_sample.txt"),
+    file.path(project_dir, "1001_AppUsage_line_2024_1_2_3_4_5.txt")
+  )
+  output_root <- file.path(tempdir(), paste0("appusage_config_second_", sample.int(1e8, 1)))
+  original <- simpleError("synthetic second-level failure")
+  testthat::local_mocked_bindings(
+    write_second_level_batch = function(...) stop(original),
+    .package = "appusageR"
+  )
+
+  observed <- tryCatch(
+    run_appusage_project_workflow(
+      project_dir = project_dir,
+      project_id = "123",
+      project_name = "StudyA",
+      output_root = output_root,
+      run_second_level = TRUE,
+      run_qc = FALSE,
+      overwrite = TRUE,
+      progress = FALSE
+    ),
+    error = identity
+  )
+
+  expect_identical(observed, original)
+  config_file <- file.path(
+    output_root,
+    "ProjectName-StudyA_ProjectID-123",
+    "workflow_configuration.rds"
+  )
+  config <- readRDS(config_file)
+  expect_equal(config$workflow_state$run_status, "failed")
+  expect_equal(config$workflow_state$current_stage, "second_level")
+  expect_equal(config$workflow_state$last_completed_stage, "first_level")
+})
+
+test_that("successful workflow state records workers stages and checkpoints", {
+  fixture <- project_workflow_fixture(include_good = TRUE)
+  output_root <- file.path(tempdir(), paste0("appusage_config_success_", sample.int(1e8, 1)))
+
+  result <- run_appusage_project_workflow(
+    project_dir = fixture$project,
+    project_name = "StudyA",
+    project_id = "123",
+    output_root = output_root,
+    overwrite = TRUE,
+    progress = FALSE,
+    parallel = TRUE,
+    n_cores = 2,
+    diagnostic_verbosity = "none"
+  )
+  config <- readRDS(result$configuration_file)
+  state <- config$workflow_state
+
+  expect_equal(state$run_status, "completed")
+  expect_equal(state$current_stage, "completed")
+  expect_equal(state$last_completed_stage, "completed")
+  expect_equal(state$requested_shared_n_cores, 2L)
+  expect_true(!is.null(state$first_level_worker_decision$selected_workers))
+  expect_equal(state$second_level_worker_decision$requested_workers, 2L)
+  expect_true(all(c(
+    "first_level", "second_level", "qc",
+    "self_report_matching", "completed"
+  ) %in% names(state$stage_completed_at)))
+  expect_true(file.exists(state$checkpoints$first_level$path))
+  expect_gt(state$checkpoints$first_level$row_count, 0L)
+  expect_true(file.exists(state$checkpoints$second_level$path))
+  expect_gt(state$checkpoints$second_level$row_count, 0L)
+})
+
+test_that("atomic workflow config promotion failure preserves prior config", {
+  project_root <- file.path(
+    tempdir(),
+    paste0("appusage_config_atomic_", sample.int(1e8, 1))
+  )
+  config <- list(
+    output_study_dir = project_root,
+    marker = "original",
+    workflow_state = list(checkpoints = list())
+  )
+  config_file <- appusage_write_workflow_configuration(config)
+  promote <- appusage_promote_workflow_file
+  failed_once <- FALSE
+  testthat::local_mocked_bindings(
+    appusage_promote_workflow_file = function(from, to) {
+      if (!failed_once && appusage_normalized_paths_equal(to, config_file)) {
+        failed_once <<- TRUE
+        return(FALSE)
+      }
+      promote(from, to)
+    },
+    .package = "appusageR"
+  )
+  changed <- config
+  changed$marker <- "changed"
+
+  expect_error(
+    appusage_write_workflow_configuration(changed),
+    "Could not promote"
+  )
+
+  expect_equal(readRDS(config_file)$marker, "original")
+  leftovers <- list.files(
+    project_root,
+    pattern = "[.]appusage-(tmp|backup)-",
+    full.names = TRUE,
+    all.files = TRUE
+  )
+  expect_length(leftovers, 0L)
+})
+
+test_that("checkpoint config refresh is durable and failure-safe", {
+  project_root <- file.path(
+    tempdir(),
+    paste0("appusage_config_checkpoint_", sample.int(1e8, 1))
+  )
+  config <- list(
+    output_study_dir = project_root,
+    workflow_state = list(checkpoints = list())
+  )
+  appusage_write_workflow_configuration(config)
+  checkpoint <- file.path(project_root, "analytic_summary_table_proclevel-1.checkpoint.csv")
+  utils::write.csv(data.frame(index = 1:3), checkpoint, row.names = FALSE)
+
+  expect_true(appusage_refresh_workflow_checkpoint_safely(
+    project_root,
+    "first_level",
+    checkpoint,
+    3L
+  ))
+  refreshed <- readRDS(file.path(project_root, "workflow_configuration.rds"))
+  expect_equal(refreshed$workflow_state$checkpoints$first_level$row_count, 3L)
+  expect_equal(
+    refreshed$workflow_state$checkpoints$first_level$path,
+    normalizePath(checkpoint, winslash = "/")
+  )
+  testthat::local_mocked_bindings(
+    appusage_write_workflow_configuration = function(config) {
+      stop("synthetic config refresh failure")
+    },
+    .package = "appusageR"
+  )
+
+  expect_false(appusage_refresh_workflow_checkpoint_safely(
+    project_root,
+    "first_level",
+    checkpoint,
+    4L
+  ))
+  unchanged <- readRDS(file.path(project_root, "workflow_configuration.rds"))
+  expect_equal(
+    unchanged$workflow_state$checkpoints$first_level$row_count,
+    3L
+  )
+  diagnostic_files <- list.files(
+    file.path(project_root, "diagnostics"),
+    pattern = "^workflow_configuration_.*[.]json$",
+    full.names = TRUE
+  )
+  expect_length(diagnostic_files, 1L)
 })
 
 test_that("scan_appusage_project_root does not count project subdirectories as files", {
@@ -386,6 +643,10 @@ test_that("run_appusage_project_workflow dry run writes manifest only", {
   expect_false(dir.exists(file.path(result$project_dir, "proclevel-2")))
   expect_false(dir.exists(file.path(result$project_dir, "proclevel-3")))
   expect_false(dir.exists(file.path(result$project_dir, "proclevel-tmp")))
+  config <- readRDS(result$configuration_file)
+  expect_equal(config$workflow_state$run_status, "dry_run")
+  expect_equal(config$workflow_state$current_stage, "dry_run")
+  expect_false(identical(config$workflow_state$last_completed_stage, "completed"))
 })
 
 test_that("project workflow non-strict mode continues after bad files and writes diagnostics", {
@@ -1007,4 +1268,169 @@ test_that("matching-only resume prints matching output without false preprocessi
   expect_false(grepl("\\| first-level \\| sub-", text))
   expect_false(grepl("\\| second-level \\| sub-", text))
   expect_false(grepl("\\| QC-daily-qc-v1 \\| sub-", text))
+})
+
+appusage_mixed_type_workbook_fixture <- function() {
+  testthat::skip_if_not_installed("openxlsx")
+  path <- tempfile(fileext = ".xlsx")
+  workbook <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(workbook, "survey")
+  openxlsx::writeData(
+    workbook,
+    "survey",
+    data.frame(mixed_value = rep(TRUE, 1405L)),
+    colNames = TRUE
+  )
+  openxlsx::writeData(
+    workbook,
+    "survey",
+    "late text value",
+    startCol = 1L,
+    startRow = 1406L,
+    colNames = FALSE
+  )
+  openxlsx::saveWorkbook(workbook, path, overwrite = TRUE)
+  path
+}
+
+test_that("self-report reader guesses across the full selected sheet", {
+  workbook <- appusage_mixed_type_workbook_fixture()
+  diagnostics_dir <- tempfile("self-report-diagnostics-")
+
+  result <- appusage_read_self_report_workbook(
+    workbook,
+    diagnostics_dir = diagnostics_dir,
+    emit_warning = FALSE
+  )
+
+  expect_equal(nrow(result$data), 1405L)
+  expect_equal(result$data$mixed_value[[1405]], "late text value")
+  expect_identical(result$diagnostics$effective_guess_max, "Inf")
+  expect_equal(result$diagnostics$warning_count, 0L)
+  expect_true(file.exists(result$diagnostics_file))
+})
+
+test_that("explicit incompatible self-report col_types records one concise warning", {
+  workbook <- appusage_mixed_type_workbook_fixture()
+  diagnostics_dir <- tempfile("self-report-coercion-")
+  package_warnings <- character()
+
+  result <- withCallingHandlers(
+    appusage_read_self_report_workbook(
+      workbook,
+      col_types = "logical",
+      diagnostics_dir = diagnostics_dir,
+      emit_warning = TRUE
+    ),
+    warning = function(w) {
+      package_warnings <<- c(package_warnings, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }
+  )
+
+  expect_length(package_warnings, 1L)
+  expect_match(package_warnings[[1]], "Self-report workbook read produced")
+  expect_true(is.na(result$data$mixed_value[[1405]]))
+  expect_gt(result$diagnostics$warning_count, 0L)
+  expect_true(all(vapply(
+    result$diagnostics$warnings,
+    function(x) all(c("timestamp", "message", "category") %in% names(x)),
+    logical(1)
+  )))
+  expect_true(any(vapply(
+    result$diagnostics$warnings,
+    function(x) identical(x$category, "type_coercion"),
+    logical(1)
+  )))
+  persisted <- jsonlite::read_json(result$diagnostics_file, simplifyVector = TRUE)
+  expect_equal(persisted$read_status, "success")
+  expect_equal(persisted$warning_count, result$diagnostics$warning_count)
+})
+
+test_that("self-report read failure writes diagnostics and preserves the condition", {
+  workbook <- appusage_mixed_type_workbook_fixture()
+  diagnostics_dir <- tempfile("self-report-read-error-")
+  original <- structure(
+    simpleError("synthetic workbook read failure"),
+    class = c("appusage_test_workbook_error", "error", "condition")
+  )
+  testthat::local_mocked_bindings(
+    appusage_read_excel_impl = function(...) stop(original)
+  )
+
+  expect_error(
+    appusage_read_self_report_workbook(
+      workbook,
+      diagnostics_dir = diagnostics_dir
+    ),
+    "synthetic workbook read failure",
+    class = "appusage_test_workbook_error"
+  )
+  diagnostic_file <- file.path(diagnostics_dir, "self_report_read.json")
+  expect_true(file.exists(diagnostic_file))
+  persisted <- jsonlite::read_json(diagnostic_file, simplifyVector = TRUE)
+  expect_equal(persisted$read_status, "error")
+  expect_match(persisted$error_condition_message, "synthetic workbook read failure")
+})
+
+test_that("project workflow reads the self-report workbook once and reuses its table", {
+  testthat::skip_if_not_installed("openxlsx")
+  fixture <- project_workflow_root_fixture()
+  output_root <- tempfile("appusage-single-workbook-read-")
+  original_reader <- appusage_read_excel_impl
+  read_count <- 0L
+  testthat::local_mocked_bindings(
+    appusage_read_excel_impl = function(...) {
+      read_count <<- read_count + 1L
+      original_reader(...)
+    }
+  )
+
+  result <- run_appusage_project_workflow(
+    raw_data_root = fixture$root,
+    project_id = "123",
+    project_name = "StudyA",
+    output_root = output_root,
+    sequence_col = names(openxlsx::read.xlsx(fixture$excel))[[1]],
+    upload_col = "upload",
+    submit_time_col = names(openxlsx::read.xlsx(fixture$excel))[[3]],
+    overwrite = TRUE,
+    progress = FALSE,
+    diagnostic_verbosity = "none"
+  )
+
+  expect_equal(read_count, 1L)
+  expect_equal(nrow(result$matched_self_report), 1L)
+  expect_equal(result$matched_self_report$moSens_match_status[[1]], "matched")
+  expect_false("moSens_metadata_json" %in% names(result$matched_self_report))
+  expect_equal(result$self_report_read_diagnostics$n_rows, 1L)
+  config <- readRDS(result$configuration_file)
+  expect_equal(config$self_report_sheet, 1)
+  expect_true(is.na(config$self_report_guess_max))
+  expect_identical(config$self_report_col_types, character())
+  expect_equal(config$self_report_read$warning_count, 0L)
+})
+
+test_that("workflow configuration compatibility includes workbook read controls", {
+  current <- list(
+    self_report_sheet = 1,
+    self_report_guess_max = NA_real_,
+    self_report_col_types = character()
+  )
+  expect_length(appusage_workflow_config_differences(list(), current), 0L)
+
+  changed_sheet <- current
+  changed_sheet$self_report_sheet <- "Survey"
+  expect_true("self_report_sheet" %in%
+    appusage_workflow_config_differences(current, changed_sheet))
+
+  changed_guess <- current
+  changed_guess$self_report_guess_max <- 1500
+  expect_true("self_report_guess_max" %in%
+    appusage_workflow_config_differences(current, changed_guess))
+
+  changed_types <- current
+  changed_types$self_report_col_types <- c("text", "numeric")
+  expect_true("self_report_col_types" %in%
+    appusage_workflow_config_differences(current, changed_types))
 })

@@ -16,6 +16,9 @@ run_appusage_project_workflow(
   submit_time_col = NULL,
   max_files = Inf,
   self_report_n_max = Inf,
+  self_report_sheet = 1,
+  self_report_guess_max = NULL,
+  self_report_col_types = NULL,
   resume = TRUE,
   export_type_priority = c("line", "meta", "day", "app"),
   dry_run = FALSE,
@@ -67,6 +70,16 @@ candidate tie-breaking.}
 lexicographic basename order. Intended for bounded smoke tests.}
 
 \item{self_report_n_max}{Maximum number of self-report rows to read.}
+
+\item{self_report_sheet}{Excel sheet name or index to read from the paired
+self-report workbook. Defaults to the first sheet.}
+
+\item{self_report_guess_max}{Number of selected rows used by \code{\link[readxl:read_excel]{readxl::read_excel()}}
+for type inference. The default uses the full selected row range: \code{Inf}
+when \code{self_report_n_max} is unlimited, otherwise \code{self_report_n_max}.}
+
+\item{self_report_col_types}{Optional readxl-compatible column types. When
+supplied, read/coercion warnings are retained in project diagnostics.}
 
 \item{resume}{Whether to reuse compatible existing outputs.}
 
