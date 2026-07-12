@@ -9,7 +9,8 @@ plan_appusage_project_rebuild(
   current_provenance = NULL,
   tz = appusage_default_timezone(),
   write_plan = FALSE,
-  plan_file = NULL
+  plan_file = NULL,
+  failure_audit = NULL
 )
 }
 \arguments{
@@ -26,6 +27,10 @@ omitted, it is computed from the loaded package with \code{tz}.}
 
 \item{plan_file}{Optional preview CSV path. Defaults to
 \code{rebuild_plan_preview.csv} under \code{project_dir} when writing is requested.}
+
+\item{failure_audit}{Optional package-failure audit data frame or CSV path.
+Audit evidence is filtered to the current \code{project_id} and matched by
+source path and/or summary index. It is never loaded by default.}
 }
 \value{
 A tibble with one row per manifest source, deterministic action and

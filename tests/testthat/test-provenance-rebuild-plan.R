@@ -313,6 +313,320 @@ test_that("planner detects duplicate and extra proc-2 summary identities", {
   )
 })
 
+test_that("legacy proc-1 RDA columns bridge asymmetric proc-2 identities", {
+  current <- appusageR:::appusage_build_run_provenance(
+    workflow_run_id = "run-legacy-bridge",
+    git_sha = paste(rep("4", 40), collapse = ""),
+    git_dirty = FALSE, package_root = tempdir()
+  )
+  root <- file.path(
+    tempdir(), paste0("Study-Legacy_ProjectID-", sample(100000:999999, 1L))
+  )
+  dir.create(file.path(root, "diagnostics"), recursive = TRUE)
+  dir.create(file.path(root, "proclevel-2"))
+  source_file <- file.path(root, paste0("legacy-source-", 1:3, ".txt"))
+  proc1 <- file.path(root, "proclevel-1", paste0("legacy-proc1-", 1:3, ".rda"))
+  manifest <- data.frame(
+    index = 1:3, is_txt = TRUE, source_file = source_file,
+    participant_id = as.character(1:3), detected_type = "line",
+    stringsAsFactors = FALSE
+  )
+  first <- transform(
+    manifest, status = "success", data_file = proc1,
+    metadata_file = NA_character_
+  )
+  second <- data.frame(
+    index = 1:3, participant_id = as.character(1:3), detected_type = "line",
+    first_level_rda = c(proc1[[1L]], NA_character_, proc1[[3L]]),
+    first_level_data_file = c(NA_character_, proc1[[2L]], NA_character_),
+    second_level_status = "success", status = "success", qc_status = "success",
+    stringsAsFactors = FALSE
+  )
+  utils::write.csv(
+    manifest, file.path(root, "diagnostics", "project_manifest.csv"), row.names = FALSE
+  )
+  utils::write.csv(
+    first, file.path(root, "analytic_summary_table_proclevel-1.csv"), row.names = FALSE
+  )
+  utils::write.csv(
+    second, file.path(root, "analytic_summary_table_proclevel-2.csv"), row.names = FALSE
+  )
+  testthat::local_mocked_bindings(
+    second_level_existing_cache_status = function(first_level_rda, output_dir,
+                                                   batch_summary, index) {
+      list(
+        status = "complete", pair_state = "complete_valid_pair",
+        reason = "valid_proc2_pair", rda_file = paste0(first_level_rda, ".proc2"),
+        json_file = NA_character_,
+        metadata = list(implementation_provenance = current)
+      )
+    },
+    load_appusage_data_object = function(...) stop("RDA payload must not be loaded"),
+    .package = "appusageR"
+  )
+  plan <- plan_appusage_project_rebuild(root, current_provenance = current)
+  expect_equal(nrow(plan), 3L)
+  expect_true(all(plan$proc2_identity_count == 1L))
+  expect_true(all(plan$proc2_extra_row_count == 0L))
+  expect_false(any(plan$proc2_missing_row))
+  expect_false(any(plan$proc2_duplicate_identity))
+  expect_true(all(plan$proc2_cardinality_status == "valid"))
+  expect_true(all(plan$proc2_match_rule == "proc1_rda_bridge"))
+})
+
+test_that("optional failure audit is project-filtered and authoritative", {
+  current <- appusageR:::appusage_build_run_provenance(
+    workflow_run_id = "run-audit",
+    git_sha = paste(rep("5", 40), collapse = ""),
+    git_dirty = FALSE, package_root = tempdir()
+  )
+  project_id <- as.character(sample(100000:999999, 1L))
+  root <- file.path(tempdir(), paste0("Study-Audit_ProjectID-", project_id))
+  dir.create(file.path(root, "diagnostics"), recursive = TRUE)
+  source_file <- file.path(root, paste0("audit-source-", 1:4, ".txt"))
+  manifest <- data.frame(
+    index = 1:4, is_txt = TRUE, source_file = source_file,
+    participant_id = as.character(1:4), detected_type = "line",
+    stringsAsFactors = FALSE
+  )
+  first <- transform(
+    manifest, status = "error", failure_family = "parser_or_unknown",
+    failure_attribution = NA_character_, data_file = NA_character_,
+    metadata_file = NA_character_
+  )
+  first$status[[1L]] <- "success"
+  second <- data.frame(
+    index = 1:4, participant_id = as.character(1:4), detected_type = "line",
+    second_level_status = "skipped", status = "skipped",
+    stringsAsFactors = FALSE
+  )
+  utils::write.csv(
+    manifest, file.path(root, "diagnostics", "project_manifest.csv"), row.names = FALSE
+  )
+  utils::write.csv(
+    first, file.path(root, "analytic_summary_table_proclevel-1.csv"), row.names = FALSE
+  )
+  utils::write.csv(
+    second, file.path(root, "analytic_summary_table_proclevel-2.csv"), row.names = FALSE
+  )
+  audit <- data.frame(
+    project_id = c(rep(project_id, 4L), "other-project"),
+    summary_index = c(1:4, 1L),
+    source_file = c(source_file, source_file[[1L]]),
+    attribution = c("package_code", "raw_data", "package_code", "package_code", "package_code"),
+    pattern = c(
+      "memory_allocation", "memory_allocation",
+      "content_detection_or_header_variant_gap", "resume_cache_collision",
+      "memory_allocation"
+    ),
+    recommended_action = c(
+      "retry_first_level", "no_retry", "rebuild", "reconcile", "retry"
+    ),
+    stringsAsFactors = FALSE
+  )
+  plan <- plan_appusage_project_rebuild(
+    root, current_provenance = current, failure_audit = audit
+  )
+  expect_equal(nrow(plan), 4L)
+  expect_equal(plan$failure_attribution_source, rep("failure_audit", 4L))
+  expect_equal(plan$failure_audit_pattern, audit$pattern[1:4])
+  expect_match(plan$requested_actions[[1L]], "retry_first_level")
+  expect_false(grepl("retry_first_level", plan$requested_actions[[2L]], fixed = TRUE))
+  expect_match(plan$requested_actions[[3L]], "rebuild_first_and_second_level")
+  expect_match(plan$requested_actions[[4L]], "reconcile_cache_identity")
+})
+
+test_that("failure audit path evidence prevents index reuse", {
+  source_order <- data.frame(
+    index = 1:2,
+    source_file = c("C:/synthetic/source-a.txt", "C:/synthetic/source-b.txt"),
+    stringsAsFactors = FALSE
+  )
+  audit <- data.frame(
+    summary_index = 2L,
+    source_file = "C:/synthetic/source-a.txt",
+    .audit_row_id = 17L,
+    stringsAsFactors = FALSE
+  )
+  matched <- appusageR:::appusage_plan_match_failure_audit(source_order, audit)
+  expect_equal(matched$index[[1L]], 1L)
+  expect_true(is.na(matched$index[[2L]]))
+  expect_equal(matched$status[[1L]], "matched_source_file")
+  expect_equal(matched$row_id[[1L]], 17L)
+  expect_match(matched$ambiguity[[1L]], "index_disagrees")
+  expect_equal(matched$status[[2L]], "audit_path_unmatched")
+  expect_match(matched$ambiguity[[2L]], "index_fallback_blocked")
+  expect_equal(sum(!is.na(matched$index)), 1L)
+})
+
+test_that("duplicate audit evidence is aggregated onto one resolved source", {
+  source_order <- data.frame(
+    index = 1L, audit_summary_index = 2L,
+    source_file = "C:/synthetic/source-a.txt",
+    audit_source_file = "C:/synthetic/source-a.txt",
+    stringsAsFactors = FALSE
+  )
+  audit <- data.frame(
+    summary_index = c(1L, 2L),
+    source_file = rep("C:/synthetic/source-a.txt", 2L),
+    attribution = "package_code", pattern = "resume_cache_collision",
+    recommended_action = "reconcile", .audit_row_id = c(21L, 22L),
+    stringsAsFactors = FALSE
+  )
+  matched <- appusageR:::appusage_plan_match_failure_audit(source_order, audit)
+  expect_equal(matched$matched_count[[1L]], 2L)
+  expect_equal(matched$indices[[1L]], 1:2)
+  expect_equal(matched$row_ids[[1L]], "21;22")
+  expect_equal(
+    matched$status[[1L]], "matched_source_file_multiple_audit_rows"
+  )
+})
+
+test_that("equal-cardinality reordered proc-1 uses resolved first index for audit", {
+  current <- appusageR:::appusage_build_run_provenance(
+    workflow_run_id = "run-reordered-audit",
+    git_sha = paste(rep("7", 40), collapse = ""),
+    git_dirty = FALSE, package_root = tempdir()
+  )
+  project_id <- as.character(sample(100000:999999, 1L))
+  root <- file.path(tempdir(), paste0("Study-Reordered_ProjectID-", project_id))
+  dir.create(file.path(root, "diagnostics"), recursive = TRUE)
+  source_a <- file.path(root, "source-a.txt")
+  source_b <- file.path(root, "source-b.txt")
+  manifest <- data.frame(
+    index = 1:2, is_txt = TRUE, source_file = c(source_a, source_b),
+    participant_id = c("a", "b"), detected_type = "line",
+    stringsAsFactors = FALSE
+  )
+  first <- data.frame(
+    index = 1:2, source_file = c(source_b, source_a),
+    participant_id = c("b", "a"), detected_type = "line",
+    status = "error", failure_family = "parser_or_unknown",
+    failure_attribution = NA_character_, data_file = NA_character_,
+    metadata_file = NA_character_, stringsAsFactors = FALSE
+  )
+  second <- data.frame(
+    index = 1:2, participant_id = c("a", "b"), detected_type = "line",
+    second_level_status = "skipped", status = "skipped",
+    stringsAsFactors = FALSE
+  )
+  audit <- data.frame(
+    project_id = project_id, summary_index = 2L, source_file = source_a,
+    attribution = "package_code", pattern = "memory_allocation",
+    recommended_action = "retry_first_level", stringsAsFactors = FALSE
+  )
+  utils::write.csv(
+    manifest, file.path(root, "diagnostics", "project_manifest.csv"), row.names = FALSE
+  )
+  utils::write.csv(
+    first, file.path(root, "analytic_summary_table_proclevel-1.csv"), row.names = FALSE
+  )
+  utils::write.csv(
+    second, file.path(root, "analytic_summary_table_proclevel-2.csv"), row.names = FALSE
+  )
+  plan <- plan_appusage_project_rebuild(
+    root, current_provenance = current, failure_audit = audit
+  )
+  row_a <- plan[plan$participant_id == "a", , drop = FALSE]
+  row_b <- plan[plan$participant_id == "b", , drop = FALSE]
+  expect_equal(row_a$resolved_first_summary_index[[1L]], 2L)
+  expect_equal(row_a$failure_attribution_source[[1L]], "failure_audit")
+  expect_equal(row_a$failure_audit_pattern[[1L]], "memory_allocation")
+  expect_match(row_a$requested_actions[[1L]], "retry_first_level")
+  expect_equal(row_b$resolved_first_summary_index[[1L]], 1L)
+  expect_false(identical(row_b$failure_attribution_source[[1L]], "failure_audit"))
+})
+
+test_that("resolved first index disambiguates duplicate paths by summary index", {
+  base <- data.frame(
+    index = 1:3,
+    source_file = c("C:/synthetic/source-x.txt", "C:/synthetic/source-a.txt",
+      "C:/synthetic/source-b.txt"),
+    stringsAsFactors = FALSE
+  )
+  first <- data.frame(
+    index = 1:3,
+    source_file = c("C:/synthetic/source-a.txt", "C:/synthetic/source-a.txt",
+      "C:/synthetic/source-b.txt"),
+    stringsAsFactors = FALSE
+  )
+  resolved <- appusageR:::appusage_plan_match_rows(base, first)
+  expect_equal(resolved, 1:3)
+  expect_equal(length(unique(resolved)), 3L)
+})
+
+test_that("legacy skip mapping uses tiered participant and type rules", {
+  source_order <- data.frame(
+    participant_id = c("unique", "duplicate", "duplicate"),
+    detected_type = c("day", "line", "line"),
+    native_export_created_at = c(
+      "2024-01-01T08:00:00+0800", "2024-01-02T08:00:00+0800",
+      "2024-01-03T08:00:00+0800"
+    ),
+    stringsAsFactors = FALSE
+  )
+  second <- data.frame(
+    participant_id = c("unique", "duplicate", "duplicate"),
+    detected_type = c("day", "line", "line"),
+    second_level_status = "skipped",
+    stringsAsFactors = FALSE
+  )
+  bridge <- appusageR:::appusage_plan_cross_schema_mapping(source_order, second)
+  expect_equal(bridge$source_index_by_summary, 1:3)
+  expect_equal(bridge$summary_count_by_source, rep(1L, 3L))
+  expect_equal(bridge$match_rule_by_summary[[1L]], "participant_type_unique")
+  expect_equal(
+    bridge$match_rule_by_summary[2:3],
+    rep("participant_type_group_order", 2L)
+  )
+})
+
+test_that("legacy JSON memory evidence supports conservative package retry", {
+  current <- appusageR:::appusage_build_run_provenance(
+    workflow_run_id = "run-json-fallback",
+    git_sha = paste(rep("6", 40), collapse = ""),
+    git_dirty = FALSE, package_root = tempdir()
+  )
+  project_id <- as.character(sample(100000:999999, 1L))
+  root <- file.path(tempdir(), paste0("Study-Json_ProjectID-", project_id))
+  dir.create(file.path(root, "diagnostics"), recursive = TRUE)
+  metadata_file <- file.path(root, "legacy-error.json")
+  jsonlite::write_json(list(
+    errors = list(
+      class = "simpleError,error,condition",
+      message = "cannot allocate vector of size 128.0 Mb"
+    )
+  ), metadata_file, auto_unbox = TRUE)
+  source_file <- file.path(root, "legacy-memory.txt")
+  manifest <- data.frame(
+    index = 1L, is_txt = TRUE, source_file = source_file,
+    participant_id = "1", detected_type = "line", stringsAsFactors = FALSE
+  )
+  first <- transform(
+    manifest, status = "error", failure_family = "parser_or_unknown",
+    failure_attribution = NA_character_, data_file = NA_character_,
+    metadata_file = metadata_file
+  )
+  second <- data.frame(
+    index = 1L, participant_id = "1", detected_type = "line",
+    second_level_status = "skipped", status = "skipped",
+    stringsAsFactors = FALSE
+  )
+  utils::write.csv(
+    manifest, file.path(root, "diagnostics", "project_manifest.csv"), row.names = FALSE
+  )
+  utils::write.csv(
+    first, file.path(root, "analytic_summary_table_proclevel-1.csv"), row.names = FALSE
+  )
+  utils::write.csv(
+    second, file.path(root, "analytic_summary_table_proclevel-2.csv"), row.names = FALSE
+  )
+  plan <- plan_appusage_project_rebuild(root, current_provenance = current)
+  expect_equal(plan$failure_attribution_source[[1L]], "first_level_json")
+  expect_equal(plan$failure_family_evidence[[1L]], "memory_allocation")
+  expect_match(plan$requested_actions[[1L]], "retry_first_level")
+})
+
 test_that("planner exposes stale parser, second-level and QC fingerprints", {
   current <- appusageR:::appusage_build_run_provenance(
     workflow_run_id = "run-current", git_sha = paste(rep("f", 40), collapse = ""),
