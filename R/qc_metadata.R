@@ -413,8 +413,16 @@ run_qc_for_second_level_data <- function(data, second_level_rda, participant_id,
                                          max_daily_total_ms = 24 * 60 * 60 * 1000,
                                          max_export_lookback_days = 31,
                                          meta_diff_abs_ms = 60 * 1000,
-                                         meta_diff_ratio = 0.20) {
+                                         meta_diff_ratio = 0.20,
+                                         stage_callback = NULL) {
+  notify_stage <- function(stage, status, details = NULL) {
+    if (is.function(stage_callback)) {
+      stage_callback(stage, status, details)
+    }
+    invisible(NULL)
+  }
   counts <- second_level_qc_counts(data)
+  notify_stage("anomaly_qc", "started")
   anomaly_qc <- qc_appusage_anomalies(
     data,
     metadata = metadata,
@@ -426,6 +434,11 @@ run_qc_for_second_level_data <- function(data, second_level_rda, participant_id,
     meta_diff_ratio = meta_diff_ratio
   )
   counts$n_anomalies <- anomaly_qc$n_anomalies_total
+  notify_stage("anomaly_qc", "completed", list(
+    n_anomalies = anomaly_qc$n_anomalies_total,
+    n_critical_anomalies = anomaly_qc$n_critical_anomalies,
+    n_warning_anomalies = anomaly_qc$n_warning_anomalies
+  ))
   if (is.null(data$daily) || !is.data.frame(data$daily)) {
     cli::cli_abort("Second-level RDA does not contain `data$daily`.")
   }
@@ -437,6 +450,7 @@ run_qc_for_second_level_data <- function(data, second_level_rda, participant_id,
   if (!"participant_id" %in% names(daily)) {
     daily$participant_id <- participant_id
   }
+  notify_stage("daily_qc", "started")
   qc <- qc_appusage_day(
     daily,
     participant_col = "participant_id",
@@ -452,6 +466,11 @@ run_qc_for_second_level_data <- function(data, second_level_rda, participant_id,
   }
   qc_row <- qc[1, , drop = FALSE]
   pass_qc <- isTRUE(qc_row$pass_qc[[1]])
+  notify_stage("daily_qc", "completed", list(
+    pass_qc = pass_qc,
+    n_recorded_days = as.integer(qc_row$n_recorded_days[[1]]),
+    n_nonempty_days = as.integer(qc_row$n_nonempty_days[[1]])
+  ))
   source_eligibility <- anomaly_qc$source_anomaly_qc$eligibility %||% list()
   episode_eligible <- pass_qc && counts$n_episode_rows > 0 &&
     !isTRUE(source_eligibility$episode_ineligible)

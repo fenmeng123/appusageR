@@ -212,28 +212,37 @@ appusage_source_qc_interval_segments <- function(x, tz) {
 appusage_interval_overlap_day <- function(x, config) {
   ord <- order(x$start_ts_ms, -x$end_ts_ms, x$source_row)
   x <- x[ord, , drop = FALSE]
-  overlap_count <- 0L
-  cross_package <- 0L
-  contained <- 0L
-  for (i in seq_len(nrow(x))) {
-    if (i == 1L) next
-    prior <- seq_len(i - 1L)
-    active <- prior[x$end_ts_ms[prior] > x$start_ts_ms[[i]]]
-    overlap_count <- overlap_count + length(active)
-    if (length(active)) {
-      cross_package <- cross_package + sum(
-        x$package_name[active] != x$package_name[[i]], na.rm = TRUE
-      )
-      contained <- contained + as.integer(any(x$end_ts_ms[active] >= x$end_ts_ms[[i]]))
-    }
+  start <- as.numeric(x$start_ts_ms)
+  end <- as.numeric(x$end_ts_ms)
+  package <- as.character(x$package_name)
+  overlap_count <- appusage_overlap_pair_count(start, end)
+  package_present <- !is.na(package)
+  cross_package <- 0
+  if (any(package_present)) {
+    nonmissing_overlap <- appusage_overlap_pair_count(
+      start[package_present],
+      end[package_present]
+    )
+    package_groups <- split(
+      which(package_present),
+      package[package_present],
+      drop = TRUE
+    )
+    same_package_overlap <- sum(vapply(package_groups, function(idx) {
+      appusage_overlap_pair_count(start[idx], end[idx])
+    }, numeric(1)))
+    cross_package <- nonmissing_overlap - same_package_overlap
   }
+  prior_max_end <- c(-Inf, cummax(utils::head(end, -1L)))
+  contained <- sum(prior_max_end > start & prior_max_end >= end)
+
   times <- sort(unique(c(x$start_ts_ms, x$end_ts_ms)))
   overlap_ms <- 0
   max_concurrent <- 0L
   if (length(times) > 1L) {
-    delta <- vapply(times, function(value) {
-      sum(x$start_ts_ms == value) - sum(x$end_ts_ms == value)
-    }, integer(1))
+    start_count <- tabulate(match(x$start_ts_ms, times), nbins = length(times))
+    end_count <- tabulate(match(x$end_ts_ms, times), nbins = length(times))
+    delta <- start_count - end_count
     concurrent <- cumsum(delta)
     max_concurrent <- max(concurrent)
     overlap_ms <- sum(diff(times) * pmax(concurrent[-length(concurrent)] - 1L, 0L))
@@ -248,6 +257,31 @@ appusage_interval_overlap_day <- function(x, config) {
     foreground_duration_ms = sum(x$duration_ms),
     foreground_over_24h = sum(x$duration_ms) > config$max_line_daily_foreground_ms
   )
+}
+
+appusage_overlap_pair_count <- function(start, end) {
+  if (length(start) == 0L) return(0)
+  start <- as.numeric(start)
+  end <- as.numeric(end)
+  positive <- end > start
+  count <- 0
+  if (any(positive)) {
+    positive_start <- start[positive]
+    positive_end <- end[positive]
+    ord <- order(positive_start, -positive_end, seq_along(positive_start))
+    positive_start <- positive_start[ord]
+    positive_end <- positive_end[ord]
+    ended <- findInterval(positive_start, sort(positive_end))
+    count <- count + sum(seq_along(positive_start) - 1L - ended)
+  }
+  zero <- end == start
+  if (any(zero) && any(positive)) {
+    point <- start[zero]
+    active_at_point <- findInterval(point, sort(start[positive])) -
+      findInterval(point, sort(end[positive]))
+    count <- count + sum(active_at_point)
+  }
+  as.numeric(count)
 }
 
 appusage_line_timestamp_qc <- function(episode, config) {

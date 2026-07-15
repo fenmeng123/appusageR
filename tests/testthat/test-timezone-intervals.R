@@ -189,6 +189,34 @@ test_that("interval segmentation policies diagnose zero missing and negative row
   expect_equal(diagnostics$n_negative_or_invalid_intervals, 1L)
 })
 
+test_that("interval segmentation scales while preserving source order and duration", {
+  n <- 10000L
+  base <- local_ms("2024-01-01 12:00:00")
+  template <- synthetic_line_interval(
+    "2024-01-01 12:00:00", "2024-01-01 12:00:01"
+  )
+  dense <- template[rep(1L, n), , drop = FALSE]
+  dense$start_ts_ms <- base + seq_len(n) * 2000
+  dense$end_ts_ms <- dense$start_ts_ms + 1000
+  dense$duration_ms <- 1000
+  dense$duration_min <- dense$duration_ms / 60000
+  dense$start_datetime <- ms_to_datetime(dense$start_ts_ms)
+  dense$end_datetime <- ms_to_datetime(dense$end_ts_ms)
+
+  segments <- appusage_interval_segments(dense)
+  diagnostics <- attr(segments, "interval_segmentation_diagnostics")
+
+  expect_equal(nrow(segments), n)
+  expect_identical(segments$.source_row_id, seq_len(n))
+  expect_true(all(segments$.segment_index == 1L))
+  expect_true(all(segments$.segment_count == 1L))
+  expect_true(all(segments$.interval_status == "valid"))
+  expect_equal(sum(segments$duration_ms), sum(dense$duration_ms))
+  expect_equal(diagnostics$n_source_intervals, n)
+  expect_equal(diagnostics$n_daily_segments, n)
+  expect_equal(diagnostics$duration_conservation_diff_ms, 0)
+})
+
 test_that("complete reconstructed meta episodes retain a non-overlapping timeline", {
   events <- dplyr::bind_rows(
     synthetic_meta_interval("2024-01-01 22:00:00", "2024-01-01 22:30:00"),

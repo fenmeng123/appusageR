@@ -45,69 +45,99 @@ appusage_interval_segments <- function(data, tz = appusage_default_timezone()) {
       appusage_interval_segmentation_diagnostics(data, data, tz)
     return(data)
   }
-  rows <- vector("list", nrow(data))
-  for (i in seq_len(nrow(data))) {
-    source <- data[i, , drop = FALSE]
-    start_ms <- suppressWarnings(as.numeric(source$start_ts_ms[[1L]]))
-    end_ms <- suppressWarnings(as.numeric(source$end_ts_ms[[1L]]))
-    duration_ms <- suppressWarnings(as.numeric(source$duration_ms[[1L]]))
-    fallback_date <- if ("date" %in% names(source)) source$date[[1L]] else as.Date(NA)
-    canonical_date <- appusage_date_from_datetime(ms = start_ms, tz = tz)
-    if (length(canonical_date) == 0L || is.na(canonical_date)) {
-      canonical_date <- appusage_date_from_datetime(fallback_date, tz = tz)
-    }
-    status <- if (is.na(start_ms) || is.na(end_ms) || is.na(duration_ms)) {
-      "missing_interval"
-    } else if (end_ms < start_ms || duration_ms < 0) {
-      "invalid_negative_interval"
-    } else if (end_ms == start_ms || duration_ms == 0) {
-      "zero_interval"
-    } else {
-      "valid"
-    }
-    if (!identical(status, "valid")) {
-      source$date <- canonical_date
-      source$.source_row_id <- i
-      source$.segment_index <- 1L
-      source$.segment_count <- 1L
-      source$.interval_status <- status
-      rows[[i]] <- source
-      next
-    }
-    start_date <- appusage_date_from_datetime(ms = start_ms, tz = tz)
-    end_date <- appusage_date_from_datetime(ms = end_ms - 0.001, tz = tz)
-    day_sequence <- seq(start_date, end_date, by = "day")
-    if (length(day_sequence) <= 1L) {
-      source$date <- start_date
-      source$.source_row_id <- i
-      source$.segment_index <- 1L
-      source$.segment_count <- 1L
-      source$.interval_status <- "valid"
-      rows[[i]] <- source
-      next
-    }
-    midnight_dates <- day_sequence[-1L]
-    boundaries <- as.numeric(as.POSIXct(
-      paste(midnight_dates, "00:00:00"),
+  n <- nrow(data)
+  start_ms <- suppressWarnings(as.numeric(data$start_ts_ms))
+  end_ms <- suppressWarnings(as.numeric(data$end_ts_ms))
+  duration_ms <- suppressWarnings(as.numeric(data$duration_ms))
+  fallback_date <- if ("date" %in% names(data)) {
+    appusage_date_from_datetime(data$date, tz = tz)
+  } else {
+    rep(as.Date(NA), n)
+  }
+  canonical_date <- appusage_date_from_datetime(ms = start_ms, tz = tz)
+  use_fallback <- is.na(canonical_date)
+  canonical_date[use_fallback] <- fallback_date[use_fallback]
+
+  status <- rep("valid", n)
+  missing_interval <- is.na(start_ms) | is.na(end_ms) | is.na(duration_ms)
+  negative_interval <- !missing_interval & (end_ms < start_ms | duration_ms < 0)
+  zero_interval <- !missing_interval & !negative_interval &
+    (end_ms == start_ms | duration_ms == 0)
+  status[missing_interval] <- "missing_interval"
+  status[negative_interval] <- "invalid_negative_interval"
+  status[zero_interval] <- "zero_interval"
+  valid <- status == "valid"
+
+  start_date <- rep(as.Date(NA), n)
+  end_date <- rep(as.Date(NA), n)
+  start_date[valid] <- appusage_date_from_datetime(ms = start_ms[valid], tz = tz)
+  end_date[valid] <- appusage_date_from_datetime(ms = end_ms[valid] - 0.001, tz = tz)
+  segment_count <- rep(1L, n)
+  segment_count[valid] <- as.integer(end_date[valid] - start_date[valid]) + 1L
+
+  source_row_id <- rep.int(seq_len(n), segment_count)
+  segment_index <- sequence(segment_count)
+  expanded_valid <- valid[source_row_id]
+  expanded_date <- canonical_date[source_row_id]
+  expanded_date[expanded_valid] <- start_date[source_row_id[expanded_valid]] +
+    segment_index[expanded_valid] - 1L
+
+  out <- data[source_row_id, , drop = FALSE]
+  out$date <- expanded_date
+  out$.source_row_id <- source_row_id
+  out$.segment_index <- as.integer(segment_index)
+  out$.segment_count <- segment_count[source_row_id]
+  out$.interval_status <- status[source_row_id]
+
+  valid_position <- which(expanded_valid)
+  if (length(valid_position) > 0L) {
+    source_index <- source_row_id[valid_position]
+    source_segment_index <- segment_index[valid_position]
+    source_segment_count <- segment_count[source_index]
+    segment_date <- expanded_date[valid_position]
+    midnight_ms <- as.numeric(as.POSIXct(
+      paste(segment_date, "00:00:00"),
       format = "%Y-%m-%d %H:%M:%S", tz = tz
     )) * 1000
-    endpoints <- c(start_ms, boundaries[boundaries > start_ms & boundaries < end_ms], end_ms)
-    wall_ms <- diff(endpoints)
-    allocated <- duration_ms * wall_ms / sum(wall_ms)
-    if (length(allocated) > 1L) {
-      allocated[[length(allocated)]] <- duration_ms - sum(allocated[-length(allocated)])
+    next_midnight_ms <- as.numeric(as.POSIXct(
+      paste(segment_date + 1L, "00:00:00"),
+      format = "%Y-%m-%d %H:%M:%S", tz = tz
+    )) * 1000
+    segment_start_ms <- ifelse(
+      source_segment_index == 1L,
+      start_ms[source_index],
+      midnight_ms
+    )
+    segment_end_ms <- ifelse(
+      source_segment_index == source_segment_count,
+      end_ms[source_index],
+      next_midnight_ms
+    )
+    wall_ms <- segment_end_ms - segment_start_ms
+    allocated <- duration_ms[source_index] * wall_ms /
+      (end_ms[source_index] - start_ms[source_index])
+
+    single <- source_segment_count == 1L
+    allocated[single] <- duration_ms[source_index[single]]
+    nonlast <- !single & source_segment_index < source_segment_count
+    last <- !single & source_segment_index == source_segment_count
+    if (any(last)) {
+      nonlast_sum <- rowsum(
+        allocated[nonlast],
+        source_index[nonlast],
+        reorder = FALSE
+      )
+      sum_by_source <- numeric(n)
+      sum_by_source[as.integer(rownames(nonlast_sum))] <- nonlast_sum[, 1L]
+      allocated[last] <- duration_ms[source_index[last]] -
+        sum_by_source[source_index[last]]
     }
-    segments <- source[rep(1L, length(allocated)), , drop = FALSE]
-    segments$date <- appusage_date_from_datetime(ms = endpoints[-length(endpoints)], tz = tz)
-    segments$duration_ms <- allocated
-    if ("duration_min" %in% names(segments)) segments$duration_min <- allocated / 60000
-    segments$.source_row_id <- i
-    segments$.segment_index <- seq_along(allocated)
-    segments$.segment_count <- length(allocated)
-    segments$.interval_status <- "valid"
-    rows[[i]] <- segments
+    out$duration_ms[valid_position] <- allocated
+    if ("duration_min" %in% names(out)) {
+      out$duration_min[valid_position] <- allocated / 60000
+    }
   }
-  out <- tibble::as_tibble(do.call(rbind, rows))
+  out <- tibble::as_tibble(out)
   attr(out, "interval_segmentation_diagnostics") <-
     appusage_interval_segmentation_diagnostics(data, out, tz)
   out

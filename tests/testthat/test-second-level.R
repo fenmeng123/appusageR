@@ -307,6 +307,48 @@ test_that("write_second_level_appusage writes paired proc-2 RDA and JSON", {
   expect_true(file.exists(metadata$outputs$second_level_rda))
   expect_equal(metadata$counts$n_episode_rows, 1)
   expect_equal(metadata$counts$n_daily_rows, 1)
+  expect_false(file.exists(appusage_second_level_breadcrumb_path(second_file)))
+})
+
+test_that("second-level breadcrumb records the complete stage transition order", {
+  first <- list(line = parse_line(testthat::test_path("fixtures", "line_sample.txt")))
+  output_dir <- file.path(
+    tempdir(),
+    paste0("appusage_second_breadcrumb_order_", sample.int(1e8, 1))
+  )
+  dir.create(output_dir, recursive = TRUE)
+  first_file <- file.path(output_dir, "sub-breadcrumb_type-line_proc-1.rda")
+  data <- first
+  save(data, file = first_file)
+  transitions <- data.frame(stage = character(), status = character())
+  testthat::local_mocked_bindings(
+    appusage_write_second_level_breadcrumb = function(breadcrumb, path) {
+      transitions <<- rbind(
+        transitions,
+        data.frame(
+          stage = breadcrumb$current_stage,
+          status = breadcrumb$current_status,
+          stringsAsFactors = FALSE
+        )
+      )
+      invisible(path)
+    },
+    .package = "appusageR"
+  )
+
+  output_file <- write_second_level_appusage(first_file, overwrite = TRUE)
+
+  expect_equal(
+    transitions$stage,
+    rep(c(
+      "convert", "save", "anomaly_qc", "daily_qc", "metadata", "publish"
+    ), each = 2L)
+  )
+  expect_equal(
+    transitions$status,
+    rep(c("started", "completed"), times = 6L)
+  )
+  expect_false(file.exists(appusage_second_level_breadcrumb_path(output_file)))
 })
 
 test_that("second-level pair publication commits success JSON last", {
@@ -442,6 +484,15 @@ test_that("failure before success JSON promotion cannot create a complete pair",
     second_level_existing_cache_status(first_file, output_dir)$status,
     "complete"
   ))
+  breadcrumb_file <- appusage_second_level_breadcrumb_path(output_file)
+  expect_true(file.exists(breadcrumb_file))
+  breadcrumb <- jsonlite::read_json(breadcrumb_file, simplifyVector = TRUE)
+  expect_equal(breadcrumb$current_stage, "publish")
+  expect_equal(breadcrumb$current_status, "started")
+  expect_true(all(c(
+    "convert", "save", "anomaly_qc", "daily_qc", "metadata"
+  ) %in% breadcrumb$completed_stages))
+  expect_false("publish" %in% breadcrumb$completed_stages)
   expect_length(
     appusage_second_level_owned_artifacts(output_file, metadata_file),
     0L

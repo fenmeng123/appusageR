@@ -24,6 +24,52 @@ source_qc_episode <- function(start, end, package, app = package,
   )
 }
 
+legacy_interval_overlap_day <- function(x, config) {
+  ord <- order(x$start_ts_ms, -x$end_ts_ms, x$source_row)
+  x <- x[ord, , drop = FALSE]
+  overlap_count <- 0L
+  cross_package <- 0L
+  contained <- 0L
+  for (i in seq_len(nrow(x))) {
+    if (i == 1L) next
+    prior <- seq_len(i - 1L)
+    active <- prior[x$end_ts_ms[prior] > x$start_ts_ms[[i]]]
+    overlap_count <- overlap_count + length(active)
+    if (length(active)) {
+      cross_package <- cross_package + sum(
+        x$package_name[active] != x$package_name[[i]], na.rm = TRUE
+      )
+      contained <- contained + as.integer(any(
+        x$end_ts_ms[active] >= x$end_ts_ms[[i]]
+      ))
+    }
+  }
+  times <- sort(unique(c(x$start_ts_ms, x$end_ts_ms)))
+  overlap_ms <- 0
+  max_concurrent <- 0L
+  if (length(times) > 1L) {
+    delta <- vapply(times, function(value) {
+      sum(x$start_ts_ms == value) - sum(x$end_ts_ms == value)
+    }, integer(1))
+    concurrent <- cumsum(delta)
+    max_concurrent <- max(concurrent)
+    overlap_ms <- sum(
+      diff(times) * pmax(concurrent[-length(concurrent)] - 1L, 0L)
+    )
+  }
+  list(
+    date = as.character(x$date[[1L]]),
+    overlap_count = as.integer(overlap_count),
+    overlap_ms = as.numeric(overlap_ms),
+    cross_package_overlap_count = as.integer(cross_package),
+    contained_interval_count = as.integer(contained),
+    max_concurrent_intervals = as.integer(max_concurrent),
+    foreground_duration_ms = sum(x$duration_ms),
+    foreground_over_24h = sum(x$duration_ms) >
+      config$max_line_daily_foreground_ms
+  )
+}
+
 test_that("line source QC reports overlap families without removing rows", {
   base <- as.numeric(as.POSIXct("2024-01-01 12:00:00", tz = "Asia/Shanghai")) * 1000
   episode <- dplyr::bind_rows(
@@ -75,6 +121,53 @@ test_that("line overlap thresholds distinguish diagnostic warning and critical",
     config = list(line_overlap_warning_ratio = 0.001)
   )
   expect_true(custom$line_foreground_overlap$warning)
+})
+
+test_that("sweep-line overlap metrics match the legacy pairwise definition", {
+  set.seed(3401)
+  n <- 250L
+  start <- sample(0:100, n, replace = TRUE) * 1000
+  duration <- sample(c(0, 1000, 2000, 5000, 20000), n, replace = TRUE)
+  intervals <- data.frame(
+    source_row = seq_len(n),
+    date = as.Date("2024-01-01"),
+    start_ts_ms = start,
+    end_ts_ms = start + duration,
+    duration_ms = duration,
+    package_name = sample(c("pkg.a", "pkg.b", "pkg.c", NA_character_),
+      n, replace = TRUE
+    ),
+    stringsAsFactors = FALSE
+  )
+  config <- appusageR:::appusage_source_qc_config()
+
+  expected <- legacy_interval_overlap_day(intervals, config)
+  observed <- appusageR:::appusage_interval_overlap_day(intervals, config)
+
+  expect_equal(observed, expected)
+})
+
+test_that("sweep-line overlap QC handles dense intervals without quadratic scans", {
+  n <- 10000L
+  intervals <- data.frame(
+    source_row = seq_len(n),
+    date = as.Date("2024-01-01"),
+    start_ts_ms = seq_len(n) - 1,
+    end_ts_ms = seq_len(n) + 1,
+    duration_ms = 2,
+    package_name = rep(c("pkg.a", "pkg.b"), length.out = n),
+    stringsAsFactors = FALSE
+  )
+  observed <- appusageR:::appusage_interval_overlap_day(
+    intervals,
+    appusageR:::appusage_source_qc_config()
+  )
+
+  expect_equal(observed$overlap_count, n - 1L)
+  expect_equal(observed$cross_package_overlap_count, n - 1L)
+  expect_equal(observed$contained_interval_count, 0L)
+  expect_equal(observed$max_concurrent_intervals, 2L)
+  expect_equal(observed$overlap_ms, n - 1L)
 })
 
 test_that("line timestamp QC distinguishes valid midnight crossing from malformed dates", {

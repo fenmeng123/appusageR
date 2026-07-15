@@ -247,6 +247,52 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
   export_type <- entities$type %||% infer_first_level_type(first) %||% "unknown"
   source_cache_key <- entities$src %||%
     appusage_metadata_source_identity(first_metadata)$source_cache_key
+  output_dir <- output_dir %||% default_second_level_output_dir(first_level_rda)
+  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  output_file <- file.path(
+    output_dir,
+    build_appusage_filename(
+      participant_id = participant_id,
+      export_type = export_type,
+      proc = 2,
+      extension = "rda",
+      source_key = source_cache_key
+    )
+  )
+  metadata_file <- second_level_metadata_path(output_file)
+  if ((file.exists(output_file) || file.exists(metadata_file)) && !isTRUE(overwrite)) {
+    stop(batch_cache_exists_error(paste(c(output_file, metadata_file), collapse = "; ")))
+  }
+  appusage_cleanup_second_level_transaction_artifacts(output_file, metadata_file)
+  transaction_id <- appusage_second_level_transaction_id()
+  transaction <- appusage_second_level_transaction_paths(
+    output_file,
+    metadata_file,
+    token = transaction_id
+  )
+  on.exit(
+    appusage_cleanup_paths(c(transaction$temp_rda, transaction$temp_json)),
+    add = TRUE
+  )
+  breadcrumb_file <- appusage_second_level_breadcrumb_path(output_file)
+  appusage_cleanup_second_level_breadcrumb_temps(breadcrumb_file)
+  breadcrumb <- appusage_new_second_level_breadcrumb(
+    transaction_id = transaction_id,
+    first_level_rda = first_level_rda,
+    output_file = output_file,
+    metadata_file = metadata_file
+  )
+  update_breadcrumb <- function(stage, status, details = NULL) {
+    breadcrumb <<- appusage_update_second_level_breadcrumb(
+      breadcrumb,
+      path = breadcrumb_file,
+      stage = stage,
+      status = status,
+      details = details
+    )
+    invisible(NULL)
+  }
+  update_breadcrumb("convert", "started")
   convert_started_at <- Sys.time()
   second <- make_second_level_appusage(
     first,
@@ -267,33 +313,19 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
   attr(second, "daily_aggregation_self_check") <- daily_self_check
   appusage_stop_on_daily_self_check(daily_self_check)
   convert_finished_at <- Sys.time()
-
-  output_dir <- output_dir %||% default_second_level_output_dir(first_level_rda)
-  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
-  output_file <- file.path(
-    output_dir,
-    build_appusage_filename(
-      participant_id = participant_id,
-      export_type = export_type,
-      proc = 2,
-      extension = "rda",
-      source_key = source_cache_key
-    )
-  )
-  metadata_file <- second_level_metadata_path(output_file)
-  if ((file.exists(output_file) || file.exists(metadata_file)) && !isTRUE(overwrite)) {
-    stop(batch_cache_exists_error(paste(c(output_file, metadata_file), collapse = "; ")))
-  }
-  appusage_cleanup_second_level_transaction_artifacts(output_file, metadata_file)
-  transaction <- appusage_second_level_transaction_paths(output_file, metadata_file)
-  on.exit(
-    appusage_cleanup_paths(c(transaction$temp_rda, transaction$temp_json)),
-    add = TRUE
+  update_breadcrumb(
+    "convert",
+    "completed",
+    appusage_second_level_breadcrumb_counts(second)
   )
   data <- second
+  update_breadcrumb("save", "started")
   save_started_at <- Sys.time()
   appusage_save_second_level_data(data, transaction$temp_rda)
   save_finished_at <- Sys.time()
+  update_breadcrumb("save", "completed", list(
+    temporary_rda_size_bytes = appusage_file_size_bytes(transaction$temp_rda)
+  ))
   inline_qc_result <- NULL
   inline_qc_started_at <- NULL
   inline_qc_finished_at <- NULL
@@ -316,9 +348,15 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
         max_daily_total_ms = max_daily_total_ms,
         max_export_lookback_days = max_export_lookback_days,
         meta_diff_abs_ms = meta_diff_abs_ms,
-        meta_diff_ratio = meta_diff_ratio
+        meta_diff_ratio = meta_diff_ratio,
+        stage_callback = update_breadcrumb
       ),
       error = function(e) {
+        update_breadcrumb(
+          breadcrumb$current_stage,
+          "error",
+          appusage_breadcrumb_condition_details(e)
+        )
         counts <- tryCatch(second_level_qc_counts(second), error = function(e2) empty_qc_counts())
         anomaly_qc <- tryCatch(
           qc_appusage_anomalies(
@@ -357,8 +395,12 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
       }
     )
     inline_qc_finished_at <- Sys.time()
+  } else {
+    update_breadcrumb("anomaly_qc", "skipped")
+    update_breadcrumb("daily_qc", "skipped")
   }
   finished_at <- Sys.time()
+  update_breadcrumb("metadata", "started")
   profiling <- second_level_profile(
     first_level_rda = first_level_rda,
     second_level_rda = transaction$temp_rda,
@@ -404,11 +446,23 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     output_file,
     metadata_file
   )
+  update_breadcrumb("metadata", "completed", list(
+    temporary_json_size_bytes = appusage_file_size_bytes(transaction$temp_json)
+  ))
+  update_breadcrumb("publish", "started")
   appusage_publish_second_level_pair(
     transaction = transaction,
     output_file = output_file,
     metadata_file = metadata_file
   )
+  update_breadcrumb("publish", "completed", list(
+    rda_size_bytes = appusage_file_size_bytes(output_file),
+    json_size_bytes = appusage_file_size_bytes(metadata_file)
+  ))
+  appusage_cleanup_paths(c(
+    breadcrumb_file,
+    appusage_second_level_breadcrumb_temp_paths(breadcrumb_file)
+  ))
   invisible(normalizePath(output_file, winslash = "/", mustWork = FALSE))
 }
 
@@ -472,8 +526,9 @@ appusage_second_level_transaction_id <- function() {
   gsub("[^A-Za-z0-9._-]", "-", token)
 }
 
-appusage_second_level_transaction_paths <- function(output_file, metadata_file) {
-  token <- appusage_second_level_transaction_id()
+appusage_second_level_transaction_paths <- function(output_file, metadata_file,
+                                                    token = NULL) {
+  token <- token %||% appusage_second_level_transaction_id()
   list(
     temp_rda = file.path(
       dirname(output_file),
@@ -491,6 +546,137 @@ appusage_second_level_transaction_paths <- function(output_file, metadata_file) 
       dirname(metadata_file),
       paste0(".", basename(metadata_file), ".appusage-backup-", token)
     )
+  )
+}
+
+appusage_second_level_breadcrumb_path <- function(output_file) {
+  file.path(
+    dirname(output_file),
+    paste0(".appusage-breadcrumb-", basename(output_file), ".json")
+  )
+}
+
+appusage_second_level_breadcrumb_temp_paths <- function(path) {
+  directory <- dirname(path)
+  if (!dir.exists(directory)) return(character())
+  prefix <- paste0(basename(path), ".")
+  candidates <- list.files(directory, full.names = TRUE, all.files = TRUE)
+  candidates[startsWith(basename(candidates), prefix)]
+}
+
+appusage_cleanup_second_level_breadcrumb_temps <- function(path) {
+  appusage_cleanup_paths(appusage_second_level_breadcrumb_temp_paths(path))
+}
+
+appusage_new_second_level_breadcrumb <- function(transaction_id,
+                                                  first_level_rda,
+                                                  output_file,
+                                                  metadata_file) {
+  now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3%z")
+  list(
+    schema_version = "second-level-breadcrumb-v1",
+    package_version = as.character(utils::packageVersion("appusageR")),
+    transaction_id = transaction_id,
+    worker_pid = Sys.getpid(),
+    started_at = now,
+    updated_at = now,
+    current_stage = NA_character_,
+    current_status = "initialized",
+    completed_stages = character(),
+    stages = list(),
+    paths = list(
+      first_level_rda = normalizePath(
+        first_level_rda, winslash = "/", mustWork = FALSE
+      ),
+      second_level_rda = normalizePath(
+        output_file, winslash = "/", mustWork = FALSE
+      ),
+      metadata_json = normalizePath(
+        metadata_file, winslash = "/", mustWork = FALSE
+      )
+    )
+  )
+}
+
+appusage_update_second_level_breadcrumb <- function(breadcrumb, path, stage,
+                                                     status, details = NULL) {
+  timestamp <- format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3%z")
+  breadcrumb$updated_at <- timestamp
+  breadcrumb$current_stage <- as.character(stage)
+  breadcrumb$current_status <- as.character(status)
+  if (identical(status, "completed")) {
+    breadcrumb$completed_stages <- unique(c(
+      breadcrumb$completed_stages,
+      as.character(stage)
+    ))
+  }
+  breadcrumb$stages[[as.character(stage)]] <- list(
+    status = as.character(status),
+    updated_at = timestamp,
+    details = details %||% list()
+  )
+  write_error <- tryCatch({
+    appusage_write_second_level_breadcrumb(breadcrumb, path)
+    NULL
+  }, error = function(e) conditionMessage(e))
+  if (!is.null(write_error)) {
+    breadcrumb$breadcrumb_write_error <- write_error
+  } else {
+    breadcrumb$breadcrumb_write_error <- NULL
+  }
+  breadcrumb
+}
+
+appusage_write_second_level_breadcrumb <- function(breadcrumb, path) {
+  token <- appusage_second_level_transaction_id()
+  temporary <- paste0(path, ".tmp-", token)
+  backup <- paste0(path, ".backup-", token)
+  old_backed <- FALSE
+  committed <- FALSE
+  on.exit({
+    if (!committed && old_backed && file.exists(backup) && !file.exists(path)) {
+      tryCatch(file.rename(backup, path), error = function(e) FALSE)
+    }
+    appusage_cleanup_paths(c(
+      temporary,
+      if (committed) backup else character()
+    ))
+  }, add = TRUE)
+  write_metadata_json(breadcrumb, temporary)
+  appusage_validate_nonempty_file(
+    temporary,
+    "Second-level breadcrumb temporary artifact"
+  )
+  jsonlite::read_json(temporary, simplifyVector = TRUE)
+  if (file.exists(path)) {
+    if (!isTRUE(file.rename(path, backup))) {
+      stop("Could not back up the existing second-level breadcrumb.")
+    }
+    old_backed <- TRUE
+  }
+  if (!isTRUE(file.rename(temporary, path))) {
+    stop("Could not publish the second-level breadcrumb.")
+  }
+  committed <- TRUE
+  invisible(normalizePath(path, winslash = "/", mustWork = FALSE))
+}
+
+appusage_second_level_breadcrumb_counts <- function(data) {
+  counts <- second_level_qc_counts(data)
+  list(
+    n_event_rows = counts$n_event_rows,
+    n_episode_rows = counts$n_episode_rows,
+    n_daily_rows = counts$n_daily_rows
+  )
+}
+
+appusage_breadcrumb_condition_details <- function(error) {
+  call <- conditionCall(error)
+  list(
+    condition_class = class(error),
+    condition_message = conditionMessage(error),
+    condition_call = if (is.null(call)) NA_character_ else
+      paste(deparse(call), collapse = " ")
   )
 }
 
