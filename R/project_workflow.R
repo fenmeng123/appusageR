@@ -2528,7 +2528,11 @@ appusage_read_excel_impl <- function(...) {
 
 appusage_effective_self_report_guess_max <- function(n_max = Inf,
                                                       guess_max = NULL) {
-  if (!is.null(guess_max)) {
+  legacy_unspecified <- !is.null(guess_max) &&
+    length(guess_max) == 1L &&
+    is.atomic(guess_max) &&
+    is.na(guess_max)
+  if (!is.null(guess_max) && !legacy_unspecified) {
     if (length(guess_max) != 1L || is.na(guess_max) ||
       !is.numeric(guess_max) || guess_max < 1) {
       cli::cli_abort("`guess_max` must be one positive number or `Inf`.")
@@ -2589,6 +2593,9 @@ appusage_read_self_report_workbook <- function(self_report, sheet = 1,
                                                 col_types = NULL,
                                                 diagnostics_dir = NULL,
                                                 emit_warning = TRUE, ...) {
+  if (is.character(col_types) && length(col_types) == 0L) {
+    col_types <- NULL
+  }
   effective_guess_max <- appusage_effective_self_report_guess_max(
     n_max = n_max,
     guess_max = guess_max

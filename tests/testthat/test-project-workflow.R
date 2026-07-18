@@ -1310,6 +1310,36 @@ test_that("self-report reader guesses across the full selected sheet", {
   expect_true(file.exists(result$diagnostics_file))
 })
 
+test_that("legacy NA self-report guess_max remains unspecified", {
+  expect_identical(
+    appusage_effective_self_report_guess_max(
+      n_max = Inf,
+      guess_max = NA_real_
+    ),
+    Inf
+  )
+  expect_identical(
+    appusage_effective_self_report_guess_max(
+      n_max = 250,
+      guess_max = NA_real_
+    ),
+    250L
+  )
+})
+
+test_that("legacy empty self-report col_types remains unspecified", {
+  workbook <- appusage_mixed_type_workbook_fixture()
+
+  result <- appusage_read_self_report_workbook(
+    workbook,
+    col_types = character(),
+    emit_warning = FALSE
+  )
+
+  expect_equal(nrow(result$data), 1405L)
+  expect_null(result$diagnostics$explicit_col_types)
+})
+
 test_that("explicit incompatible self-report col_types records one concise warning", {
   workbook <- appusage_mixed_type_workbook_fixture()
   diagnostics_dir <- tempfile("self-report-coercion-")
