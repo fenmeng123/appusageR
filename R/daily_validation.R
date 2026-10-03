@@ -7,9 +7,9 @@ appusage_daily_key_component <- function(x) {
   x <- as.character(x)
   out <- rep("-1:", length(x))
   present <- !is.na(x)
-  utf8 <- enc2utf8(x[present])
-  byte_length <- nchar(utf8, type = "bytes", allowNA = TRUE, keepNA = TRUE)
-  out[present] <- paste0(byte_length, ":", utf8)
+  utf8 <- stringi::stri_enc_toutf8(x[present])
+  byte_length <- appusage_text_nchar(utf8, type = "bytes", allowNA = TRUE, keepNA = TRUE)
+  out[present] <- appusage_text_paste0(byte_length, ":", utf8)
   out
 }
 
@@ -20,15 +20,15 @@ appusage_daily_key <- function(data, include_daily_source = TRUE) {
     if (column %in% names(data)) data[[column]] else rep(NA_character_, nrow(data))
   })
   encoded <- lapply(values, appusage_daily_key_component)
-  do.call(paste, c(encoded, sep = "|"))
+  do.call(appusage_text_paste, c(encoded, sep = "|"))
 }
 
 appusage_daily_character_order_value <- function(x) {
   x <- as.character(x)
   vapply(x, function(value) {
     if (is.na(value)) return("")
-    raw <- charToRaw(enc2utf8(value))
-    paste(sprintf("%02x", as.integer(raw)), collapse = "")
+    raw <- charToRaw(stringi::stri_enc_toutf8(value))
+    appusage_text_paste(sprintf("%02x", as.integer(raw)), collapse = "")
   }, character(1))
 }
 
@@ -115,7 +115,7 @@ appusage_expected_episode_daily <- function(episodes, source, tz) {
     expected_keys
   )
   first <- match(expected_keys, key)
-  pair <- paste(key, segments$.source_row_id, sep = "\r")
+  pair <- appusage_text_paste(key, segments$.source_row_id, sep = "\r")
   unique_pair <- !duplicated(pair) & valid
   episode_count <- tabulate(
     match(key[unique_pair], expected_keys), nbins = length(expected_keys)
@@ -221,9 +221,9 @@ appusage_stop_on_daily_self_check <- function(result) {
   if (!identical(result$status, "error")) return(invisible(result))
   condition <- structure(
     list(
-      message = paste0(
+      message = appusage_text_paste0(
         "Second-level daily aggregation self-check failed: ",
-        paste(c(
+        appusage_text_paste(c(
           if (result$n_nonmissing_numeric_mismatch > 0L) "numeric_mismatch",
           if (result$n_episode_count_mismatch > 0L) "episode_count_mismatch",
           if (result$n_duplicate_daily_keys > 0L) "duplicate_daily_keys",

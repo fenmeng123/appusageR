@@ -197,7 +197,7 @@ write_qc_metadata_one <- function(metadata_file, overwrite,
     result <- qc_error_result(
       metadata = metadata,
       second_level_rda = NA_character_,
-      message = paste(
+      message = appusage_text_paste(
         "First-level metadata JSON could not be read:",
         conditionMessage(metadata_read$error)
       )
@@ -552,7 +552,7 @@ count_parse_warning_rows <- function(x) {
     return(0L)
   }
   warning <- as.character(x$parse_warning)
-  sum(!is.na(warning) & nzchar(warning))
+  sum(!is.na(warning) & appusage_text_nzchar(warning))
 }
 
 empty_qc_counts <- function() {
@@ -657,7 +657,7 @@ update_qc_metadata <- function(metadata, metadata_file, qc_file, result,
 build_qc_summary_from_metadata <- function(metadata_files, project_dir = NULL,
                                            strict = FALSE) {
   metadata_files <- as.character(metadata_files)
-  metadata_files <- sort(metadata_files[!is.na(metadata_files) & nzchar(metadata_files)])
+  metadata_files <- sort(metadata_files[!is.na(metadata_files) & appusage_text_nzchar(metadata_files)])
   project_dir <- project_dir %||% infer_project_dir_from_metadata_files(metadata_files)
   legacy_index <- legacy_proc3_metadata_index(project_dir)
 
@@ -716,7 +716,7 @@ qc_summary_row_from_metadata <- function(metadata_file, legacy_file = NA_charact
     if (is.null(legacy$error)) {
       legacy_row <- qc_summary_row_from_loaded_metadata(legacy$metadata, legacy_file)
     } else {
-      legacy_error_message <- paste(
+      legacy_error_message <- appusage_text_paste(
         "Legacy proc-3 JSON could not be read:",
         conditionMessage(legacy$error)
       )
@@ -1022,7 +1022,7 @@ qc_summary_problem_row <- function(metadata_file, metadata_label, error,
                                    legacy_file = NA_character_) {
   metadata <- minimal_qc_metadata(metadata_file)
   row <- qc_summary_row_from_loaded_metadata(metadata, metadata_file)
-  message <- paste(metadata_label, "JSON could not be read:", conditionMessage(error))
+  message <- appusage_text_paste(metadata_label, "JSON could not be read:", conditionMessage(error))
   row$status <- "error"
   row$qc_status <- "error"
   row$pass_qc <- FALSE
@@ -1075,7 +1075,7 @@ merge_proc2_legacy_qc_summary <- function(proc2_row, legacy_row, legacy_file,
   out$legacy_qc_fallback_used <- fallback_used
   out$legacy_qc_conflict <- length(conflicts) > 0
   out$legacy_qc_conflict_fields <- if (length(conflicts) > 0) {
-    paste(conflicts, collapse = ";")
+    appusage_text_paste(conflicts, collapse = ";")
   } else {
     NA_character_
   }
@@ -1168,12 +1168,12 @@ metadata_match_key <- function(metadata_file) {
   if (!is_present_string(entities$sub) || !is_present_string(entities$type)) {
     return(NA_character_)
   }
-  paste(entities$sub, entities$type, sep = "\r")
+  appusage_text_paste(entities$sub, entities$type, sep = "\r")
 }
 
 infer_project_dir_from_metadata_files <- function(metadata_files) {
   metadata_files <- as.character(metadata_files)
-  metadata_files <- metadata_files[!is.na(metadata_files) & nzchar(metadata_files)]
+  metadata_files <- metadata_files[!is.na(metadata_files) & appusage_text_nzchar(metadata_files)]
   if (length(metadata_files) == 0) {
     return(NA_character_)
   }
@@ -1242,5 +1242,5 @@ qc_metadata_value <- function(x, path, default = NA_character_) {
 }
 
 is_present_string <- function(x) {
-  is.character(x) && length(x) == 1 && !is.na(x) && nzchar(x)
+  is.character(x) && length(x) == 1 && !is.na(x) && appusage_text_nzchar(x)
 }

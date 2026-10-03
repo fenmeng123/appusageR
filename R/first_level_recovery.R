@@ -1,7 +1,7 @@
 # First-level cache recovery and memory-safe batch helpers
 
 appusage_memory_allocation_error_pattern <- function() {
-  paste(
+  appusage_text_paste(
     c(
       "cannot allocate",
       "could not allocate",
@@ -25,19 +25,19 @@ appusage_memory_allocation_error_pattern <- function() {
 }
 
 appusage_is_memory_allocation_text <- function(...) {
-  text <- paste(..., collapse = " ")
-  if (!nzchar(text)) {
+  text <- appusage_text_paste(..., collapse = " ")
+  if (!appusage_text_nzchar(text)) {
     return(FALSE)
   }
-  grepl(appusage_memory_allocation_error_pattern(), tolower(text))
+  appusage_text_grepl(appusage_memory_allocation_error_pattern(), appusage_text_lower(text))
 }
 
 appusage_is_memory_risk_control_flow <- function(error_message,
                                                  memory_risk_signal = FALSE) {
   isTRUE(memory_risk_signal) &&
-    grepl(
+    appusage_text_grepl(
       "missing value where true/false needed",
-      tolower(error_message %||% ""),
+      appusage_text_lower(error_message %||% ""),
       fixed = TRUE
     )
 }
@@ -63,7 +63,7 @@ appusage_first_level_memory_risk_signal <- function(x, input, parallel, n_cores)
     reason = if (length(reasons) == 0L) {
       NA_character_
     } else {
-      paste(unique(reasons), collapse = ";")
+      appusage_text_paste(unique(reasons), collapse = ";")
     }
   )
 }
@@ -118,7 +118,7 @@ rebuild_first_level_summary_from_cache <- function(project_dir,
     json_rows,
     function(row) {
       value <- row[["data_file"]]
-      if (length(value) == 0L || is.na(value) || !nzchar(value)) {
+      if (length(value) == 0L || is.na(value) || !appusage_text_nzchar(value)) {
         return(NA_character_)
       }
       normalizePath(value, winslash = "/", mustWork = FALSE)
@@ -265,7 +265,7 @@ appusage_proc1_row_from_json <- function(json_path,
     appusage_nested_value(metadata, c("data_file"))
   )
   if (!is_present_string(data_file)) {
-    data_file <- sub("[.]json$", ".rda", json_norm)
+    data_file <- appusage_text_sub("[.]json$", ".rda", json_norm)
   }
   data_file <- normalizePath(data_file, winslash = "/", mustWork = FALSE)
 
@@ -321,7 +321,7 @@ appusage_proc1_row_from_json <- function(json_path,
     preflight$selected_component,
     row$selected_component
   )
-  row$detected_components <- paste(
+  row$detected_components <- appusage_text_paste(
     preflight$detected_components %||% character(),
     collapse = ";"
   )
@@ -400,7 +400,7 @@ appusage_proc1_not_processed_rows <- function(manifest, cache_rows) {
     cache_rows,
     function(row) {
       value <- row[["source_file"]]
-      if (length(value) == 0L || is.na(value) || !nzchar(value)) {
+      if (length(value) == 0L || is.na(value) || !appusage_text_nzchar(value)) {
         return(NA_character_)
       }
       normalizePath(value, winslash = "/", mustWork = FALSE)
@@ -411,9 +411,9 @@ appusage_proc1_not_processed_rows <- function(manifest, cache_rows) {
   is_txt <- if ("is_txt" %in% names(manifest)) {
     isTRUE_vector(manifest$is_txt)
   } else if ("extension" %in% names(manifest)) {
-    tolower(manifest$extension) == "txt"
+    appusage_text_lower(manifest$extension) == "txt"
   } else {
-    grepl("[.]txt$", manifest$source_file, ignore.case = TRUE)
+    appusage_text_grepl("[.]txt$", manifest$source_file, ignore.case = TRUE)
   }
 
   not_processed <- manifest[is_txt & !(manifest$source_file_norm %in% cached_sources), ,
@@ -562,7 +562,7 @@ appusage_first_nonmissing <- function(...) {
     if (is.null(value) || is.na(value)) {
       next
     }
-    if (is.character(value) && !nzchar(value)) {
+    if (is.character(value) && !appusage_text_nzchar(value)) {
       next
     }
     return(value)
@@ -578,11 +578,11 @@ appusage_classify_failure_family <- function(error_class = NA_character_,
     return(NA_character_)
   }
 
-  text <- paste(
-    paste(error_class, collapse = " "),
-    paste(error_message, collapse = " ")
+  text <- appusage_text_paste(
+    appusage_text_paste(error_class, collapse = " "),
+    appusage_text_paste(error_message, collapse = " ")
   )
-  text <- tolower(text)
+  text <- appusage_text_lower(text)
 
   source_families <- c(
     appusage_zero_byte_source = "source_zero_byte",
@@ -593,32 +593,32 @@ appusage_classify_failure_family <- function(error_class = NA_character_,
   )
   source_hit <- names(source_families)[vapply(
     names(source_families),
-    function(x) grepl(tolower(x), text, fixed = TRUE),
+    function(x) appusage_text_grepl(appusage_text_lower(x), text, fixed = TRUE),
     logical(1)
   )]
   if (length(source_hit) > 0L) {
     return(unname(source_families[[source_hit[[1]]]]))
   }
-  if (grepl("appusage_line_structural_quality", text, fixed = TRUE)) {
+  if (appusage_text_grepl("appusage_line_structural_quality", text, fixed = TRUE)) {
     return("structural_quality")
   }
 
   if (appusage_is_memory_allocation_text(text)) {
     return("memory_allocation")
   }
-  if (grepl("missing value where true/false needed", text, fixed = TRUE)) {
+  if (appusage_text_grepl("missing value where true/false needed", text, fixed = TRUE)) {
     if (appusage_is_memory_risk_control_flow(text, memory_risk_signal)) {
       return("memory_allocation")
     }
     return("parser_control_flow")
   }
-  if (grepl("unsupported|unknown.*export|unlock", text)) {
+  if (appusage_text_grepl("unsupported|unknown.*export|unlock", text)) {
     return("unsupported_export_type")
   }
-  if (grepl("empty|zero-byte|zero byte|no app usage lines", text)) {
+  if (appusage_text_grepl("empty|zero-byte|zero byte|no app usage lines", text)) {
     return("empty_or_missing_content")
   }
-  if (grepl("parse|malformed|invalid|header|column", text)) {
+  if (appusage_text_grepl("parse|malformed|invalid|header|column", text)) {
     return("malformed_or_parse_error")
   }
   if (identical(status, "incomplete")) {
@@ -891,7 +891,7 @@ appusage_detect_memory_info <- function() {
   if (!identical(.Platform$OS.type, "windows")) {
     return(out)
   }
-  command <- paste(
+  command <- appusage_text_paste(
     "try {",
     "$os = Get-CimInstance Win32_OperatingSystem;",
     "Write-Output $os.TotalVisibleMemorySize;",

@@ -28,7 +28,7 @@ read_appusage_lines <- function(x, input = c("file", "text", "lines"),
 
   if (input == "text") {
     if (length(x) != 1) {
-      x <- paste(x, collapse = "\n")
+      x <- appusage_text_paste(x, collapse = "\n")
     }
     return(split_lines(normalize_encoding(x, encoding = encoding)))
   }
@@ -49,19 +49,19 @@ read_appusage_lines <- function(x, input = c("file", "text", "lines"),
 normalize_encoding <- function(x, encoding = "auto") {
   x <- as.character(x)
   if (identical(encoding, "auto")) {
-    x <- enc2utf8(x)
+    x <- stringi::stri_enc_toutf8(x)
   } else {
-    converted <- iconv(x, from = encoding, to = "UTF-8", sub = "")
+    converted <- appusage_text_encode_skip(x, from = encoding)
     converted[is.na(converted)] <- x[is.na(converted)]
     x <- converted
   }
-  stringr::str_remove(x, "^\ufeff")
+  appusage_text_remove(x, "^\ufeff")
 }
 
 decode_raw_text <- function(bytes, encoding = "auto",
                             detected_candidates = NULL,
-                            available_encodings = iconvlist(),
-                            converter = iconv) {
+                            available_encodings = appusage_text_encoding_names(),
+                            converter = appusage_text_encode_strict) {
   detected <- if (identical(encoding, "auto")) {
     detected_candidates %||% tryCatch(
       stringi::stri_enc_detect(bytes)[[1]]$Encoding,
@@ -75,9 +75,9 @@ decode_raw_text <- function(bytes, encoding = "auto",
   } else {
     unique(as.character(detected))
   }
-  candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
+  candidates <- candidates[!is.na(candidates) & appusage_text_nzchar(candidates)]
   available_encodings <- unique(as.character(available_encodings))
-  supported_index <- match(toupper(candidates), toupper(available_encodings))
+  supported_index <- match(appusage_text_upper(candidates), appusage_text_upper(available_encodings))
   supported <- candidates[!is.na(supported_index)]
   unsupported <- candidates[is.na(supported_index)]
   canonical <- available_encodings[stats::na.omit(supported_index)]
@@ -102,7 +102,7 @@ decode_raw_text <- function(bytes, encoding = "auto",
     if (length(attempt) == 0L || is.na(attempt[[1]])) {
       conversion_failures[[length(conversion_failures) + 1L]] <- list(
         candidate = supported[[i]],
-        message = "iconv returned NA",
+        message = "ICU strict conversion returned NA",
         condition_class = "iconv_na"
       )
       next
@@ -113,9 +113,9 @@ decode_raw_text <- function(bytes, encoding = "auto",
   }
 
   if (is.na(converted)) {
-    converted <- enc2utf8(raw_text)
+    converted <- stringi::stri_enc_toutf8(raw_text)
   }
-  converted <- stringr::str_remove(converted, "^\ufeff")
+  converted <- appusage_text_remove(converted, "^\ufeff")
   attr(converted, "encoding_diagnostics") <- list(
     attempted_candidates = candidates,
     supported_candidates = supported,
@@ -128,9 +128,9 @@ decode_raw_text <- function(bytes, encoding = "auto",
 }
 
 split_lines <- function(text) {
-  text <- stringr::str_replace_all(text, "\r\n?", "\n")
-  lines <- strsplit(text, "\n", fixed = TRUE)[[1]]
-  stringr::str_remove(lines, "^\ufeff")
+  text <- appusage_text_str_replace_all(text, "\r\n?", "\n")
+  lines <- appusage_text_split(text, "\n", fixed = TRUE)[[1]]
+  appusage_text_remove(lines, "^\ufeff")
 }
 
 #' Parse millisecond values
@@ -144,9 +144,9 @@ split_lines <- function(text) {
 #' @export
 parse_ms_value <- function(x) {
   x <- as.character(x)
-  x <- stringr::str_trim(x)
-  x <- stringr::str_remove(x, "^T:")
-  x <- stringr::str_replace_all(x, ",", "")
+  x <- stringi::stri_trim_both(x)
+  x <- appusage_text_remove(x, "^T:")
+  x <- appusage_text_str_replace_all(x, ",", "")
   x[x %in% c("", "NA", "NULL", "null", "NaN")] <- NA_character_
   suppressWarnings(as.numeric(x))
 }
@@ -162,7 +162,7 @@ parse_ms_value <- function(x) {
 #' @export
 parse_split_screen_ms <- function(x) {
   x <- as.character(x)
-  value <- stringr::str_extract(x, "[0-9]+(?:\\.[0-9]+)?(?:[Ee][+-]?[0-9]+)?")
+  value <- stringi::stri_extract_first_regex(x, "[0-9]+(?:\\.[0-9]+)?(?:[Ee][+-]?[0-9]+)?")
   parse_ms_value(value)
 }
 
@@ -174,8 +174,8 @@ parse_split_screen_ms <- function(x) {
 #' @export
 safe_as_date <- function(x) {
   x <- as.character(x)
-  x <- stringr::str_extract(x, "[0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}")
-  x <- stringr::str_replace_all(x, "/", "-")
+  x <- stringi::stri_extract_first_regex(x, "[0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}")
+  x <- appusage_text_str_replace_all(x, "/", "-")
   suppressWarnings(as.Date(x))
 }
 
@@ -200,10 +200,10 @@ add_weekday <- function(data, date_col = "date") {
 #' @export
 standardize_package_name <- function(x) {
   x <- as.character(x)
-  x <- stringr::str_trim(x)
+  x <- stringi::stri_trim_both(x)
   x[x %in% c("", "NA", "NULL", "null")] <- NA_character_
-  out <- stringr::str_to_lower(x)
-  out[!is.na(x) & stringr::str_to_upper(x) == "ALL"] <- "ALL"
+  out <- stringi::stri_trans_tolower(x, locale = "en")
+  out[!is.na(x) & stringi::stri_trans_toupper(x, locale = "en") == "ALL"] <- "ALL"
   out
 }
 
@@ -230,7 +230,7 @@ safe_as_datetime <- function(x, tz = "Asia/Shanghai") {
   tz <- appusage_resolve_timezone(tz)
   x <- as.character(x)
   x[x %in% c("", "NA", "NULL", "null")] <- NA_character_
-  x <- stringr::str_replace(x, ":(\\d{3})$", ".\\1")
+  x <- appusage_text_str_replace(x, ":(\\d{3})$", ".\\1")
   suppressWarnings(as.POSIXct(x, format = "%Y-%m-%d %H:%M:%OS", tz = tz))
 }
 
@@ -279,8 +279,8 @@ label_event_type <- function(x) {
   )
 
   out <- unname(labels[x_chr])
-  unknown <- is.na(out) & !is.na(x_chr) & nzchar(x_chr)
-  out[unknown] <- paste0("EVENT_TYPE_", x_chr[unknown])
+  unknown <- is.na(out) & !is.na(x_chr) & appusage_text_nzchar(x_chr)
+  out[unknown] <- appusage_text_paste0("EVENT_TYPE_", x_chr[unknown])
   out[is.na(x_chr) | x_chr == ""] <- NA_character_
   out
 }
@@ -297,7 +297,7 @@ weekday_name <- function(x) {
 
 blank_to_na <- function(x) {
   x <- as.character(x)
-  x <- stringr::str_trim(x)
+  x <- stringi::stri_trim_both(x)
   x[x %in% c("", "NA", "NULL", "null")] <- NA_character_
   x
 }
@@ -311,7 +311,10 @@ source_file_label <- function(x, input) {
 }
 
 ms_to_datetime <- function(x, tz = "Asia/Shanghai") {
-  tz <- appusage_resolve_timezone(tz)
+  ms_to_datetime_validated(x, appusage_resolve_timezone(tz))
+}
+
+ms_to_datetime_validated <- function(x, tz) {
   ms <- parse_t_timestamp(x)
   as.POSIXct(ms / 1000, origin = "1970-01-01", tz = tz)
 }

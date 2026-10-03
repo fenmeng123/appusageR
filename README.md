@@ -3,11 +3,16 @@ appusageR
 
 `appusageR` parses, validates, standardizes, and summarizes exported APP
 Usage / Screen Time Android smartphone-use logs for reproducible
-research workflows. Version 0.3.4 provides faithful raw parsers,
+research workflows. Version 0.3.5 provides faithful raw parsers,
 BIDS-like per-source cache files, second-level event/episode/daily
 outputs, breakpoint-aware resume and rerun support, memory-aware
 parallel batch workflows, manual app-category enrichment, project-level
 Wenjuanxing/self-report matching, and structured workflow diagnostics.
+
+Version 0.3.5 refactors preprocessing structures, shares QC computation and
+uses stringi for data-text operations. The user accepted its measured performance
+on 2026-10-03. Public interfaces and output schema 0.3.4 remain unchanged.
+Historical-output migration remains a separate decision.
 
 Author: Kunru Song (<Kunrusong97@gmail.com>)
 

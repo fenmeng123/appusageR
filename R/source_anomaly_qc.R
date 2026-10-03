@@ -35,16 +35,23 @@ appusage_source_qc_config <- function(config = NULL,
   out
 }
 
-appusage_source_anomaly_qc <- function(data, config = NULL, metadata = NULL) {
-  grains <- appusage_normalize_anomaly_input(data)
-  config <- appusage_source_qc_config(config)
-  line_overlap <- appusage_line_overlap_qc(grains$episode, config)
-  line_timestamp <- appusage_line_timestamp_qc(grains$episode, config)
+appusage_source_anomaly_qc <- function(data, config = NULL, metadata = NULL,
+                                       context = NULL) {
+  if (is.null(context)) {
+    grains <- appusage_normalize_anomaly_input(data)
+    config <- appusage_source_qc_config(config)
+    context <- appusage_qc_context(grains, config)
+  } else {
+    grains <- context$grains
+    config <- context$config
+  }
+  line_overlap <- appusage_line_overlap_qc(grains$episode, config, context)
+  line_timestamp <- appusage_line_timestamp_qc(grains$episode, config, context)
   meta_summary <- appusage_meta_summary_qc(grains$daily, config)
   meta_reconstruction <- appusage_meta_reconstruction_qc(
     grains$episode,
     grains$daily,
-    config
+    config, context
   )
 
   episode_reasons <- c(
@@ -102,7 +109,7 @@ appusage_line_episode_rows <- function(episode) {
   episode[export_type %in% "line" | episode_source %in% "line", , drop = FALSE]
 }
 
-appusage_line_overlap_qc <- function(episode, config) {
+appusage_line_overlap_qc <- function(episode, config, context = NULL) {
   empty <- list(
     status = "not_applicable", n_foreground_intervals = 0L,
     n_background_intervals = 0L, n_collection_intervals = 0L,
@@ -113,17 +120,18 @@ appusage_line_overlap_qc <- function(episode, config) {
     max_daily_foreground_ms = NA_real_, n_daily_foreground_over_24h = 0L,
     daily = list(), diagnostic = FALSE, warning = FALSE, critical = FALSE
   )
-  line <- appusage_line_episode_rows(episode)
+  view <- appusage_qc_episode_view(episode, "line", context)
+  line <- view$data
+  rows <- view$rows
   if (!is.data.frame(line) || nrow(line) == 0L) return(empty)
 
-  start <- appusage_num_col(line, "start_ts_ms")
-  end <- appusage_num_col(line, "end_ts_ms")
-  duration <- appusage_num_col(line, "duration_ms")
-  valid <- !is.na(start) & !is.na(end) & !is.na(duration) &
-    end >= start & duration >= 0
-  activity <- appusage_chr_col(line, "activity_type")
+  start <- appusage_qc_col(line, "start_ts_ms", "num", context, rows = rows)
+  end <- appusage_qc_col(line, "end_ts_ms", "num", context, rows = rows)
+  duration <- appusage_qc_col(line, "duration_ms", "num", context, rows = rows)
+  valid <- appusage_qc_valid_intervals(start, end, duration, context, rows)
+  activity <- appusage_qc_col(line, "activity_type", "chr", context, rows = rows)
   activity[is.na(activity) | activity == ""] <- "foreground"
-  collection <- appusage_lgl_col(line, "is_collection_app")
+  collection <- appusage_qc_col(line, "is_collection_app", "lgl", context, rows = rows)
   foreground <- valid & activity == "foreground" & !is.na(collection) & !collection
   background <- valid & activity != "foreground" & !is.na(collection) & !collection
 
@@ -135,7 +143,7 @@ appusage_line_overlap_qc <- function(episode, config) {
   if (!any(foreground, na.rm = TRUE)) return(empty)
 
   fg <- line[foreground, , drop = FALSE]
-  duplicate_key <- paste(
+  duplicate_key <- appusage_text_paste(
     appusage_num_col(fg, "start_ts_ms"), appusage_num_col(fg, "end_ts_ms"),
     appusage_chr_col(fg, "package_name"), appusage_chr_col(fg, "app_name"),
     appusage_chr_col(fg, "activity_type"), sep = "\r"
@@ -143,7 +151,7 @@ appusage_line_overlap_qc <- function(episode, config) {
   empty$exact_duplicate_count <- sum(duplicated(duplicate_key))
   empty$exact_duplicate_ratio <- empty$exact_duplicate_count / nrow(fg)
 
-  segments <- appusage_source_qc_interval_segments(fg, config$effective_timezone)
+  segments <- appusage_source_qc_interval_segments(fg, config$effective_timezone, context, rows[foreground])
   day_groups <- split(seq_len(nrow(segments)), as.character(segments$date))
   daily <- lapply(day_groups, function(idx) {
     appusage_interval_overlap_day(segments[idx, , drop = FALSE], config)
@@ -175,38 +183,55 @@ appusage_line_overlap_qc <- function(episode, config) {
   empty
 }
 
-appusage_source_qc_interval_segments <- function(x, tz) {
-  rows <- vector("list", nrow(x))
-  for (i in seq_len(nrow(x))) {
-    start <- as.numeric(x$start_ts_ms[[i]])
-    end <- as.numeric(x$end_ts_ms[[i]])
-    duration <- as.numeric(x$duration_ms[[i]])
-    start_date <- appusage_date_from_datetime(ms = start, tz = tz)
-    end_date <- appusage_date_from_datetime(ms = end - 0.001, tz = tz)
-    dates <- seq(start_date, end_date, by = "day")
-    boundaries <- if (length(dates) > 1L) {
-      as.numeric(as.POSIXct(
-        paste(dates[-1L], "00:00:00"),
-        format = "%Y-%m-%d %H:%M:%S", tz = tz
-      )) * 1000
-    } else numeric()
-    endpoints <- c(start, boundaries[boundaries > start & boundaries < end], end)
+appusage_source_qc_interval_segments <- function(x, tz, context = NULL, rows = NULL) {
+  n <- nrow(x)
+  if (!n) return(NULL)
+  if (is.null(context)) tz <- appusage_resolve_timezone(tz)
+  start <- if (is.null(context)) as.numeric(x$start_ts_ms) else
+    appusage_qc_col(x, "start_ts_ms", "num", context, rows = rows)
+  end <- if (is.null(context)) as.numeric(x$end_ts_ms) else
+    appusage_qc_col(x, "end_ts_ms", "num", context, rows = rows)
+  duration <- if (is.null(context)) as.numeric(x$duration_ms) else
+    appusage_qc_col(x, "duration_ms", "num", context, rows = rows)
+  calendar <- if (is.null(context)) appusage_interval_calendar(start, end, tz) else list(
+    start_date = appusage_qc_date(x, "start_ts_ms", context, rows = rows, tz = tz, ms = TRUE),
+    end_date = appusage_qc_date(x, "end_ts_ms", context, rows = rows, tz = tz, ms = TRUE, offset = -0.001)
+  )
+  start_date <- calendar$start_date
+  end_date <- calendar$end_date
+  invalid <- which(is.na(start_date) | is.na(end_date) | end_date < start_date)
+  # Keep seq.Date's existing error behavior for unrepresentable/reversed input.
+  if (length(invalid)) for (i in invalid) seq(start_date[[i]], end_date[[i]], by = "day")
+  cross <- which(start_date != end_date)
+  counts <- rep(1L, n)
+  parts <- vector("list", length(cross))
+  for (j in seq_along(cross)) {
+    i <- cross[[j]]
+    dates <- seq(start_date[[i]], end_date[[i]], by = "day")
+    boundaries <- appusage_midnight_ms(dates[-1L], tz)
+    endpoints <- c(start[[i]], boundaries[boundaries > start[[i]] & boundaries < end[[i]]], end[[i]])
     wall <- diff(endpoints)
-    allocated <- if (sum(wall) > 0) duration * wall / sum(wall) else duration
-    if (length(allocated) > 1L) {
-      allocated[[length(allocated)]] <- duration - sum(allocated[-length(allocated)])
-    }
-    rows[[i]] <- data.frame(
-      source_row = i,
-      date = appusage_date_from_datetime(ms = endpoints[-length(endpoints)], tz = tz),
-      start_ts_ms = endpoints[-length(endpoints)],
-      end_ts_ms = endpoints[-1L],
-      duration_ms = allocated,
-      package_name = appusage_chr_col(x[i, , drop = FALSE], "package_name"),
-      stringsAsFactors = FALSE
-    )
+    allocated <- if (sum(wall) > 0) duration[[i]] * wall / sum(wall) else duration[[i]]
+    if (length(allocated) > 1L) allocated[[length(allocated)]] <- duration[[i]] - sum(allocated[-length(allocated)])
+    counts[[i]] <- length(allocated)
+    parts[[j]] <- list(start = utils::head(endpoints, -1L), end = endpoints[-1L], duration = allocated)
   }
-  do.call(rbind, rows)
+  row <- rep.int(seq_len(n), counts)
+  a <- start[row]; b <- end[row]; d <- duration[row]
+  positive <- b > a
+  d[positive] <- d[positive] * (b[positive] - a[positive]) / (b[positive] - a[positive])
+  offsets <- c(0L, cumsum(counts))
+  for (j in seq_along(cross)) {
+    i <- cross[[j]]
+    index <- offsets[[i]] + seq_len(counts[[i]])
+    a[index] <- parts[[j]]$start; b[index] <- parts[[j]]$end; d[index] <- parts[[j]]$duration
+  }
+  date <- start_date[row]
+  expanded_cross <- which(row %in% cross)
+  date[expanded_cross] <- appusage_date_from_datetime_validated(ms = a[expanded_cross], tz = tz)
+  data.frame(source_row = row, date = date,
+    start_ts_ms = a, end_ts_ms = b, duration_ms = d,
+    package_name = appusage_chr_col(x, "package_name")[row], stringsAsFactors = FALSE)
 }
 
 appusage_interval_overlap_day <- function(x, config) {
@@ -284,7 +309,7 @@ appusage_overlap_pair_count <- function(start, end) {
   as.numeric(count)
 }
 
-appusage_line_timestamp_qc <- function(episode, config) {
+appusage_line_timestamp_qc <- function(episode, config, context = NULL) {
   out <- list(
     status = "not_applicable", n_missing_start = 0L, n_missing_end = 0L,
     n_missing_duration = 0L, n_negative_interval = 0L, n_zero_interval = 0L,
@@ -292,18 +317,20 @@ appusage_line_timestamp_qc <- function(episode, config) {
     n_source_date_mismatch_raw = 0L, n_malformed_source_date_mismatch = 0L,
     diagnostic = FALSE, warning = FALSE, critical = FALSE
   )
-  line <- appusage_line_episode_rows(episode)
+  view <- appusage_qc_episode_view(episode, "line", context)
+  line <- view$data
+  rows <- view$rows
   if (!is.data.frame(line) || nrow(line) == 0L) return(out)
   out$status <- "success"
-  start <- appusage_num_col(line, "start_ts_ms")
-  end <- appusage_num_col(line, "end_ts_ms")
-  duration <- appusage_num_col(line, "duration_ms")
-  start_date <- appusage_date_from_datetime(ms = start, tz = config$effective_timezone)
-  end_date <- appusage_date_from_datetime(ms = end, tz = config$effective_timezone)
-  valid <- !is.na(start) & !is.na(end) & !is.na(duration) & end >= start & duration >= 0
+  start <- appusage_qc_col(line, "start_ts_ms", "num", context, rows = rows)
+  end <- appusage_qc_col(line, "end_ts_ms", "num", context, rows = rows)
+  duration <- appusage_qc_col(line, "duration_ms", "num", context, rows = rows)
+  start_date <- appusage_qc_date(line, "start_ts_ms", context, rows = rows, tz = config$effective_timezone, ms = TRUE)
+  end_date <- appusage_qc_date(line, "end_ts_ms", context, rows = rows, tz = config$effective_timezone, ms = TRUE)
+  valid <- appusage_qc_valid_intervals(start, end, duration, context, rows)
   cross <- valid & start_date != end_date
-  source_date <- appusage_date_col(line, "source_table_date")
-  raw_mismatch <- appusage_lgl_col(line, "source_date_timestamp_date_mismatch")
+  source_date <- appusage_qc_date(line, "source_table_date", context, rows = rows)
+  raw_mismatch <- appusage_qc_col(line, "source_date_timestamp_date_mismatch", "lgl", context, rows = rows)
   acceptable_cross <- cross & !is.na(source_date) &
     (source_date == start_date | source_date == end_date)
   malformed <- raw_mismatch & !acceptable_cross
@@ -382,7 +409,7 @@ appusage_meta_summary_qc <- function(daily, config) {
   out
 }
 
-appusage_meta_reconstruction_qc <- function(episode, daily, config) {
+appusage_meta_reconstruction_qc <- function(episode, daily, config, context = NULL) {
   out <- list(
     status = "not_applicable", n_zero_duration = 0L,
     n_timeline_clipped_to_nonpositive = 0L, n_duration_inferred = 0L,
@@ -393,36 +420,35 @@ appusage_meta_reconstruction_qc <- function(episode, daily, config) {
     critical = FALSE
   )
   if (!is.data.frame(episode)) return(out)
-  source <- appusage_chr_col(episode, "episode_source")
-  meta <- episode[!is.na(source) & source == "meta_events", , drop = FALSE]
+  view <- appusage_qc_episode_view(episode, "meta", context)
+  meta <- view$data
+  rows <- view$rows
   if (nrow(meta) == 0L) return(out)
   out$status <- "success"
-  duration <- appusage_num_col(meta, "duration_ms")
-  warning <- appusage_chr_col(meta, "reconstruction_warning")
+  duration <- appusage_qc_col(meta, "duration_ms", "num", context, rows = rows)
+  warning <- appusage_qc_col(meta, "reconstruction_warning", "chr", context, rows = rows)
   out$n_zero_duration <- sum(!is.na(duration) & duration == 0)
-  out$n_timeline_clipped_to_nonpositive <- sum(grepl(
+  out$n_timeline_clipped_to_nonpositive <- sum(appusage_text_grepl(
     "timeline_clipped_to_nonpositive", warning, fixed = TRUE
   ), na.rm = TRUE)
-  out$n_duration_inferred <- sum(grepl("duration_inferred", warning, fixed = TRUE), na.rm = TRUE)
-  merged_gap <- appusage_num_col(meta, "merged_gap_ms")
-  source_count <- appusage_num_col(meta, "source_episode_count")
+  out$n_duration_inferred <- sum(appusage_text_grepl("duration_inferred", warning, fixed = TRUE), na.rm = TRUE)
+  merged_gap <- appusage_qc_col(meta, "merged_gap_ms", "num", context, rows = rows)
+  source_count <- appusage_qc_col(meta, "source_episode_count", "num", context, rows = rows)
   out$n_merged_episode_rows <- sum((!is.na(source_count) & source_count > 1) |
     (!is.na(merged_gap) & merged_gap > 0))
   out$total_merged_gap_ms <- sum(merged_gap[!is.na(merged_gap) & merged_gap > 0])
-  out$n_source_date_mismatch <- sum(appusage_lgl_col(
-    meta, "source_date_timestamp_date_mismatch"
-  ))
+  out$n_source_date_mismatch <- sum(appusage_qc_col(meta, "source_date_timestamp_date_mismatch", "lgl", context, rows = rows))
   agreement <- appusage_chr_col(daily, "duration_agreement_status")
   out$n_summary_only_keys <- sum(agreement == "summary_only", na.rm = TRUE)
   out$n_episode_only_keys <- sum(agreement == "episode_only", na.rm = TRUE)
-  reconstruction_status <- appusage_chr_col(meta, "reconstruction_status")
+  reconstruction_status <- appusage_qc_col(meta, "reconstruction_status", "chr", context, rows = rows)
   complete <- !is.na(reconstruction_status) & reconstruction_status == "complete" &
     !is.na(duration) & duration > 0 &
-    !is.na(appusage_num_col(meta, "start_ts_ms")) &
-    !is.na(appusage_num_col(meta, "end_ts_ms"))
+    !is.na(appusage_qc_col(meta, "start_ts_ms", "num", context, rows = rows)) &
+    !is.na(appusage_qc_col(meta, "end_ts_ms", "num", context, rows = rows))
   if (any(complete, na.rm = TRUE)) {
     eligible <- meta[complete, , drop = FALSE]
-    segments <- appusage_source_qc_interval_segments(eligible, config$effective_timezone)
+    segments <- appusage_source_qc_interval_segments(eligible, config$effective_timezone, context, rows[complete])
     days <- split(seq_len(nrow(segments)), as.character(segments$date))
     checks <- lapply(days, function(idx) {
       appusage_interval_overlap_day(segments[idx, , drop = FALSE], config)
@@ -506,7 +532,7 @@ appusage_meta_summary_qc_fields <- function(x, max_duration_ms,
   date <- appusage_date_col(x, "table_date")
   package <- appusage_chr_col(x, "package_name")
   app <- appusage_chr_col(x, "app_name")
-  repeated_key <- paste(package, app, duration, sep = "\r")
+  repeated_key <- appusage_text_paste(package, app, duration, sep = "\r")
   repeated <- rep(FALSE, nrow(x))
   valid <- !is.na(duration) & !is.na(date)
   if (any(valid)) {

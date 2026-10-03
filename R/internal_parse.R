@@ -1,9 +1,9 @@
 as_text_matrix <- function(lines) {
-  pieces <- strsplit(lines, ",", fixed = TRUE)
+  pieces <- appusage_text_split(lines, ",", fixed = TRUE)
   width <- max(lengths(pieces), 1)
   mat <- matrix(NA_character_, nrow = length(pieces), ncol = width)
   for (i in seq_along(pieces)) {
-    values <- stringr::str_trim(pieces[[i]])
+    values <- stringi::stri_trim_both(pieces[[i]])
     values[values == ""] <- NA_character_
     mat[i, seq_along(values)] <- values
   }
@@ -31,28 +31,29 @@ drop_leading_empty_cols <- function(mat) {
 }
 
 row_contains_all <- function(row, patterns) {
-  text <- paste(row, collapse = "\n")
-  all(vapply(patterns, stringr::str_detect, logical(1), string = text))
+  text <- appusage_text_paste(row, collapse = "\n")
+  all(vapply(patterns, appusage_text_detect, logical(1), string = text))
 }
 
 find_header_rows <- function(mat, required_patterns) {
-  which(apply(mat, 1, row_contains_all, patterns = required_patterns))
+  which(appusage_context_match(mat, required_patterns))
 }
 
 row_contains_any <- function(row, patterns) {
-  text <- paste(row, collapse = "\n")
-  any(vapply(patterns, stringr::str_detect, logical(1), string = text))
+  text <- appusage_text_paste(row, collapse = "\n")
+  any(vapply(patterns, appusage_text_detect, logical(1), string = text))
 }
 
 extract_row_date <- function(row, fallback = NA_character_) {
-  date <- stringr::str_extract(
-    paste(row, collapse = " "),
+  date <- stringi::stri_extract_first_regex(
+    appusage_text_paste(row, collapse = " "),
     "[0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}"
   )
   ifelse(is.na(date), fallback, date)
 }
 
 previous_date <- function(mat, row_index) {
+  if (inherits(mat, "appusage_parse_context")) return(appusage_context_previous_date(mat, row_index))
   if (row_index <= 1) {
     return(NA_character_)
   }
@@ -88,9 +89,8 @@ valid_data_row <- function(row) {
 }
 
 header_position <- function(header, patterns) {
-  idx <- which(vapply(header, function(cell) {
-    any(stringr::str_detect(cell, patterns), na.rm = TRUE)
-  }, logical(1)))
+  pattern <- appusage_text_paste0("(?:", appusage_text_paste(patterns, collapse = ")|(?:"), ")")
+  idx <- which(appusage_text_detect(header, pattern))
   if (length(idx) == 0) {
     NA_integer_
   } else {
@@ -111,7 +111,7 @@ first_present <- function(row, position) {
 }
 
 parse_count <- function(x) {
-  suppressWarnings(as.numeric(stringr::str_extract(
+  suppressWarnings(as.numeric(stringi::stri_extract_first_regex(
     as.character(x),
     "-?[0-9]+(?:\\.[0-9]+)?"
   )))
@@ -121,7 +121,7 @@ append_warning <- function(existing, warning) {
   ifelse(
     is.na(existing) | existing == "",
     warning,
-    paste(existing, warning, sep = "; ")
+    appusage_text_paste(existing, warning, sep = "; ")
   )
 }
 
@@ -129,7 +129,7 @@ make_parser_diagnostics <- function(export_type, lines, mat, header_rows,
                                     required_fields = list(),
                                     optional_fields = list(),
                                     extras = list()) {
-  text <- paste(mat, collapse = "\n")
+  text <- appusage_context_all_text(mat)
   required_hits <- parser_field_hits(text, required_fields)
   optional_hits <- parser_field_hits(text, optional_fields)
   required_found <- names(required_hits)[required_hits > 0]
@@ -140,7 +140,7 @@ make_parser_diagnostics <- function(export_type, lines, mat, header_rows,
   diagnostics <- list(
     input_profile = list(
       n_lines = length(lines),
-      n_nonempty_lines = sum(nzchar(trimws(lines)), na.rm = TRUE),
+      n_nonempty_lines = sum(appusage_text_nzchar(appusage_text_trim(lines)), na.rm = TRUE),
       n_columns = if (is.null(dim(mat))) NA_integer_ else ncol(mat),
       n_leading_empty_columns = attr(mat, "n_leading_empty_columns", exact = TRUE) %||% 0L
     ),
@@ -177,13 +177,13 @@ parser_field_hits <- function(text, fields) {
     return(stats::setNames(integer(), character()))
   }
   hits <- vapply(fields, function(pattern) {
-    sum(stringr::str_detect(text, pattern), na.rm = TRUE)
+    sum(appusage_text_detect(text, pattern), na.rm = TRUE)
   }, integer(1))
   hits
 }
 
 parser_empty_reason <- function(lines, header_rows, n_rows_out) {
-  if (length(lines) == 0 || sum(nzchar(trimws(lines)), na.rm = TRUE) == 0) {
+  if (length(lines) == 0 || sum(appusage_text_nzchar(appusage_text_trim(lines)), na.rm = TRUE) == 0) {
     return("empty_file")
   }
   if (length(header_rows) == 0) {
@@ -309,7 +309,7 @@ parser_missing_date_count <- function(frames) {
 
 parser_missing_timestamp_count <- function(frames) {
   sum(vapply(frames, function(frame) {
-    cols <- names(frame)[grepl("(^|_)ts_ms$", names(frame))]
+    cols <- names(frame)[appusage_text_grepl("(^|_)ts_ms$", names(frame))]
     if (length(cols) == 0) {
       return(0L)
     }
@@ -322,7 +322,7 @@ parser_duration_warning_count <- function(frames) {
     if (!"parse_warning" %in% names(frame)) {
       return(0L)
     }
-    sum(grepl("duration_ms could not be parsed|duration_ms could not be computed", frame$parse_warning))
+    sum(appusage_text_grepl("duration_ms could not be parsed|duration_ms could not be computed", frame$parse_warning))
   }, integer(1)), na.rm = TRUE)
 }
 
@@ -341,7 +341,7 @@ parser_date_range <- function(frames) {
     cols <- intersect(c("date", "table_date"), names(frame))
     unlist(lapply(cols, function(col) as.character(frame[[col]])), use.names = FALSE)
   }), use.names = FALSE)
-  dates <- dates[!is.na(dates) & nzchar(dates)]
+  dates <- dates[!is.na(dates) & appusage_text_nzchar(dates)]
   list(
     date_min = if (length(dates) == 0) NA_character_ else min(dates),
     date_max = if (length(dates) == 0) NA_character_ else max(dates)
@@ -350,7 +350,7 @@ parser_date_range <- function(frames) {
 
 parser_timestamp_range <- function(frames) {
   timestamps <- unlist(lapply(frames, function(frame) {
-    cols <- names(frame)[grepl("(^|_)ts_ms$", names(frame))]
+    cols <- names(frame)[appusage_text_grepl("(^|_)ts_ms$", names(frame))]
     unlist(lapply(cols, function(col) frame[[col]]), use.names = FALSE)
   }), use.names = FALSE)
   timestamps <- timestamps[!is.na(timestamps)]

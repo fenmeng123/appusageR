@@ -1,6 +1,7 @@
 ^appusageR\.Rproj$
 ^\.Rproj\.user$
 ^docs$
+^tools/performance$
 ^old_r_codes$
 (^|[\\/])old_r_codes($|[\\/])
 ^dev_samples$

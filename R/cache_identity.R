@@ -1,25 +1,25 @@
 appusage_stable_text_md5 <- function(text) {
   path <- tempfile("appusage-source-identity-", fileext = ".bin")
   on.exit(unlink(path, force = TRUE), add = TRUE)
-  writeBin(charToRaw(enc2utf8(paste(text, collapse = "\r\n"))), path)
+  writeBin(charToRaw(stringi::stri_enc_toutf8(appusage_text_paste(text, collapse = "\r\n"))), path)
   unname(as.character(tools::md5sum(path))[[1]])
 }
 
 appusage_source_fingerprint <- function(x, input = "file") {
   if (identical(input, "file") && length(x) == 1L && !is.na(x) && file.exists(x)) {
     content_md5 <- unname(as.character(tools::md5sum(x))[[1]])
-    return(appusage_stable_text_md5(c(tolower(basename(x)), content_md5)))
+    return(appusage_stable_text_md5(c(appusage_text_lower(basename(x)), content_md5)))
   }
   appusage_stable_text_md5(as.character(x))
 }
 
 appusage_native_timestamp_token <- function(timestamp) {
   timestamp <- as.character(timestamp %||% NA_character_)[[1]]
-  if (is.na(timestamp) || !nzchar(timestamp)) {
+  if (is.na(timestamp) || !appusage_text_nzchar(timestamp)) {
     return("notime")
   }
-  token <- gsub("[^0-9]", "", timestamp)
-  if (!nzchar(token)) "notime" else substr(token, 1L, 14L)
+  token <- appusage_text_gsub("[^0-9]", "", timestamp)
+  if (!appusage_text_nzchar(token)) "notime" else appusage_text_substr(token, 1L, 14L)
 }
 
 appusage_source_identity <- function(x, input, id_info, participant_id,
@@ -28,8 +28,8 @@ appusage_source_identity <- function(x, input, id_info, participant_id,
   fingerprint <- fingerprint %||% appusage_source_fingerprint(x, input)
   timestamp <- id_info$native_export_created_at[[1]] %||% NA_character_
   timestamp_token <- appusage_native_timestamp_token(timestamp)
-  cache_key <- paste0(timestamp_token, "-", substr(fingerprint, 1L, 12L))
-  record_key <- paste(
+  cache_key <- appusage_text_paste0(timestamp_token, "-", appusage_text_substr(fingerprint, 1L, 12L))
+  record_key <- appusage_text_paste(
     "sub", sanitize_entity_value(participant_id),
     "type", sanitize_entity_value(export_type %||% "unknown"),
     "time", timestamp_token,

@@ -19,8 +19,21 @@ parse_day <- function(x, input = c("file", "text", "lines"),
                       tz = "Asia/Shanghai", encoding = "auto",
                       strict = FALSE) {
   input <- match.arg(input)
-  lines <- read_appusage_lines(x, input = input, encoding = encoding)
-  mat <- as_text_matrix(lines)
+  source_file <- source_file %||% source_file_label(x, input)
+  appusage_parse_day_context(
+    appusage_context_input(x, input, encoding), input = "lines",
+    participant_id = participant_id, source_file = source_file, tz = tz,
+    encoding = encoding, strict = strict
+  )
+}
+
+appusage_parse_day_context <- function(x, input = c("file", "text", "lines"),
+                      participant_id = NULL, source_file = NULL,
+                      tz = "Asia/Shanghai", encoding = "auto",
+                      strict = FALSE) {
+  input <- match.arg(input)
+  mat <- appusage_context_input(x, input, encoding)
+  lines <- mat$store$lines
   required_fields <- day_required_fields()
   optional_fields <- day_optional_fields()
   header_rows <- find_header_rows(
@@ -72,8 +85,21 @@ parse_app <- function(x, input = c("file", "text", "lines"),
                       tz = "Asia/Shanghai", encoding = "auto",
                       strict = FALSE) {
   input <- match.arg(input)
-  lines <- read_appusage_lines(x, input = input, encoding = encoding)
-  mat <- as_text_matrix(lines)
+  source_file <- source_file %||% source_file_label(x, input)
+  appusage_parse_app_context(
+    appusage_context_input(x, input, encoding), input = "lines",
+    participant_id = participant_id, source_file = source_file, tz = tz,
+    encoding = encoding, strict = strict
+  )
+}
+
+appusage_parse_app_context <- function(x, input = c("file", "text", "lines"),
+                      participant_id = NULL, source_file = NULL,
+                      tz = "Asia/Shanghai", encoding = "auto",
+                      strict = FALSE) {
+  input <- match.arg(input)
+  mat <- appusage_context_input(x, input, encoding)
+  lines <- mat$store$lines
   required_fields <- app_required_fields()
   header_rows <- find_header_rows(
     mat,
@@ -150,7 +176,7 @@ day_format_diagnostics <- function(blocks, raw, out) {
     } else {
       0L
     },
-    n_duration_ms_scientific_notation = sum(grepl("[Ee][+-]?[0-9]+", raw_duration), na.rm = TRUE),
+    n_duration_ms_scientific_notation = sum(appusage_text_grepl("[Ee][+-]?[0-9]+", raw_duration), na.rm = TRUE),
     all_row_vs_sum_app_diff_ms = all_row_vs_sum_app_diff(out)$diff_ms,
     all_row_vs_sum_app_diff_pct = all_row_vs_sum_app_diff(out)$diff_pct
   )
@@ -166,7 +192,7 @@ app_format_diagnostics <- function(raw, out) {
     target_app_name = if (is.data.frame(out) && nrow(out) > 0) out$app_name[[1]] else NA_character_,
     target_package_name = if (is.data.frame(out) && nrow(out) > 0) out$package_name[[1]] else NA_character_,
     n_daily_rows = if (is.data.frame(out)) nrow(out) else 0L,
-    n_scientific_duration_values = sum(grepl("[Ee][+-]?[0-9]+", raw_duration), na.rm = TRUE),
+    n_scientific_duration_values = sum(appusage_text_grepl("[Ee][+-]?[0-9]+", raw_duration), na.rm = TRUE),
     contains_all_record = if (is.data.frame(out)) any(out$is_all_apps, na.rm = TRUE) else FALSE,
     is_app_specific_export = TRUE,
     should_not_infer_total_daily_use = if (is.data.frame(out)) !any(out$is_all_apps, na.rm = TRUE) else TRUE
@@ -208,29 +234,21 @@ parse_day_block <- function(block, mat) {
 
   date <- extract_row_date(header, previous_date(mat, block$header_row))
   data <- rows_for_block(mat, block)
-  rows <- vector("list", nrow(data))
-
-  for (i in seq_len(nrow(data))) {
-    row <- data[i, ]
-    if (!valid_data_row(row) ||
-      row_contains_any(row, c("\\u5e94\\u7528\\u540d\\u79f0", "\\u4f7f\\u7528\\u65f6\\u957f\\uff08ms\\uff09"))) {
-      next
-    }
-    rows[[i]] <- data.frame(
-      date = extract_row_date(row, date),
-      app_name = first_present(row, pos$app_name),
-      package_name = first_present(row, pos$package_name),
-      duration_text = first_present(row, pos$duration_text),
-      duration_ms = first_present(row, pos$duration_ms),
-      open_count = first_present(row, pos$open_count),
-      notification_count = first_present(row, pos$notification_count),
-      split_screen_ms = first_present(row, split_pos),
+  keep <- appusage_context_valid(data) & !appusage_context_match(data, c("\\u5e94\\u7528\\u540d\\u79f0", "\\u4f7f\\u7528\\u65f6\\u957f\\uff08ms\\uff09"), all = FALSE)
+  data <- data[which(keep), , drop = FALSE]
+  if (!nrow(data)) return(NULL)
+  data.frame(
+      date = appusage_context_dates(data, date),
+      app_name = appusage_context_column(data, pos$app_name),
+      package_name = appusage_context_column(data, pos$package_name),
+      duration_text = appusage_context_column(data, pos$duration_text),
+      duration_ms = appusage_context_column(data, pos$duration_ms),
+      open_count = appusage_context_column(data, pos$open_count),
+      notification_count = appusage_context_column(data, pos$notification_count),
+      split_screen_ms = appusage_context_column(data, split_pos),
       parse_warning = NA_character_,
       stringsAsFactors = FALSE
     )
-  }
-
-  do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
 }
 
 parse_app_block <- function(block, mat) {
@@ -250,29 +268,21 @@ parse_app_block <- function(block, mat) {
   app_name <- first_present(header, 1)
   package_name <- first_present(header, 2)
   data <- rows_for_block(mat, block)
-  rows <- vector("list", nrow(data))
-
-  for (i in seq_len(nrow(data))) {
-    row <- data[i, ]
-    if (!valid_data_row(row) ||
-      row_contains_any(row, c("^\\u65e5\\u671f$", "\\u4f7f\\u7528\\u65f6\\u957f\\uff08ms\\uff09"))) {
-      next
-    }
-    rows[[i]] <- data.frame(
-      date = first_present(row, pos$date),
+  keep <- appusage_context_valid(data) & !appusage_context_match(data, c("^\\u65e5\\u671f$", "\\u4f7f\\u7528\\u65f6\\u957f\\uff08ms\\uff09"), all = FALSE)
+  data <- data[which(keep), , drop = FALSE]
+  if (!nrow(data)) return(NULL)
+  data.frame(
+      date = appusage_context_column(data, pos$date),
       app_name = app_name,
       package_name = package_name,
-      duration_text = first_present(row, pos$duration_text),
-      duration_ms = first_present(row, pos$duration_ms),
-      open_count = first_present(row, pos$open_count),
-      notification_count = first_present(row, pos$notification_count),
+      duration_text = appusage_context_column(data, pos$duration_text),
+      duration_ms = appusage_context_column(data, pos$duration_ms),
+      open_count = appusage_context_column(data, pos$open_count),
+      notification_count = appusage_context_column(data, pos$notification_count),
       split_screen_ms = NA_character_,
       parse_warning = NA_character_,
       stringsAsFactors = FALSE
     )
-  }
-
-  do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
 }
 
 finalize_day_tibble <- function(data, participant_id, source_file, export_type) {

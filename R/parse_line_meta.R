@@ -13,9 +13,22 @@ parse_line <- function(x, input = c("file", "text", "lines"),
                        tz = "Asia/Shanghai", encoding = "auto",
                        strict = FALSE) {
   input <- match.arg(input)
+  source_file <- source_file %||% source_file_label(x, input)
+  appusage_parse_line_context(
+    appusage_context_input(x, input, encoding), input = "lines",
+    participant_id = participant_id, source_file = source_file, tz = tz,
+    encoding = encoding, strict = strict
+  )
+}
+
+appusage_parse_line_context <- function(x, input = c("file", "text", "lines"),
+                       participant_id = NULL, source_file = NULL,
+                       tz = "Asia/Shanghai", encoding = "auto",
+                       strict = FALSE) {
+  input <- match.arg(input)
   tz <- appusage_resolve_timezone(tz)
-  lines <- read_appusage_lines(x, input = input, encoding = encoding)
-  mat <- as_text_matrix(lines)
+  mat <- appusage_context_input(x, input, encoding)
+  lines <- mat$store$lines
   required_fields <- line_required_fields()
   header_rows <- find_header_rows(
     mat,
@@ -81,12 +94,25 @@ parse_meta <- function(x, input = c("file", "text", "lines"),
                        tz = "Asia/Shanghai", encoding = "auto",
                        strict = FALSE) {
   input <- match.arg(input)
+  source_file <- source_file %||% source_file_label(x, input)
+  appusage_parse_meta_context(
+    appusage_context_input(x, input, encoding), input = "lines",
+    participant_id = participant_id, source_file = source_file, tz = tz,
+    encoding = encoding, strict = strict
+  )
+}
+
+appusage_parse_meta_context <- function(x, input = c("file", "text", "lines"),
+                       participant_id = NULL, source_file = NULL,
+                       tz = "Asia/Shanghai", encoding = "auto",
+                       strict = FALSE) {
+  input <- match.arg(input)
   tz <- appusage_resolve_timezone(tz)
-  lines <- read_appusage_lines(x, input = input, encoding = encoding)
-  mat <- as_text_matrix(lines)
-  marker_text <- apply(mat, 1, paste, collapse = " ")
-  table1_rows <- which(stringr::str_detect(marker_text, "\\u8868\\u4e00"))
-  table2_rows <- which(stringr::str_detect(marker_text, "\\u8868\\u4e8c"))
+  mat <- appusage_context_input(x, input, encoding)
+  lines <- mat$store$lines
+  boundaries <- appusage_structural_boundaries(mat)
+  table1_rows <- boundaries$row[boundaries$boundary_type == "meta_table1"]
+  table2_rows <- boundaries$row[boundaries$boundary_type == "meta_table2"]
   diagnostics <- make_parser_diagnostics(
     export_type = "meta",
     lines = lines,
@@ -164,7 +190,7 @@ line_format_diagnostics <- function(raw, out, tz = "Asia/Shanghai") {
     raw_timestamps <- unlist(raw[timestamp_cols], use.names = FALSE)
   }
   list(
-    n_t_prefixed_timestamps = sum(grepl("^T:", raw_timestamps), na.rm = TRUE),
+    n_t_prefixed_timestamps = sum(appusage_text_grepl("^T:", raw_timestamps), na.rm = TRUE),
     n_zero_duration_episode = if (is.data.frame(out)) sum(out$duration_ms == 0, na.rm = TRUE) else 0L,
     n_negative_episode_duration = if (is.data.frame(out)) sum(out$duration_ms < 0, na.rm = TRUE) else 0L,
     n_cross_date_episode = if (is.data.frame(out) && nrow(out) > 0) {
@@ -193,7 +219,7 @@ line_block_candidate_count <- function(mat, blocks) {
   sum(vapply(blocks, function(block) {
     rows <- rows_for_block(mat, block)
     if (nrow(rows) == 0L) return(0L)
-    sum(vapply(seq_len(nrow(rows)), function(i) valid_data_row(rows[i, ]), logical(1)))
+    sum(appusage_context_valid(rows))
   }, integer(1)))
 }
 
@@ -206,7 +232,7 @@ line_structural_quality_thresholds <- function() {
 }
 
 line_structural_header_pattern <- function() {
-  paste(c(
+  appusage_text_paste(c(
     "\u5f00\u59cb\u65f6\u95f4", "\u7ed3\u675f\u65f6\u95f4",
     "\u5e94\u7528\u540d\u79f0", "\u5e94\u7528\u6807\u8bc6", "\u5e94\u7528\u5305\u540d",
     "\u4f7f\u7528\u65f6\u957f", "\u683c\u5f0f\u5316\u65f6\u95f4",
@@ -237,8 +263,8 @@ line_structural_quality <- function(out, candidate_row_count = nrow(out),
   valid <- !is.na(out$start_ts_ms) & !is.na(out$end_ts_ms) &
     !is.na(out$duration_ms) & out$end_ts_ms >= out$start_ts_ms &
     out$duration_ms >= 0
-  identity_text <- paste(out$app_name, out$package_name, sep = "\r")
-  contaminated <- grepl(
+  identity_text <- appusage_text_paste(out$app_name, out$package_name, sep = "\r")
+  contaminated <- appusage_text_grepl(
     line_structural_header_pattern(), identity_text,
     ignore.case = TRUE, perl = TRUE
   )
@@ -249,10 +275,10 @@ line_structural_quality <- function(out, candidate_row_count = nrow(out),
   exact_duplicates <- duplicated(out[, duplicate_columns, drop = FALSE])
   package_valid <- !is.na(out$package_name) & (
     out$package_name == "ALL" |
-      grepl("^(?:[A-Za-z][A-Za-z0-9_-]*[.])+[A-Za-z0-9_.-]+$", out$package_name)
+      appusage_text_grepl("^(?:[A-Za-z][A-Za-z0-9_-]*[.])+[A-Za-z0-9_.-]+$", out$package_name)
   )
   package_valid[is.na(package_valid)] <- FALSE
-  identity_malformed <- is.na(out$app_name) | !nzchar(trimws(out$app_name)) |
+  identity_malformed <- is.na(out$app_name) | !appusage_text_nzchar(appusage_text_trim(out$app_name)) |
     !package_valid
   timestamp_date <- appusage_date_from_datetime(out$start_datetime, tz = tz)
   source_date <- if ("source_table_date" %in% names(out)) out$source_table_date else out$date
@@ -314,9 +340,9 @@ appusage_line_structural_quality_error <- function(diagnostics) {
   quality <- diagnostics$format_specific$structural_quality %||% list()
   structure(
     list(
-      message = paste0(
+      message = appusage_text_paste0(
         "Line export failed structural quality gate: ",
-        paste(quality$critical_reasons %||% "unknown", collapse = "; "), "."
+        appusage_text_paste(quality$critical_reasons %||% "unknown", collapse = "; "), "."
       ),
       call = NULL,
       parser_diagnostics = diagnostics,
@@ -349,8 +375,8 @@ appusage_structural_quality_summary_fields <- function(quality) {
     structural_exact_duplicate_ratio = quality$exact_duplicate_ratio %||% NA_real_,
     structural_malformed_identity_count = quality$n_malformed_identity %||% NA_integer_,
     structural_date_mismatch_count = quality$n_source_date_timestamp_mismatch %||% NA_integer_,
-    structural_critical_reasons = paste(quality$critical_reasons %||% character(), collapse = ";"),
-    structural_warning_reasons = paste(quality$warning_reasons %||% character(), collapse = ";")
+    structural_critical_reasons = appusage_text_paste(quality$critical_reasons %||% character(), collapse = ";"),
+    structural_warning_reasons = appusage_text_paste(quality$warning_reasons %||% character(), collapse = ";")
   )
 }
 
@@ -363,7 +389,7 @@ meta_format_diagnostics <- function(pairs, summary, events) {
   event_type_counts <- as.list(as.integer(event_types))
   names(event_type_counts) <- names(event_types)
   unknown_event_types <- if (is.data.frame(events) && nrow(events) > 0) {
-    unique(events$event_type[grepl("^EVENT_TYPE_", events$event_type_label)])
+    unique(events$event_type[appusage_text_grepl("^EVENT_TYPE_", events$event_type_label)])
   } else {
     numeric()
   }
@@ -401,42 +427,24 @@ parse_line_block <- function(block, mat) {
   )
   date <- extract_row_date(header, previous_date(mat, block$header_row))
   data <- rows_for_block(mat, block)
-  rows <- vector("list", nrow(data))
-
-  for (i in seq_len(nrow(data))) {
-    row <- data[i, ]
-    if (!valid_data_row(row) ||
-      row_contains_any(row, c("\\u5f00\\u673a\\u81f3\\u4eca\\u6b65\\u6570\\u4fe1\\u606f", "^STEP", "\\u5f00\\u59cb\\u65f6\\u95f4\\uff08ms\\uff09", "\\u7ed3\\u675f\\u65f6\\u95f4\\uff08ms\\uff09"))) {
-      next
-    }
-    values <- list(
-      date = extract_row_date(row, date),
-      app_name = first_present(row, pos$app_name),
-      package_name = first_present(row, pos$package_name),
-      start_ts_ms = first_present(row, pos$start_ts_ms),
-      end_ts_ms = first_present(row, pos$end_ts_ms),
-      start_time_text = first_present(row, pos$start_time_text),
-      end_time_text = first_present(row, pos$end_time_text),
-      duration_text = first_present(row, pos$duration_text)
+  keep <- appusage_context_valid(data) & !appusage_context_match(data, c("\\u5f00\\u673a\\u81f3\\u4eca\\u6b65\\u6570\\u4fe1\\u606f", "^STEP", "\\u5f00\\u59cb\\u65f6\\u95f4\\uff08ms\\uff09", "\\u7ed3\\u675f\\u65f6\\u95f4\\uff08ms\\uff09"), all = FALSE)
+  data <- data[which(keep), , drop = FALSE]
+  if (!nrow(data)) return(NULL)
+  values <- list(
+      date = appusage_context_dates(data, date),
+      app_name = appusage_context_column(data, pos$app_name),
+      package_name = appusage_context_column(data, pos$package_name),
+      start_ts_ms = appusage_context_column(data, pos$start_ts_ms),
+      end_ts_ms = appusage_context_column(data, pos$end_ts_ms),
+      start_time_text = appusage_context_column(data, pos$start_time_text),
+      end_time_text = appusage_context_column(data, pos$end_time_text),
+      duration_text = appusage_context_column(data, pos$duration_text)
     )
-    if (all(is.na(unlist(values[c("app_name", "package_name", "start_ts_ms", "end_ts_ms")])))) {
-      next
-    }
-    rows[[i]] <- data.frame(
-      date = values$date,
-      app_name = values$app_name,
-      package_name = values$package_name,
-      start_ts_ms = values$start_ts_ms,
-      end_ts_ms = values$end_ts_ms,
-      start_time_text = values$start_time_text,
-      end_time_text = values$end_time_text,
-      duration_text = values$duration_text,
-      parse_warning = NA_character_,
-      stringsAsFactors = FALSE
-    )
-  }
-
-  do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
+  keep <- Reduce(`|`, lapply(values[c("app_name", "package_name", "start_ts_ms", "end_ts_ms")], function(x) !is.na(x)))
+  if (!any(keep)) return(NULL)
+  values <- lapply(values, `[`, keep)
+  values$parse_warning <- rep(NA_character_, sum(keep))
+  as.data.frame(values, stringsAsFactors = FALSE)
 }
 
 finalize_line_tibble <- function(data, participant_id, source_file, tz) {
@@ -508,31 +516,24 @@ parse_meta_summary_pair <- function(pair, mat) {
   } else {
     data <- mat[(pair$table1 + 1):(pair$table2 - 1), , drop = FALSE]
   }
-  rows <- vector("list", nrow(data))
-
-  for (i in seq_len(nrow(data))) {
-    row <- data[i, ]
-    if (!valid_data_row(row) || row_contains_any(row, c("\\u8868\\u4e00", "\\u8868\\u4e8c"))) {
-      next
-    }
-    rows[[i]] <- data.frame(
+  keep <- appusage_context_valid(data) & !appusage_context_match(data, c("\\u8868\\u4e00", "\\u8868\\u4e8c"), all = FALSE)
+  data <- data[which(keep), , drop = FALSE]
+  if (!nrow(data)) return(NULL)
+  data.frame(
       table_date = table_date,
-      app_name = first_present(row, 2),
-      package_name = first_present(row, 3),
-      start_datetime = first_present(row, 4),
-      end_datetime = first_present(row, 5),
-      last_datetime = first_present(row, 6),
-      total_duration_text = first_present(row, 7),
-      start_ts_ms = first_present(row, 8),
-      end_ts_ms = first_present(row, 9),
-      last_ts_ms = first_present(row, 10),
-      total_duration_ms = first_present(row, 11),
+      app_name = appusage_context_column(data, 2),
+      package_name = appusage_context_column(data, 3),
+      start_datetime = appusage_context_column(data, 4),
+      end_datetime = appusage_context_column(data, 5),
+      last_datetime = appusage_context_column(data, 6),
+      total_duration_text = appusage_context_column(data, 7),
+      start_ts_ms = appusage_context_column(data, 8),
+      end_ts_ms = appusage_context_column(data, 9),
+      last_ts_ms = appusage_context_column(data, 10),
+      total_duration_ms = appusage_context_column(data, 11),
       parse_warning = NA_character_,
       stringsAsFactors = FALSE
     )
-  }
-
-  do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
 }
 
 parse_meta_events_pair <- function(pair, mat) {
@@ -546,28 +547,21 @@ parse_meta_events_pair <- function(pair, mat) {
   } else {
     data <- mat[(pair$table2 + 1):pair$end, , drop = FALSE]
   }
-  rows <- vector("list", nrow(data))
-
-  for (i in seq_len(nrow(data))) {
-    row <- data[i, ]
-    if (!valid_data_row(row) || row_contains_any(row, c("\\u8868\\u4e00", "\\u8868\\u4e8c"))) {
-      next
-    }
-    rows[[i]] <- data.frame(
+  keep <- appusage_context_valid(data) & !appusage_context_match(data, c("\\u8868\\u4e00", "\\u8868\\u4e8c"), all = FALSE)
+  data <- data[which(keep), , drop = FALSE]
+  if (!nrow(data)) return(NULL)
+  data.frame(
       table_date = table_date,
-      app_name = first_present(row, 2),
-      package_name = first_present(row, 3),
-      class_name = first_present(row, 4),
-      event_datetime = first_present(row, 5),
-      event_ts_ms = first_present(row, 6),
-      event_type = first_present(row, 7),
-      configuration = first_present(row, 8),
+      app_name = appusage_context_column(data, 2),
+      package_name = appusage_context_column(data, 3),
+      class_name = appusage_context_column(data, 4),
+      event_datetime = appusage_context_column(data, 5),
+      event_ts_ms = appusage_context_column(data, 6),
+      event_type = appusage_context_column(data, 7),
+      configuration = appusage_context_column(data, 8),
       parse_warning = NA_character_,
       stringsAsFactors = FALSE
     )
-  }
-
-  do.call(rbind, rows[!vapply(rows, is.null, logical(1))])
 }
 
 finalize_meta_summary_tibble <- function(data, participant_id, source_file, tz) {

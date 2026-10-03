@@ -1,3 +1,30 @@
+# appusageR 0.3.5 (2026-10-03)
+
+- Share a file-local ragged parsing context across preflight, detection, table
+  boundaries, parsing, and diagnostics. Build parsed tables by columns.
+- Use indexed meta event pairing, grouped episode merging, batch timeline
+  clipping, compact day-segment indices, and reusable date/midnight conversion.
+- Share call-local QC column, row-selection, validity and date caches across
+  anomaly, timestamp, overlap and export-span checks. Distinguish timezone and
+  midnight endpoint conventions; preserve all QC decisions and output fields.
+- Route data-text operations through stringi, remove the direct stringr
+  dependency, and retain the prior NA, delimiter, case and codec contracts.
+  ICU compatibility corrections preserve the frozen Windows converter behavior;
+  platform encoding-name discovery remains metadata-only.
+- Fix duplicate transcoding when an explicit source encoding is supplied after
+  preflight or when an already decoded `appusage_text` enters preprocessing.
+  GBK, GB18030 and CP936 regression cases cover all four export formats. This
+  narrowly specified compatibility exception was approved on 2026-09-29.
+- Include the new parsing, time, interval and text helpers in implementation
+  fingerprints. Public API signatures and output schema 0.3.4 remain unchanged.
+
+Performance was accepted by the user on 2026-10-03 after all 15 latest-version
+benchmark runs succeeded. R 4.5.3 package check completed with 0 errors,
+0 warnings and 0 notes. Four existing old-output comparisons (40 artifacts)
+and repeated latest-output comparisons (100 artifacts) passed. The cancelled
+raw05 old run leaves an explicit old/new equivalence gap. Historical-output
+migration and a tagged or CRAN release are separate decisions.
+
 # appusageR 0.3.4
 
 ## Compatibility hardening

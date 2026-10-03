@@ -3,13 +3,13 @@ appusage_output_schema_version <- function() {
 }
 
 appusage_new_workflow_run_id <- function() {
-  seed <- paste(
+  seed <- appusage_text_paste(
     format(Sys.time(), "%Y%m%dT%H%M%OS6"),
     Sys.getpid(),
     sprintf("%08x", sample.int(.Machine$integer.max, 1L)),
     sep = "-"
   )
-  paste0("run-", gsub("[^A-Za-z0-9-]", "", seed))
+  appusage_text_paste0("run-", appusage_text_gsub("[^A-Za-z0-9-]", "", seed))
 }
 
 appusage_canonical_object <- function(x) {
@@ -23,7 +23,7 @@ appusage_canonical_object <- function(x) {
 }
 
 appusage_object_fingerprint <- function(x) {
-  text <- paste(utils::capture.output(dput(appusage_canonical_object(x))), collapse = "\n")
+  text <- appusage_text_paste(utils::capture.output(dput(appusage_canonical_object(x))), collapse = "\n")
   appusage_stable_text_md5(text)
 }
 
@@ -33,29 +33,60 @@ appusage_function_fingerprint <- function(function_names) {
     fun <- get0(name, envir = namespace, inherits = FALSE)
     if (!is.function(fun)) return(c(name, "<unavailable>"))
     c(
-      paste0("function=", name),
-      paste(utils::capture.output(dput(formals(fun))), collapse = "\n"),
-      paste(deparse(body(fun), width.cutoff = 500L), collapse = "\n")
+      appusage_text_paste0("function=", name),
+      appusage_text_paste(utils::capture.output(dput(formals(fun))), collapse = "\n"),
+      appusage_text_paste(deparse(body(fun), width.cutoff = 500L), collapse = "\n")
     )
   }), use.names = FALSE)
   appusage_stable_text_md5(text)
 }
 
 appusage_parser_implementation_fingerprint <- function() {
-  appusage_function_fingerprint(c(
-    "appusage_source_preflight", "first_level_detect_type",
+  appusage_function_fingerprint(c(appusage_text_implementation_functions(),
+    "appusage_source_preflight", "first_level_detect_type", "normalize_first_level_input",
+    "appusage_component_boundary_diagnostics", "header_position",
     "parse_line", "parse_meta", "parse_day", "parse_app",
-    "parse_line_block", "appusage_line_structural_quality"
+    "parse_line_block", "line_structural_quality", "appusage_parse_context",
+    "appusage_context_row_text", "appusage_context_column", "appusage_context_hits",
+    "appusage_context_records", "appusage_prepare_source", "appusage_structural_boundaries",
+    "appusage_parse_line_context", "appusage_parse_meta_context",
+    "appusage_parse_day_context", "appusage_parse_app_context",
+    "appusage_context_all_text", "appusage_context_match", "appusage_context_dates",
+    "appusage_context_previous_date", "appusage_context_valid", "appusage_context_input",
+    "[.appusage_parse_context", "dim.appusage_parse_context", "decode_raw_text",
+    "normalize_encoding", "split_lines", "parse_meta_summary_pair", "parse_meta_events_pair",
+    "parse_day_block", "parse_app_block"
   ))
 }
 
 appusage_second_level_implementation_fingerprint <- function() {
-  appusage_function_fingerprint(c(
+  appusage_function_fingerprint(c(appusage_text_implementation_functions(),
     "make_second_level_appusage", "daily_from_episodes",
-    "reconstruct_meta_episodes", "clip_meta_episode_timeline",
+    "reconstruct_meta_episodes", "clip_overlapping_meta_timeline",
     "aggregate_meta_episodes_daily", "appusage_interval_segments",
-    "appusage_validate_second_level_daily", "appusage_order_daily"
+    "appusage_validate_second_level_daily", "appusage_order_daily",
+    "appusage_meta_pair_indices", "appusage_meta_rows_from_indices",
+    "appusage_meta_merge_edges", "merge_contiguous_meta_episodes",
+    "appusage_source_qc_interval_segments", "appusage_midnight_ms", "appusage_timezone_names",
+    "appusage_pair_text", "appusage_resolve_timezone", "ms_to_datetime", "appusage_date_from_datetime",
+    "appusage_daily_segment_index", "appusage_interval_calendar", "ms_to_datetime_validated",
+    "appusage_date_from_datetime_validated",
+    "appusage_qc_context", "appusage_qc_col", "appusage_qc_date",
+    "appusage_qc_episode_view", "appusage_qc_valid_intervals",
+    "qc_appusage_anomalies", "run_qc_for_second_level_data",
+    "appusage_source_anomaly_qc", "appusage_check_episode_anomalies",
+    "appusage_check_daily_anomalies", "appusage_daily_total_by_date",
+    "appusage_check_export_span_anomalies", "appusage_observed_dates",
+    "appusage_line_overlap_qc", "appusage_line_timestamp_qc",
+    "appusage_meta_reconstruction_qc"
   ))
+}
+
+appusage_text_implementation_functions <- function() {
+  # Include every compatibility adapter, including finite codec/case deltas.
+  all <- ls(asNamespace("appusageR"), all.names = TRUE)
+  all[stringi::stri_startswith_fixed(all, "appusage_text_") &
+    all != "appusage_text_implementation_functions"]
 }
 
 appusage_git_directory <- function(package_root) {
@@ -63,9 +94,9 @@ appusage_git_directory <- function(package_root) {
   if (dir.exists(marker)) return(marker)
   if (!file.exists(marker)) return(NA_character_)
   line <- tryCatch(readLines(marker, n = 1L, warn = FALSE), error = function(e) "")
-  if (!length(line) || !grepl("^gitdir:", line)) return(NA_character_)
-  value <- trimws(sub("^gitdir:", "", line))
-  if (!grepl("^[A-Za-z]:[/\\\\]|^/", value)) value <- file.path(package_root, value)
+  if (!length(line) || !appusage_text_grepl("^gitdir:", line)) return(NA_character_)
+  value <- appusage_text_trim(appusage_text_sub("^gitdir:", "", line))
+  if (!appusage_text_grepl("^[A-Za-z]:[/\\\\]|^/", value)) value <- file.path(package_root, value)
   normalizePath(value, winslash = "/", mustWork = FALSE)
 }
 
@@ -75,14 +106,14 @@ appusage_git_commit_from_files <- function(package_root) {
   head <- tryCatch(readLines(file.path(git_dir, "HEAD"), n = 1L, warn = FALSE),
     error = function(e) ""
   )
-  if (!length(head) || !nzchar(head)) return(NA_character_)
-  if (grepl("^[0-9a-fA-F]{40}$", head)) return(tolower(head))
-  if (!grepl("^ref:", head)) return(NA_character_)
-  ref <- trimws(sub("^ref:", "", head))
+  if (!length(head) || !appusage_text_nzchar(head)) return(NA_character_)
+  if (appusage_text_grepl("^[0-9a-fA-F]{40}$", head)) return(appusage_text_lower(head))
+  if (!appusage_text_grepl("^ref:", head)) return(NA_character_)
+  ref <- appusage_text_trim(appusage_text_sub("^ref:", "", head))
   sha <- tryCatch(readLines(file.path(git_dir, ref), n = 1L, warn = FALSE),
     error = function(e) ""
   )
-  if (length(sha) && grepl("^[0-9a-fA-F]{40}$", sha)) tolower(sha) else NA_character_
+  if (length(sha) && appusage_text_grepl("^[0-9a-fA-F]{40}$", sha)) appusage_text_lower(sha) else NA_character_
 }
 
 appusage_git_build_info <- function(package_root = NULL, git_sha = NULL,
@@ -92,12 +123,12 @@ appusage_git_build_info <- function(package_root = NULL, git_sha = NULL,
     error = function(e) system.file(package = "appusageR")
   )
   env_sha <- Sys.getenv("APPUSAGER_GIT_COMMIT", unset = "")
-  sha <- git_sha %||% if (nzchar(env_sha)) env_sha else
+  sha <- git_sha %||% if (appusage_text_nzchar(env_sha)) env_sha else
     appusage_git_commit_from_files(package_root)
-  if (!is_present_string(sha) || !grepl("^[0-9a-fA-F]{7,40}$", sha)) sha <- NA_character_
+  if (!is_present_string(sha) || !appusage_text_grepl("^[0-9a-fA-F]{7,40}$", sha)) sha <- NA_character_
   env_dirty <- Sys.getenv("APPUSAGER_GIT_DIRTY", unset = "")
-  if (is.null(git_dirty) && nzchar(env_dirty)) {
-    git_dirty <- tolower(env_dirty) %in% c("1", "true", "yes", "dirty")
+  if (is.null(git_dirty) && appusage_text_nzchar(env_dirty)) {
+    git_dirty <- appusage_text_lower(env_dirty) %in% c("1", "true", "yes", "dirty")
   }
   marker <- if (isTRUE(git_dirty)) {
     "dirty"
@@ -109,7 +140,7 @@ appusage_git_build_info <- function(package_root = NULL, git_sha = NULL,
     "unavailable"
   }
   list(
-    git_commit_sha = if (is_present_string(sha)) tolower(sha) else NA_character_,
+    git_commit_sha = if (is_present_string(sha)) appusage_text_lower(sha) else NA_character_,
     git_build_marker = marker
   )
 }
@@ -188,7 +219,7 @@ appusage_attach_provenance_summary <- function(row, provenance = list()) {
       row[[name]] <- values[[name]]
       next
     }
-    missing <- is.na(row[[name]]) | (is.character(row[[name]]) & !nzchar(row[[name]]))
+    missing <- is.na(row[[name]]) | (is.character(row[[name]]) & !appusage_text_nzchar(row[[name]]))
     row[[name]][missing] <- values[[name]]
   }
   row

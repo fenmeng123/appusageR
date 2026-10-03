@@ -146,7 +146,7 @@ standardize_category_dict <- function(dictionary,
   if (length(missing) > 0) {
     cli::cli_abort(c(
       "Dictionary is missing required column(s): ",
-      paste(missing, collapse = ", ")
+      appusage_text_paste(missing, collapse = ", ")
     ))
   }
   if (!"App_Name_Repaired" %in% names(dictionary)) {
@@ -240,8 +240,8 @@ build_category_lookup <- function(dictionary, key_col) {
       conflicts[[length(conflicts) + 1L]] <- data.frame(
         key = key_value,
         n_category_pairs = nrow(values),
-        categories = paste(
-          paste(values$Level_1_Category, values$Level_2_Category, sep = " / "),
+        categories = appusage_text_paste(
+          appusage_text_paste(values$Level_1_Category, values$Level_2_Category, sep = " / "),
           collapse = " | "
         ),
         stringsAsFactors = FALSE
@@ -325,7 +325,7 @@ apply_category_match <- function(data, row_key, lookup, method, eligible) {
   key[!eligible] <- NA_character_
   conflict <- !is.na(key) & key %in% lookup$conflicts$key
   data$app_category_match_status[conflict] <- "conflict"
-  data$app_category_match_method[conflict] <- paste0(method, "_conflict")
+  data$app_category_match_method[conflict] <- appusage_text_paste0(method, "_conflict")
   data$app_category_match_key[conflict] <- key[conflict]
 
   idx <- match(key, lookup$matches$key)
@@ -343,8 +343,8 @@ apply_category_match <- function(data, row_key, lookup, method, eligible) {
 summarize_category_frame <- function(data, package_key, app_name_key) {
   app_key <- ifelse(
     !is.na(package_key),
-    paste0("pkg:", package_key),
-    paste0("name:", app_name_key)
+    appusage_text_paste0("pkg:", package_key),
+    appusage_text_paste0("name:", app_name_key)
   )
   app_key[is.na(package_key) & is.na(app_name_key)] <- NA_character_
   matched <- data$app_category_match_status == "matched"
@@ -708,7 +708,7 @@ bind_data_frames <- function(rows, empty) {
 }
 
 category_trim <- function(x) {
-  x <- stringr::str_trim(as.character(x))
+  x <- stringi::stri_trim_both(as.character(x))
   x[x %in% c("", "NA", "NULL", "null", "NaN")] <- NA_character_
   x
 }

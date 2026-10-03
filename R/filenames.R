@@ -25,8 +25,8 @@ build_appusage_filename <- function(participant_id, export_type,
     entities <- c(entities, src = sanitize_entity_value(source_key))
   }
   entities <- c(entities, proc = sanitize_entity_value(normalize_proc_value(proc)))
-  paste0(
-    paste(paste(names(entities), entities, sep = "-"), collapse = "_"),
+  appusage_text_paste0(
+    appusage_text_paste(appusage_text_paste(names(entities), entities, sep = "-"), collapse = "_"),
     ".",
     sanitize_entity_value(extension)
   )
@@ -42,14 +42,14 @@ parse_appusage_filename <- function(filename) {
   base <- basename(filename)
   extension <- tools::file_ext(base)
   stem <- tools::file_path_sans_ext(base)
-  parts <- strsplit(stem, "_", fixed = TRUE)[[1]]
+  parts <- appusage_text_split(stem, "_", fixed = TRUE)[[1]]
   entities <- list()
   suffix <- NA_character_
   for (part in parts) {
-    kv <- strsplit(part, "-", fixed = TRUE)[[1]]
+    kv <- appusage_text_split(part, "-", fixed = TRUE)[[1]]
     if (length(kv) >= 2) {
       key <- kv[[1]]
-      value <- paste(kv[-1], collapse = "-")
+      value <- appusage_text_paste(kv[-1], collapse = "-")
       entities[[key]] <- value
     } else {
       suffix <- part
@@ -76,15 +76,15 @@ parse_appusage_filename <- function(filename) {
 parse_native_appusage_filename <- function(filename, tz = "Asia/Shanghai") {
   base <- basename(filename)
   base <- appusage_native_filename_postfix(base) %||% base
-  pattern <- paste0(
+  pattern <- appusage_text_paste0(
     "^AppUsage_",
     "([A-Za-z]+)_",
     "([0-9]{4})_([0-9]{1,2})_([0-9]{1,2})_",
     "([0-9]{1,2})_([0-9]{1,2})_([0-9]{1,2})",
     "\\.txt$"
   )
-  match <- regexec(pattern, base, ignore.case = TRUE)
-  parts <- regmatches(base, match)[[1]]
+  match <- appusage_text_regexec(pattern, base, ignore.case = TRUE)
+  parts <- appusage_text_regmatches(base, match)[[1]]
 
   if (length(parts) == 0) {
     return(list(
@@ -97,7 +97,7 @@ parse_native_appusage_filename <- function(filename, tz = "Asia/Shanghai") {
     ))
   }
 
-  raw_export_type <- tolower(parts[[2]])
+  raw_export_type <- appusage_text_lower(parts[[2]])
   supported <- raw_export_type %in% c("line", "meta", "day", "app")
   export_type <- if (supported) raw_export_type else "unknown"
   values <- as.integer(parts[3:8])
@@ -108,7 +108,7 @@ parse_native_appusage_filename <- function(filename, tz = "Asia/Shanghai") {
   )
   created_at <- as.POSIXct(created_text, tz = tz)
   warning <- if (!supported) {
-    paste0("Native APP Usage export type '", raw_export_type, "' is not supported by appusageR.")
+    appusage_text_paste0("Native APP Usage export type '", raw_export_type, "' is not supported by appusageR.")
   } else if (is.na(created_at)) {
     "Native APP Usage export timestamp could not be parsed."
   } else {
@@ -131,18 +131,18 @@ parse_native_appusage_filename <- function(filename, tz = "Asia/Shanghai") {
 
 appusage_native_filename_postfix <- function(filename) {
   base <- basename(filename)
-  pattern <- paste0(
+  pattern <- appusage_text_paste0(
     "AppUsage_",
     "[A-Za-z]+_",
     "[0-9]{4}_[0-9]{1,2}_[0-9]{1,2}_",
     "[0-9]{1,2}_[0-9]{1,2}_[0-9]{1,2}",
     "\\.txt"
   )
-  match <- regexpr(pattern, base, ignore.case = TRUE)
+  match <- appusage_text_regexpr(pattern, base, ignore.case = TRUE)
   if (identical(match[[1]], -1L)) {
     return(NULL)
   }
-  regmatches(base, match)
+  appusage_text_regmatches(base, match)
 }
 
 #' Parse a Wenjuanxing-renamed APP Usage upload filename
@@ -160,19 +160,19 @@ appusage_native_filename_postfix <- function(filename) {
 parse_wenjuanxing_upload_filename <- function(filename, tz = "Asia/Shanghai") {
   base <- basename(filename)
   pattern <- "^(.+?)([0-9]+)_div style=tex_(.*)$"
-  match <- regexec(pattern, base, ignore.case = TRUE)
-  parts <- regmatches(base, match)[[1]]
+  match <- appusage_text_regexec(pattern, base, ignore.case = TRUE)
+  parts <- appusage_text_regmatches(base, match)[[1]]
 
   if (length(parts) == 0) {
-    numeric_pattern <- paste0(
+    numeric_pattern <- appusage_text_paste0(
       "^([0-9]+)_",
       "(AppUsage_([A-Za-z]+)_",
       "[0-9]{4}_[0-9]{1,2}_[0-9]{1,2}_",
       "[0-9]{1,2}_[0-9]{1,2}_[0-9]{1,2}",
       "\\.txt)$"
     )
-    numeric_match <- regexec(numeric_pattern, base, ignore.case = TRUE)
-    numeric_parts <- regmatches(base, numeric_match)[[1]]
+    numeric_match <- appusage_text_regexec(numeric_pattern, base, ignore.case = TRUE)
+    numeric_parts <- appusage_text_regmatches(base, numeric_match)[[1]]
     if (length(numeric_parts) > 0) {
       sequence_id <- suppressWarnings(as.integer(numeric_parts[[2]]))
       uploaded <- numeric_parts[[3]]
@@ -195,7 +195,7 @@ parse_wenjuanxing_upload_filename <- function(filename, tz = "Asia/Shanghai") {
       return(c(list(
         file_name = base,
         wenjuanxing_sequence_id = sequence_id,
-        wenjuanxing_filename_prefix = paste0(numeric_parts[[2]], "_"),
+        wenjuanxing_filename_prefix = appusage_text_paste0(numeric_parts[[2]], "_"),
         uploaded_file_name = uploaded,
         filename_parse_status = status,
         filename_parse_warning = warning
@@ -204,8 +204,8 @@ parse_wenjuanxing_upload_filename <- function(filename, tz = "Asia/Shanghai") {
     native <- parse_native_appusage_filename(base, tz = tz)
     native_postfix <- appusage_native_filename_postfix(base)
     if (!is.null(native_postfix)) {
-      sequence_match <- regexec("^\\D*([0-9]+)_", base, perl = TRUE)
-      sequence_parts <- regmatches(base, sequence_match)[[1]]
+      sequence_match <- appusage_text_regexec("^\\D*([0-9]+)_", base, perl = TRUE)
+      sequence_parts <- appusage_text_regmatches(base, sequence_match)[[1]]
       sequence_id <- if (length(sequence_parts) > 0) {
         suppressWarnings(as.integer(sequence_parts[[2]]))
       } else {
@@ -261,7 +261,7 @@ parse_wenjuanxing_upload_filename <- function(filename, tz = "Asia/Shanghai") {
   }
 
   sequence_id <- suppressWarnings(as.integer(parts[[3]]))
-  prefix <- paste0(parts[[2]], parts[[3]], "_div style=tex_")
+  prefix <- appusage_text_paste0(parts[[2]], parts[[3]], "_div style=tex_")
   uploaded <- parts[[4]]
   native <- parse_native_appusage_filename(uploaded, tz = tz)
   native_status <- native$native_filename_parse_status
@@ -344,9 +344,9 @@ resolve_participant_ids <- function(x, ids = NULL, input = "file",
   if (!is.null(ids)) {
     participant_id <- as.character(ids)
     id_source <- rep("ids_vector", length(x))
-  } else if (!is.null(names(x)) && any(nzchar(names(x)))) {
+  } else if (!is.null(names(x)) && any(appusage_text_nzchar(names(x)))) {
     participant_id <- names(x)
-    participant_id[!nzchar(participant_id)] <- NA_character_
+    participant_id[!appusage_text_nzchar(participant_id)] <- NA_character_
     id_source <- ifelse(is.na(participant_id), "missing", "names")
   } else {
     sequence_ids <- vapply(
@@ -392,8 +392,8 @@ normalize_proc_value <- function(proc) {
 sanitize_entity_value <- function(x) {
   x <- as.character(x)
   x[is.na(x) | x == ""] <- "unknown"
-  x <- gsub("[^A-Za-z0-9]+", "-", x)
-  x <- gsub("-+", "-", x)
-  x <- gsub("^-|-$", "", x)
+  x <- appusage_text_gsub("[^A-Za-z0-9]+", "-", x)
+  x <- appusage_text_gsub("-+", "-", x)
+  x <- appusage_text_gsub("^-|-$", "", x)
   ifelse(x == "", "unknown", x)
 }

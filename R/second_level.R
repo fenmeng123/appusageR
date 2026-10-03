@@ -261,7 +261,7 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
   )
   metadata_file <- second_level_metadata_path(output_file)
   if ((file.exists(output_file) || file.exists(metadata_file)) && !isTRUE(overwrite)) {
-    stop(batch_cache_exists_error(paste(c(output_file, metadata_file), collapse = "; ")))
+    stop(batch_cache_exists_error(appusage_text_paste(c(output_file, metadata_file), collapse = "; ")))
   }
   appusage_cleanup_second_level_transaction_artifacts(output_file, metadata_file)
   transaction_id <- appusage_second_level_transaction_id()
@@ -517,13 +517,13 @@ second_level_metadata_path <- function(second_level_rda) {
 }
 
 appusage_second_level_transaction_id <- function() {
-  token <- paste(
+  token <- appusage_text_paste(
     format(Sys.time(), "%Y%m%dT%H%M%OS6"),
     Sys.getpid(),
     basename(tempfile(pattern = "txn-")),
     sep = "-"
   )
-  gsub("[^A-Za-z0-9._-]", "-", token)
+  appusage_text_gsub("[^A-Za-z0-9._-]", "-", token)
 }
 
 appusage_second_level_transaction_paths <- function(output_file, metadata_file,
@@ -532,19 +532,19 @@ appusage_second_level_transaction_paths <- function(output_file, metadata_file,
   list(
     temp_rda = file.path(
       dirname(output_file),
-      paste0(".", basename(output_file), ".appusage-tmp-", token)
+      appusage_text_paste0(".", basename(output_file), ".appusage-tmp-", token)
     ),
     temp_json = file.path(
       dirname(metadata_file),
-      paste0(".", basename(metadata_file), ".appusage-tmp-", token)
+      appusage_text_paste0(".", basename(metadata_file), ".appusage-tmp-", token)
     ),
     backup_rda = file.path(
       dirname(output_file),
-      paste0(".", basename(output_file), ".appusage-backup-", token)
+      appusage_text_paste0(".", basename(output_file), ".appusage-backup-", token)
     ),
     backup_json = file.path(
       dirname(metadata_file),
-      paste0(".", basename(metadata_file), ".appusage-backup-", token)
+      appusage_text_paste0(".", basename(metadata_file), ".appusage-backup-", token)
     )
   )
 }
@@ -552,16 +552,16 @@ appusage_second_level_transaction_paths <- function(output_file, metadata_file,
 appusage_second_level_breadcrumb_path <- function(output_file) {
   file.path(
     dirname(output_file),
-    paste0(".appusage-breadcrumb-", basename(output_file), ".json")
+    appusage_text_paste0(".appusage-breadcrumb-", basename(output_file), ".json")
   )
 }
 
 appusage_second_level_breadcrumb_temp_paths <- function(path) {
   directory <- dirname(path)
   if (!dir.exists(directory)) return(character())
-  prefix <- paste0(basename(path), ".")
+  prefix <- appusage_text_paste0(basename(path), ".")
   candidates <- list.files(directory, full.names = TRUE, all.files = TRUE)
-  candidates[startsWith(basename(candidates), prefix)]
+  candidates[appusage_text_starts(basename(candidates), prefix)]
 }
 
 appusage_cleanup_second_level_breadcrumb_temps <- function(path) {
@@ -629,8 +629,8 @@ appusage_update_second_level_breadcrumb <- function(breadcrumb, path, stage,
 
 appusage_write_second_level_breadcrumb <- function(breadcrumb, path) {
   token <- appusage_second_level_transaction_id()
-  temporary <- paste0(path, ".tmp-", token)
-  backup <- paste0(path, ".backup-", token)
+  temporary <- appusage_text_paste0(path, ".tmp-", token)
+  backup <- appusage_text_paste0(path, ".backup-", token)
   old_backed <- FALSE
   committed <- FALSE
   on.exit({
@@ -676,7 +676,7 @@ appusage_breadcrumb_condition_details <- function(error) {
     condition_class = class(error),
     condition_message = conditionMessage(error),
     condition_call = if (is.null(call)) NA_character_ else
-      paste(deparse(call), collapse = " ")
+      appusage_text_paste(deparse(call), collapse = " ")
   )
 }
 
@@ -687,18 +687,18 @@ appusage_second_level_owned_artifacts <- function(output_file, metadata_file) {
   }
   candidates <- list.files(directory, full.names = TRUE, all.files = TRUE)
   prefixes <- c(
-    paste0(".", basename(output_file), ".appusage-"),
-    paste0(".", basename(metadata_file), ".appusage-")
+    appusage_text_paste0(".", basename(output_file), ".appusage-"),
+    appusage_text_paste0(".", basename(metadata_file), ".appusage-")
   )
   candidates[vapply(
     basename(candidates),
-    function(path) any(startsWith(path, prefixes)),
+    function(path) any(appusage_text_starts(path, prefixes)),
     logical(1)
   )]
 }
 
 appusage_cleanup_paths <- function(paths) {
-  paths <- unique(paths[!is.na(paths) & nzchar(paths)])
+  paths <- unique(paths[!is.na(paths) & appusage_text_nzchar(paths)])
   if (length(paths) > 0L) {
     unlink(paths, force = TRUE)
   }
@@ -847,7 +847,7 @@ appusage_publish_second_level_pair <- function(transaction, output_file,
 }
 
 appusage_atomic_write_metadata_json <- function(metadata, metadata_file) {
-  output_file <- sub("[.]json$", ".rda", metadata_file)
+  output_file <- appusage_text_sub("[.]json$", ".rda", metadata_file)
   appusage_cleanup_second_level_transaction_artifacts(output_file, metadata_file)
   transaction <- appusage_second_level_transaction_paths(output_file, metadata_file)
   old_backed <- FALSE
@@ -888,7 +888,7 @@ appusage_valid_second_level_success_pair <- function(metadata_file) {
   if (!file.exists(metadata_file)) {
     return(FALSE)
   }
-  output_file <- sub("[.]json$", ".rda", metadata_file)
+  output_file <- appusage_text_sub("[.]json$", ".rda", metadata_file)
   rda_size <- appusage_file_size_bytes(output_file)
   if (!file.exists(output_file) || is.na(rda_size) || rda_size <= 0) {
     return(FALSE)
@@ -904,7 +904,7 @@ appusage_valid_second_level_success_pair <- function(metadata_file) {
 }
 
 first_level_metadata_path <- function(first_level_rda) {
-  sub("[.]rda$", ".json", first_level_rda, ignore.case = TRUE)
+  appusage_text_sub("[.]rda$", ".json", first_level_rda, ignore.case = TRUE)
 }
 
 read_first_level_metadata_for_second <- function(first_level_rda) {
@@ -1362,7 +1362,7 @@ unique_meta_daily_comparisons <- function(meta) {
     return(meta)
   }
   key <- meta_daily_key(meta)
-  keep <- !duplicated(paste(
+  keep <- !duplicated(appusage_text_paste(
     key,
     meta$duration_agreement_status,
     meta$duration_diff_ms,
@@ -1697,177 +1697,14 @@ reconstruct_meta_episodes <- function(events, pairing = c("package", "package_cl
   events$.row_order <- seq_len(nrow(events))
   events$.reconstruction_key <- meta_reconstruction_key(events, pairing)
   events <- events[order(events$event_ts_ms, events$.row_order, na.last = TRUE), , drop = FALSE]
-  rows <- list()
-
-  add_row <- function(row) {
-    rows[[length(rows) + 1L]] <<- row
-  }
-
-  drop_unmatched <- function(event, reason) {
-    duration <- meta_event_value(event, "event_duration_ms", NA_real_)
-    if (!is.na(duration) && duration >= 0) {
-      add_row(meta_duration_inferred_episode_row(
-        event = event,
-        pairing = pairing,
-        duration_ms = duration,
-        reason = reason,
-        tz = tz
-      ))
-      diagnostics$n_duration_inferred_episodes <<-
-        diagnostics$n_duration_inferred_episodes + 1L
-      return(invisible(NULL))
-    }
-    diagnostics$n_dropped_unmatched_events <<-
-      diagnostics$n_dropped_unmatched_events + 1L
-    if (identical(reason, "unmatched_start")) {
-      diagnostics$n_dropped_unmatched_starts <<-
-        diagnostics$n_dropped_unmatched_starts + 1L
-    } else if (identical(reason, "unmatched_end")) {
-      diagnostics$n_dropped_unmatched_ends <<-
-        diagnostics$n_dropped_unmatched_ends + 1L
-    }
-    invisible(NULL)
-  }
-
-  scan_group <- function(group) {
-    open_start <- NULL
-    pending_end <- NULL
-
-    close_pending <- function(device_boundary_involved = FALSE) {
-      if (is.null(open_start) || is.null(pending_end)) {
-        return(invisible(FALSE))
-      }
-      add_row(meta_episode_row(
-        start_event = open_start,
-        end_event = pending_end,
-        pairing = pairing,
-        status = "complete",
-        unmatched_start = FALSE,
-        unmatched_end = FALSE,
-        device_boundary_involved = device_boundary_involved,
-        tz = tz
-      ))
-      open_start <<- NULL
-      pending_end <<- NULL
-      invisible(TRUE)
-    }
-
-    close_with_event <- function(end_event, device_boundary_involved = FALSE) {
-      if (is.null(open_start)) {
-        drop_unmatched(end_event, "unmatched_end")
-        return(invisible(FALSE))
-      }
-      add_row(meta_episode_row(
-        start_event = open_start,
-        end_event = end_event,
-        pairing = pairing,
-        status = "complete",
-        unmatched_start = FALSE,
-        unmatched_end = FALSE,
-        device_boundary_involved = device_boundary_involved,
-        tz = tz
-      ))
-      open_start <<- NULL
-      pending_end <<- NULL
-      invisible(TRUE)
-    }
-
-    for (i in seq_len(nrow(group))) {
-      event <- group[i, , drop = FALSE]
-      event_type <- event$event_type[[1]]
-      is_start <- !is.na(event_type) && event_type %in% start_event_types
-      is_end <- !is.na(event_type) && event_type %in% end_event_types
-      is_pause <- !is.na(event_type) && event_type == 2
-      is_stop <- !is.na(event_type) && event_type == 23
-      is_shutdown <- !is.na(event_type) && event_type == 26
-      is_startup <- !is.na(event_type) && event_type == 27
-
-      if (is_shutdown) {
-        if (!is.null(pending_end)) {
-          close_pending()
-        }
-        if (!is.null(open_start)) {
-          close_with_event(event, device_boundary_involved = TRUE)
-        }
-        next
-      }
-
-      if (is_startup) {
-        next
-      }
-
-      if (!is.null(pending_end) && !is_stop) {
-        close_pending()
-      }
-
-      if (is_start) {
-        if (!is.null(open_start)) {
-          drop_unmatched(open_start, "unmatched_start")
-        }
-        open_start <- event
-        pending_end <- NULL
-        next
-      }
-
-      if (is_pause) {
-        if (is.null(open_start)) {
-          drop_unmatched(event, "unmatched_end")
-        } else {
-          pending_end <- event
-        }
-        next
-      }
-
-      if (is_stop) {
-        if (is.null(open_start)) {
-          drop_unmatched(event, "unmatched_end")
-        } else if (!is.null(pending_end)) {
-          pending_ts <- meta_event_value(pending_end, "event_ts_ms", NA_real_)
-          event_ts <- meta_event_value(event, "event_ts_ms", NA_real_)
-          if (is.na(pending_ts) || (!is.na(event_ts) && event_ts >= pending_ts)) {
-            pending_end <- event
-          }
-          close_pending()
-        } else {
-          close_with_event(event)
-        }
-        next
-      }
-
-      if (is_end) {
-        close_with_event(event)
-      }
-    }
-
-    if (!is.null(pending_end)) {
-      close_pending()
-    }
-    if (!is.null(open_start)) {
-      drop_unmatched(open_start, "unmatched_start")
-    }
-    invisible(NULL)
-  }
-
-  boundary_rows <- events[events$event_type %in% c(26, 27), , drop = FALSE]
-  groups <- split(seq_len(nrow(events)), events$.reconstruction_key)
-  for (idx in groups) {
-    group <- events[idx, , drop = FALSE]
-    if (nrow(boundary_rows) > 0) {
-      group <- unique(rbind(group, boundary_rows))
-      group <- group[order(group$event_ts_ms, group$.row_order, na.last = TRUE), , drop = FALSE]
-    }
-    scan_group(group)
-  }
-
-  if (length(rows) == 0) {
+  pairs <- appusage_meta_pair_indices(events, start_event_types, end_event_types)
+  diagnostics[names(pairs$diagnostics)] <- pairs$diagnostics
+  if (!length(pairs$from)) {
     out <- empty_second_episode_tibble()
-    return(attach_meta_reconstruction_diagnostics(
-      out,
-      finalize_meta_reconstruction_diagnostics(diagnostics, out)
-    ))
+    return(attach_meta_reconstruction_diagnostics(out,
+      finalize_meta_reconstruction_diagnostics(diagnostics, out)))
   }
-
-  out <- tibble::as_tibble(do.call(rbind, rows))
+  out <- appusage_meta_rows_from_indices(events, pairs, pairing, tz)
   out <- add_duration_anomalies(out,
     duration_col = "duration_ms",
     max_duration_ms = max_episode_ms,
@@ -2020,42 +1857,35 @@ clip_overlapping_meta_timeline <- function(episodes) {
     eligible,
     na.last = TRUE
   )]
-  previous <- ordered[[1]]
-  for (current in ordered[-1]) {
-    if (!identical(episodes$reconstruction_status[[previous]], "complete")) {
-      previous <- current
-      next
+  previous <- utils::head(ordered, -1L)
+  current <- ordered[-1L]
+  clipped <- episodes$start_ts_ms[current] < episodes$end_ts_ms[previous]
+  index <- previous[clipped]
+  new_end <- episodes$start_ts_ms[current[clipped]]
+  if (length(index)) {
+    amounts <- episodes$end_ts_ms[index] - new_end
+    episodes$end_ts_ms[index] <- new_end
+    episodes$end_datetime[index] <- meta_episode_datetime_from_ms(new_end, episodes$end_datetime[index])
+    duration <- new_end - episodes$start_ts_ms[index]
+    episodes$duration_ms[index] <- duration
+    episodes$duration_min[index] <- duration / 60000
+    episodes$duration_text[index] <- NA_character_
+    flag <- seq_len(nrow(episodes)) %in% index
+    episodes$reconstruction_warning <- append_reconstruction_warning(episodes$reconstruction_warning, flag, "timeline_clipped")
+    episodes$anomaly_reason <- append_reconstruction_warning(episodes$anomaly_reason, flag, "timeline_clipped")
+    episodes$anomaly_any[index] <- TRUE
+    invalid <- index[is.na(duration) | duration <= 0]
+    if (length(invalid)) {
+      episodes$reconstruction_status[invalid] <- "invalid_pair"
+      episodes$duration_ms[invalid] <- NA_real_
+      episodes$duration_min[invalid] <- NA_real_
+      flag <- seq_len(nrow(episodes)) %in% invalid
+      episodes$reconstruction_warning <- append_reconstruction_warning(episodes$reconstruction_warning, flag, "timeline_clipped_to_nonpositive")
+      episodes$anomaly_reason <- append_reconstruction_warning(episodes$anomaly_reason, flag, "timeline_clipped_to_nonpositive")
     }
-    current_start <- episodes$start_ts_ms[[current]]
-    previous_end <- episodes$end_ts_ms[[previous]]
-    if (!is.na(current_start) && !is.na(previous_end) && current_start < previous_end) {
-      original_end <- previous_end
-      episodes <- clip_one_meta_episode_end(
-        episodes = episodes,
-        index = previous,
-        new_end_ts_ms = current_start
-      )
-      clipped_ms <- original_end - current_start
-      diagnostics$n_timeline_clipped_episodes <- diagnostics$n_timeline_clipped_episodes + 1L
-      diagnostics$total_timeline_clipped_ms <- diagnostics$total_timeline_clipped_ms + clipped_ms
-      if (is.na(episodes$duration_ms[[previous]]) || episodes$duration_ms[[previous]] <= 0) {
-        episodes$reconstruction_status[[previous]] <- "invalid_pair"
-        episodes$duration_ms[[previous]] <- NA_real_
-        episodes$duration_min[[previous]] <- NA_real_
-        episodes$reconstruction_warning <- append_reconstruction_warning(
-          episodes$reconstruction_warning,
-          seq_len(nrow(episodes)) == previous,
-          "timeline_clipped_to_nonpositive"
-        )
-        episodes$anomaly_reason <- append_reconstruction_warning(
-          episodes$anomaly_reason,
-          seq_len(nrow(episodes)) == previous,
-          "timeline_clipped_to_nonpositive"
-        )
-        diagnostics$n_timeline_clipped_to_nonpositive <- diagnostics$n_timeline_clipped_to_nonpositive + 1L
-      }
-    }
-    previous <- current
+    diagnostics$n_timeline_clipped_episodes <- length(index)
+    diagnostics$total_timeline_clipped_ms <- Reduce(`+`, amounts, init = 0)
+    diagnostics$n_timeline_clipped_to_nonpositive <- length(invalid)
   }
   episodes <- conform_second_episode(episodes[order(
     episodes$start_ts_ms,
@@ -2112,16 +1942,40 @@ merge_contiguous_meta_episodes <- function(episodes, merge_gap_ms = 30 * 1000) {
   episodes$.original_order <- seq_len(nrow(episodes))
   episodes <- episodes[order(episodes$start_ts_ms, episodes$end_ts_ms, episodes$.original_order, na.last = TRUE), , drop = FALSE]
   n <- nrow(episodes)
-  prev <- seq_len(n) - 1L
-  same_key <- c(FALSE, vapply(seq.int(2L, n), function(i) {
-    meta_episode_mergeable_pair(episodes[prev[[i]], , drop = FALSE], episodes[i, , drop = FALSE], merge_gap_ms)
-  }, logical(1)))
+  same_key <- appusage_meta_merge_edges(episodes, merge_gap_ms)
   group <- cumsum(!same_key)
   groups <- split(seq_len(n), group)
-  rows <- lapply(groups, function(idx) {
-    merge_meta_episode_group(episodes[idx, , drop = FALSE])
-  })
-  out <- tibble::as_tibble(do.call(rbind, rows))
+  first <- vapply(groups, `[`, integer(1), 1L)
+  last <- vapply(groups, function(i) i[[length(i)]], integer(1))
+  out <- episodes[first, , drop = FALSE]
+  many <- which(lengths(groups) > 1L)
+  single <- which(lengths(groups) == 1L)
+  out$source_episode_count[single[is.na(out$source_episode_count[single])]] <- 1L
+  missing <- single[is.na(out$source_duration_ms[single])]
+  out$source_duration_ms[missing] <- out$duration_ms[missing]
+  out$merged_gap_ms[single[is.na(out$merged_gap_ms[single])]] <- 0
+  for (column in c("end_ts_ms", "end_datetime", "end_event_type", "end_event_type_label", "end_class_name")) {
+    out[[column]][many] <- episodes[[column]][last[many]]
+  }
+  if (length(many)) {
+    selected <- groups[many]
+    duration <- vapply(selected, function(i) sum(episodes$duration_ms[i], na.rm = TRUE), numeric(1))
+    out$duration_ms[many] <- duration
+    out$duration_min[many] <- duration / 60000
+    out$source_duration_ms[many] <- duration
+    out$parse_warning[many] <- vapply(selected, function(i) compact_character_values(c(episodes$parse_warning[i], episodes$reconstruction_warning[i])), character(1))
+    for (column in c("is_collection_app", "device_boundary_involved", "anomaly_missing_duration", "anomaly_negative_duration", "anomaly_extreme_duration", "anomaly_cross_date", "anomaly_any")) {
+      out[[column]][many] <- vapply(selected, function(i) any(episodes[[column]][i], na.rm = TRUE), logical(1))
+    }
+    for (column in c("anomaly_reason", "reconstruction_warning")) {
+      out[[column]][many] <- vapply(selected, function(i) compact_character_values(episodes[[column]][i]), character(1))
+    }
+    out$source_episode_count[many] <- vapply(selected, function(i) {
+      count <- sum(episodes$source_episode_count[i], na.rm = TRUE)
+      if (count > 0) count else length(i)
+    }, numeric(1))
+    out$merged_gap_ms[many] <- vapply(selected, function(i) sum(pmax(episodes$start_ts_ms[i[-1L]] - episodes$end_ts_ms[utils::head(i, -1L)], 0), na.rm = TRUE), numeric(1))
+  }
   out$.original_order <- NULL
   out <- conform_second_episode(out[order(out$start_ts_ms, out$end_ts_ms, seq_len(nrow(out)), na.last = TRUE), , drop = FALSE])
   attach_meta_episode_merge_diagnostics(
@@ -2333,7 +2187,7 @@ meta_column <- function(data, name, default) {
 meta_reconstruction_key <- function(events, pairing) {
   package <- reconstruction_key_value(events$package_name)
   if (identical(pairing, "package_class")) {
-    return(paste(package, reconstruction_key_value(events$class_name), sep = "\r"))
+    return(appusage_text_paste(package, reconstruction_key_value(events$class_name), sep = "\r"))
   }
   package
 }
@@ -2436,7 +2290,7 @@ meta_duration_inferred_episode_row <- function(event, pairing, duration_ms,
   }
   app_name <- meta_event_value(event, "app_name", NA_character_)
   package_name <- meta_event_value(event, "package_name", NA_character_)
-  warning <- paste0("duration_inferred_from_", reason)
+  warning <- appusage_text_paste0("duration_inferred_from_", reason)
   source_table_date <- meta_event_value(event, "source_table_date", as.Date(NA))
   canonical_date <- appusage_date_from_datetime(start_datetime, tz = tz)
 
@@ -2504,7 +2358,7 @@ compact_character_values <- function(x) {
   if (length(values) == 0) {
     return(NA_character_)
   }
-  paste(values, collapse = "; ")
+  appusage_text_paste(values, collapse = "; ")
 }
 
 append_reconstruction_warning <- function(x, flag, label) {
@@ -2515,7 +2369,7 @@ append_reconstruction_warning <- function(x, flag, label) {
   if (length(idx) == 0) {
     return(x)
   }
-  x[idx] <- ifelse(is.na(x[idx]) | x[idx] == "", label, paste(x[idx], label, sep = "; "))
+  x[idx] <- ifelse(is.na(x[idx]) | x[idx] == "", label, appusage_text_paste(x[idx], label, sep = "; "))
   x
 }
 
@@ -2674,7 +2528,9 @@ daily_from_episodes <- function(x, max_daily_app_ms, tz = "Asia/Shanghai") {
     return(empty_second_daily_tibble())
   }
   tz <- appusage_resolve_timezone(tz)
-  x <- appusage_interval_segments(x, tz = tz)
+  needed <- intersect(c("start_ts_ms", "end_ts_ms", "duration_ms", "date", "package_name",
+    "app_name", "activity_type", "anomaly_any", "parse_warning", "is_collection_app"), names(x))
+  x <- appusage_interval_segments(x[, needed, drop = FALSE], tz = tz)
   segmentation <- attr(x, "interval_segmentation_diagnostics", exact = TRUE)
   activity_type <- if ("activity_type" %in% names(x)) {
     x$activity_type
@@ -2712,7 +2568,7 @@ daily_from_episodes <- function(x, max_daily_app_ms, tz = "Asia/Shanghai") {
   duration_ms <- as.numeric(grouped_counts[, "duration_sum"])
   valid_count <- grouped_counts[, "valid_count"]
   duration_ms[valid_count == 0] <- NA_real_
-  episode_pair <- paste(group_id, x$.source_row_id, sep = "\r")
+  episode_pair <- appusage_text_paste(group_id, x$.source_row_id, sep = "\r")
   episode_count <- as.integer(tabulate(
     group_id[!duplicated(episode_pair)], nbins = length(group_keys)
   ))
@@ -2779,14 +2635,14 @@ daily_from_episodes <- function(x, max_daily_app_ms, tz = "Asia/Shanghai") {
 line_daily_parse_warnings <- function(parse_warning, group_id, n_groups) {
   parse_warning <- as.character(parse_warning)
   out <- rep(NA_character_, n_groups)
-  present <- !is.na(parse_warning) & nzchar(parse_warning)
+  present <- !is.na(parse_warning) & appusage_text_nzchar(parse_warning)
   if (!any(present)) {
     return(out)
   }
   present_idx <- which(present)
   present_groups <- group_id[present_idx]
   present_warnings <- parse_warning[present_idx]
-  pair_key <- paste(present_groups, present_warnings, sep = "\r")
+  pair_key <- appusage_text_paste(present_groups, present_warnings, sep = "\r")
   keep <- !duplicated(pair_key)
   present_groups <- present_groups[keep]
   present_warnings <- present_warnings[keep]
@@ -2797,7 +2653,7 @@ line_daily_parse_warnings <- function(parse_warning, group_id, n_groups) {
   ends <- cumsum(run$lengths)
   starts <- ends - run$lengths + 1L
   for (i in seq_along(run$values)) {
-    out[[run$values[[i]]]] <- paste(present_warnings[starts[[i]]:ends[[i]]], collapse = "; ")
+    out[[run$values[[i]]]] <- appusage_text_paste(present_warnings[starts[[i]]:ends[[i]]], collapse = "; ")
   }
   out
 }
@@ -2813,7 +2669,10 @@ aggregate_meta_episodes_daily <- function(episodes, summary_daily = NULL,
     return(empty_second_daily_tibble())
   }
 
-  meta <- appusage_interval_segments(meta, tz = tz)
+  needed <- c("start_ts_ms", "end_ts_ms", "duration_ms", "date", "package_name", "app_name",
+    "activity_type", "reconstruction_status", "unmatched_start", "unmatched_end",
+    "reconstruction_warning", "anomaly_any", "is_collection_app", "parse_warning")
+  meta <- appusage_interval_segments(meta[, needed, drop = FALSE], tz = tz)
   segmentation <- attr(meta, "interval_segmentation_diagnostics", exact = TRUE)
   key <- meta_daily_key(meta)
   group_keys <- unique(key)
@@ -2826,54 +2685,35 @@ aggregate_meta_episodes_daily <- function(episodes, summary_daily = NULL,
   }
   groups <- split(seq_len(nrow(meta)), group_id)
   groups <- groups[as.character(seq_along(group_keys))]
-  rows <- lapply(groups, function(idx) {
-    x <- meta[idx, , drop = FALSE]
-    valid_complete <- x$reconstruction_status == "complete" &
-      !is.na(x$duration_ms) &
-      x$duration_ms >= 0
-    duration_ms <- if (any(valid_complete, na.rm = TRUE)) {
-      sum(x$duration_ms[valid_complete], na.rm = TRUE)
-    } else {
-      NA_real_
-    }
-    diagnostics <- sum(x$anomaly_any, na.rm = TRUE) +
-      sum(x$unmatched_start, na.rm = TRUE) +
-      sum(x$unmatched_end, na.rm = TRUE) +
-      sum(x$reconstruction_status == "invalid_pair", na.rm = TRUE) +
-      sum(!is.na(x$reconstruction_warning) & x$reconstruction_warning != "", na.rm = TRUE)
-    data.frame(
-      date = first_nonmissing(x$date),
-      weekday = weekday_name(first_nonmissing(x$date)),
-      app_name = first_nonmissing_character(x$app_name),
-      activity_type = first_nonmissing_character(x$activity_type),
-      package_name = first_nonmissing_character(x$package_name),
-      duration_ms = duration_ms,
-      duration_min = duration_ms / 60000,
-      open_count = NA_integer_,
-      notification_count = NA_integer_,
-      split_screen_ms = NA_real_,
-      episode_count = sum(valid_complete, na.rm = TRUE),
-      event_count = NA_integer_,
-      source_export_type = "meta",
-      daily_source = "meta_episodes",
-      summary_duration_ms = NA_real_,
-      episode_duration_ms = duration_ms,
-      duration_diff_ms = NA_real_,
-      duration_diff_pct = NA_real_,
-      duration_agreement_status = "episode_only",
-      complete_episode_count = sum(valid_complete, na.rm = TRUE),
-      unmatched_start_count = sum(x$unmatched_start, na.rm = TRUE),
-      unmatched_end_count = sum(x$unmatched_end, na.rm = TRUE),
-      invalid_pair_count = sum(x$reconstruction_status == "invalid_pair", na.rm = TRUE),
-      reconstruction_warning_count = sum(!is.na(x$reconstruction_warning) & x$reconstruction_warning != "", na.rm = TRUE),
-      is_all_apps = FALSE,
-      is_collection_app = any(x$is_collection_app, na.rm = TRUE),
-      parse_warning = compact_character_values(c(x$parse_warning, x$reconstruction_warning)),
-      n_anomalies = as.integer(diagnostics),
-      stringsAsFactors = FALSE
-    )
-  })
-  out <- tibble::as_tibble(do.call(rbind, rows))
+  valid <- meta$reconstruction_status == "complete" & !is.na(meta$duration_ms) & meta$duration_ms >= 0
+  valid[is.na(valid)] <- FALSE
+  count <- function(x) vapply(groups, function(i) sum(x[i], na.rm = TRUE), integer(1))
+  complete_count <- count(valid)
+  duration <- vapply(groups, function(i) {
+    if (any(valid[i])) sum(meta$duration_ms[i][valid[i]], na.rm = TRUE) else NA_real_
+  }, numeric(1))
+  date <- as.Date(vapply(groups, function(i) as.numeric(first_nonmissing(meta$date[i])), numeric(1)), origin = "1970-01-01")
+  first_text <- function(column) vapply(groups, function(i) first_nonmissing_character(meta[[column]][i]), character(1))
+  starts <- count(meta$unmatched_start)
+  ends <- count(meta$unmatched_end)
+  invalid <- count(meta$reconstruction_status == "invalid_pair")
+  warnings <- count(!is.na(meta$reconstruction_warning) & meta$reconstruction_warning != "")
+  diagnostics <- count(meta$anomaly_any) + starts + ends + invalid + warnings
+  out <- tibble::tibble(
+    date = unname(date), weekday = weekday_name(unname(date)),
+    app_name = unname(first_text("app_name")), activity_type = unname(first_text("activity_type")),
+    package_name = unname(first_text("package_name")), duration_ms = unname(duration),
+    duration_min = unname(duration) / 60000, open_count = NA_integer_, notification_count = NA_integer_,
+    split_screen_ms = NA_real_, episode_count = unname(complete_count), event_count = NA_integer_,
+    source_export_type = "meta", daily_source = "meta_episodes", summary_duration_ms = NA_real_,
+    episode_duration_ms = unname(duration), duration_diff_ms = NA_real_, duration_diff_pct = NA_real_,
+    duration_agreement_status = "episode_only", complete_episode_count = unname(complete_count),
+    unmatched_start_count = unname(starts), unmatched_end_count = unname(ends),
+    invalid_pair_count = unname(invalid), reconstruction_warning_count = unname(warnings),
+    is_all_apps = FALSE, is_collection_app = unname(vapply(groups, function(i) any(meta$is_collection_app[i], na.rm = TRUE), logical(1))),
+    parse_warning = unname(vapply(groups, function(i) compact_character_values(c(meta$parse_warning[i], meta$reconstruction_warning[i])), character(1))),
+    n_anomalies = as.integer(diagnostics)
+  )
   out <- add_duration_anomalies(out,
     duration_col = "duration_ms",
     max_duration_ms = max_daily_app_ms
@@ -3045,8 +2885,8 @@ filter_collection_app <- function(data) {
 classify_activity_type <- function(app_name) {
   app_name <- as.character(app_name)
   background <- !is.na(app_name) & (
-    grepl("\uFF08\u6D41\u5A92\u4F53\uFF09", app_name, fixed = TRUE) |
-      grepl("(\u6D41\u5A92\u4F53)", app_name, fixed = TRUE)
+    appusage_text_grepl("\uFF08\u6D41\u5A92\u4F53\uFF09", app_name, fixed = TRUE) |
+      appusage_text_grepl("(\u6D41\u5A92\u4F53)", app_name, fixed = TRUE)
   )
   out <- rep("foreground", length(app_name))
   out[background] <- "background"
@@ -3062,7 +2902,7 @@ daily_source_from_export <- function(export_type, n) {
     export_type <- rep(export_type, n)
   }
   out <- ifelse(export_type == "app", "app_export",
-    ifelse(export_type == "day", "day_export", paste0(export_type, "_export"))
+    ifelse(export_type == "day", "day_export", appusage_text_paste0(export_type, "_export"))
   )
   out[is.na(export_type) | export_type == ""] <- NA_character_
   out
@@ -3144,7 +2984,7 @@ typed_episode_default <- function(template, n, name) {
     return(rep(NA_real_, n))
   }
   if (is.logical(template)) {
-    return(if (grepl("^anomaly_|^is_|^unmatched_|^device_boundary|^source_date_", name)) rep(FALSE, n) else rep(NA, n))
+    return(if (appusage_text_grepl("^anomaly_|^is_|^unmatched_|^device_boundary|^source_date_", name)) rep(FALSE, n) else rep(NA, n))
   }
   rep(NA_character_, n)
 }
@@ -3167,7 +3007,7 @@ coerce_episode_column <- function(x, template, name) {
   }
   if (is.logical(template)) {
     x <- as.logical(x)
-    if (grepl("^anomaly_|^is_|^unmatched_|^device_boundary|^source_date_", name)) {
+    if (appusage_text_grepl("^anomaly_|^is_|^unmatched_|^device_boundary|^source_date_", name)) {
       x[is.na(x)] <- FALSE
     }
     return(x)
@@ -3258,7 +3098,7 @@ typed_daily_default <- function(template, n, name) {
     return(rep(NA_real_, n))
   }
   if (is.logical(template)) {
-    return(if (grepl("^anomaly_|^is_", name)) rep(FALSE, n) else rep(NA, n))
+    return(if (appusage_text_grepl("^anomaly_|^is_", name)) rep(FALSE, n) else rep(NA, n))
   }
   rep(NA_character_, n)
 }
@@ -3287,7 +3127,7 @@ coerce_daily_column <- function(x, template, name) {
   }
   if (is.logical(template)) {
     x <- as.logical(x)
-    if (grepl("^anomaly_|^is_", name)) {
+    if (appusage_text_grepl("^anomaly_|^is_", name)) {
       x[is.na(x)] <- FALSE
     }
     return(x)

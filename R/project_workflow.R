@@ -33,7 +33,7 @@ scan_appusage_project_root <- function(root, excel_pattern = "WJXraw",
     ignore.case = TRUE
   )
   if (is_present_string(excel_pattern)) {
-    excel_files <- excel_files[grepl(excel_pattern, basename(excel_files),
+    excel_files <- excel_files[appusage_text_grepl(excel_pattern, basename(excel_files),
       ignore.case = TRUE
     )]
   }
@@ -54,9 +54,9 @@ scan_appusage_project_root <- function(root, excel_pattern = "WJXraw",
     }
     project_files <- project_files[is_file]
     info <- if (length(project_files) > 0) file.info(project_files) else data.frame()
-    ext <- tolower(tools::file_ext(project_files))
+    ext <- appusage_text_lower(tools::file_ext(project_files))
     is_txt <- ext == "txt"
-    excel_matches <- excel_files[grepl(
+    excel_matches <- excel_files[appusage_text_grepl(
       appusage_project_id_excel_pattern(meta$project_id),
       basename(excel_files),
       ignore.case = TRUE
@@ -73,7 +73,7 @@ scan_appusage_project_root <- function(root, excel_pattern = "WJXraw",
       } else {
         NA_character_
       },
-      excel_paths = paste(normalizePath(excel_matches,
+      excel_paths = appusage_text_paste(normalizePath(excel_matches,
         winslash = "/",
         mustWork = FALSE
       ), collapse = ";"),
@@ -130,7 +130,7 @@ build_appusage_project_manifest <- function(project_dir,
   }
 
   info <- file.info(files)
-  ext <- tolower(tools::file_ext(files))
+  ext <- appusage_text_lower(tools::file_ext(files))
   is_txt <- ext == "txt"
   filename_meta <- lapply(files, parse_wenjuanxing_upload_filename)
   n_txt <- sum(is_txt, na.rm = TRUE)
@@ -829,7 +829,7 @@ diagnose_appusage_error <- function(error, source_file = NULL, stage = NULL,
     condition_class = if (is_present_string(context_error_class)) {
       context_error_class
     } else if (is_condition) {
-      paste(class(error), collapse = ",")
+      appusage_text_paste(class(error), collapse = ",")
     } else {
       appusage_context_value(context, "error_class", "character")
     },
@@ -884,14 +884,14 @@ format_appusage_issue_report <- function(error_context) {
   if (!is_present_string(traceback)) {
     traceback <- "No traceback was captured."
   }
-  paste(
+  appusage_text_paste(
     "# appusageR diagnostic report",
     "",
     "## Source data context",
-    paste(data_lines, collapse = "\n"),
+    appusage_text_paste(data_lines, collapse = "\n"),
     "",
     "## Error context",
-    paste(code_lines, collapse = "\n"),
+    appusage_text_paste(code_lines, collapse = "\n"),
     "",
     "## Raw source excerpt",
     appusage_context_value(x, "raw_line_window", "No raw source excerpt captured."),
@@ -936,7 +936,7 @@ preflight_self_report_matching <- function(self_report, sequence_col,
     ...
   )
   requested <- c(sequence_col, upload_col, participant_id_col)
-  requested <- requested[!is.na(requested) & nzchar(requested)]
+  requested <- requested[!is.na(requested) & appusage_text_nzchar(requested)]
   missing_cols <- setdiff(requested, names(data))
   status <- if (length(missing_cols) > 0) "error" else "success"
 
@@ -955,7 +955,7 @@ preflight_self_report_matching <- function(self_report, sequence_col,
     sequence_col = sequence_col,
     upload_col = upload_col,
     participant_id_col = participant_id_col %||% NA_character_,
-    missing_required_columns = paste(missing_cols, collapse = ";"),
+    missing_required_columns = appusage_text_paste(missing_cols, collapse = ";"),
     n_missing_sequence = appusage_count_missing(sequence),
     n_duplicate_sequence = appusage_count_duplicates(sequence),
     n_missing_upload = appusage_count_missing(upload),
@@ -966,7 +966,7 @@ preflight_self_report_matching <- function(self_report, sequence_col,
 }
 
 appusage_is_project_folder_name <- function(x) {
-  grepl("_ProjectID-[^_]+$", x)
+  appusage_text_grepl("_ProjectID-[^_]+$", x)
 }
 
 appusage_parse_project_folder <- function(path) {
@@ -980,14 +980,14 @@ appusage_parse_project_folder <- function(path) {
       parse_status = "failed"
     ))
   }
-  project_id <- sub("^.*_ProjectID-([^_]+)$", "\\1", base)
-  label <- sub("_ProjectID-[^_]+$", "", base)
-  if (grepl("^ProjectName-", label)) {
-    project_name <- sub("^ProjectName-", "", label)
+  project_id <- appusage_text_sub("^.*_ProjectID-([^_]+)$", "\\1", base)
+  label <- appusage_text_sub("_ProjectID-[^_]+$", "", base)
+  if (appusage_text_grepl("^ProjectName-", label)) {
+    project_name <- appusage_text_sub("^ProjectName-", "", label)
     study_id <- project_name
   } else {
-    label_match <- regexec("^(.*)-([^-]+)$", label)
-    label_parts <- regmatches(label, label_match)[[1]]
+    label_match <- appusage_text_regexec("^(.*)-([^-]+)$", label)
+    label_parts <- appusage_text_regmatches(label, label_match)[[1]]
     if (length(label_parts) >= 3) {
       project_name <- label_parts[[3]]
       study_id <- label_parts[[3]]
@@ -1079,19 +1079,19 @@ appusage_project_output_info <- function(project_dir, output_root,
     output_project_id <- generate_project_id()
   }
   name_prefix <- if (identical(output_style, "study")) "Study-" else "ProjectName-"
-  output_project_name <- if (grepl("^(ProjectName|Study)-", output_project_name)) {
+  output_project_name <- if (appusage_text_grepl("^(ProjectName|Study)-", output_project_name)) {
     output_project_name
   } else {
-    paste0(name_prefix, output_project_name)
+    appusage_text_paste0(name_prefix, output_project_name)
   }
-  output_project_id <- if (grepl("^ProjectID-", output_project_id)) {
+  output_project_id <- if (appusage_text_grepl("^ProjectID-", output_project_id)) {
     output_project_id
   } else {
-    paste0("ProjectID-", output_project_id)
+    appusage_text_paste0("ProjectID-", output_project_id)
   }
   project_root <- file.path(
     output_root,
-    paste0(
+    appusage_text_paste0(
       sanitize_entity_value(output_project_name),
       "_",
       sanitize_entity_value(output_project_id)
@@ -1109,12 +1109,12 @@ appusage_project_output_info <- function(project_dir, output_root,
 
 appusage_plain_project_name <- function(x) {
   x <- as.character(x)
-  x <- sub("^ProjectName-", "", x)
-  sub("^Study-", "", x)
+  x <- appusage_text_sub("^ProjectName-", "", x)
+  appusage_text_sub("^Study-", "", x)
 }
 
 appusage_plain_project_id <- function(x) {
-  sub("^ProjectID-", "", as.character(x))
+  appusage_text_sub("^ProjectID-", "", as.character(x))
 }
 
 appusage_resolve_project_workflow_inputs <- function(project_dir, raw_data_root,
@@ -1195,13 +1195,13 @@ appusage_resolve_project_by_id <- function(raw_data_root, project_id,
   project_meta <- appusage_parse_project_folder(project_hits[[1]])
 
   files <- children[!is.na(info$isdir) & !info$isdir]
-  excel_files <- files[grepl("[.](xlsx|xls)$", basename(files), ignore.case = TRUE)]
-  excel_files <- excel_files[!startsWith(basename(excel_files), "~$")]
+  excel_files <- files[appusage_text_grepl("[.](xlsx|xls)$", basename(files), ignore.case = TRUE)]
+  excel_files <- excel_files[!appusage_text_starts(basename(excel_files), "~$")]
   if (is_present_string(excel_pattern)) {
-    excel_files <- excel_files[grepl(excel_pattern, basename(excel_files), ignore.case = TRUE)]
+    excel_files <- excel_files[appusage_text_grepl(excel_pattern, basename(excel_files), ignore.case = TRUE)]
   }
   excel_files <- appusage_filter_sequence_self_report_excels(excel_files)
-  excel_files <- excel_files[grepl(
+  excel_files <- excel_files[appusage_text_grepl(
     appusage_project_id_excel_pattern(requested_project_id),
     basename(excel_files),
     ignore.case = TRUE
@@ -1223,8 +1223,8 @@ appusage_filter_sequence_self_report_excels <- function(excel_files) {
     return(excel_files)
   }
   base <- basename(excel_files)
-  sequence_hits <- grepl("\u6309\u5e8f\u53f7", base) &
-    !grepl("\u6309\u6587\u672c", base)
+  sequence_hits <- appusage_text_grepl("\u6309\u5e8f\u53f7", base) &
+    !appusage_text_grepl("\u6309\u6587\u672c", base)
   if (sum(sequence_hits) > 0) {
     return(excel_files[sequence_hits])
   }
@@ -1425,7 +1425,7 @@ appusage_workflow_state_failed <- function(config, stage, error) {
   config$workflow_state$stage_status[[stage]] <- "failed"
   config$workflow_state$last_error <- list(
     stage = stage,
-    condition_class = paste(class(error), collapse = ","),
+    condition_class = appusage_text_paste(class(error), collapse = ","),
     condition_message = conditionMessage(error),
     condition_call = if (is.null(conditionCall(error))) {
       NA_character_
@@ -1455,21 +1455,21 @@ appusage_workflow_state_dry_run <- function(config) {
 }
 
 appusage_workflow_config_transaction_paths <- function(config_file) {
-  token <- paste(
+  token <- appusage_text_paste(
     format(Sys.time(), "%Y%m%dT%H%M%OS6"),
     Sys.getpid(),
     basename(tempfile(pattern = "config-")),
     sep = "-"
   )
-  token <- gsub("[^A-Za-z0-9._-]", "-", token)
+  token <- appusage_text_gsub("[^A-Za-z0-9._-]", "-", token)
   list(
     temporary = file.path(
       dirname(config_file),
-      paste0(".", basename(config_file), ".appusage-tmp-", token)
+      appusage_text_paste0(".", basename(config_file), ".appusage-tmp-", token)
     ),
     backup = file.path(
       dirname(config_file),
-      paste0(".", basename(config_file), ".appusage-backup-", token)
+      appusage_text_paste0(".", basename(config_file), ".appusage-backup-", token)
     )
   )
 }
@@ -1555,7 +1555,7 @@ appusage_record_workflow_config_failure <- function(project_root, error,
     diagnostics_dir <- file.path(project_root, "diagnostics")
     dir.create(diagnostics_dir, recursive = TRUE, showWarnings = FALSE)
     path <- tempfile(
-      pattern = paste0("workflow_configuration_", context, "_"),
+      pattern = appusage_text_paste0("workflow_configuration_", context, "_"),
       tmpdir = diagnostics_dir,
       fileext = ".json"
     )
@@ -1563,7 +1563,7 @@ appusage_record_workflow_config_failure <- function(project_root, error,
       stage = "workflow_configuration",
       context = context,
       timestamp = appusage_workflow_timestamp(),
-      condition_class = paste(class(error), collapse = ","),
+      condition_class = appusage_text_paste(class(error), collapse = ","),
       condition_message = conditionMessage(error)
     ), path)
     invisible(path)
@@ -1580,7 +1580,7 @@ appusage_mark_workflow_stage_failed_safely <- function(config_file, stage,
     appusage_record_workflow_config_failure(
       dirname(config_file),
       config_error,
-      paste0(stage, "_failure_update")
+      appusage_text_paste0(stage, "_failure_update")
     )
     invisible(NA_character_)
   })
@@ -1639,7 +1639,7 @@ appusage_refresh_workflow_checkpoint_safely <- function(project_root, stage,
       appusage_record_workflow_config_failure(
         project_root,
         e,
-        paste0(stage, "_checkpoint_refresh")
+        appusage_text_paste0(stage, "_checkpoint_refresh")
       )
       invisible(FALSE)
     }
@@ -1649,7 +1649,7 @@ appusage_refresh_workflow_checkpoint_safely <- function(project_root, stage,
 appusage_record_discovered_workflow_checkpoints <- function(config,
                                                             resume_state) {
   for (stage in c("first_level", "second_level")) {
-    field <- paste0(stage, "_checkpoint")
+    field <- appusage_text_paste0(stage, "_checkpoint")
     path <- resume_state[[field]]
     if (!is_present_string(path) || !file.exists(path)) {
       next
@@ -1831,7 +1831,7 @@ appusage_attach_diagnostics <- function(summary, manifest, stage, project,
     context$implementation_provenance <- appusage_read_project_provenance(
       project$project_root
     )
-    error <- simpleError(context$error_message %||% paste(stage, "failed"))
+    error <- simpleError(context$error_message %||% appusage_text_paste(stage, "failed"))
     diag <- diagnose_appusage_error(error,
       source_file = context$source_file,
       stage = stage,
@@ -1849,8 +1849,8 @@ appusage_project_id_excel_pattern <- function(project_id) {
   if (!is_present_string(project_id)) {
     return("a^")
   }
-  id <- gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", project_id)
-  paste0("ProjectID[-_]", id, "([_.-]|$)")
+  id <- appusage_text_gsub("([\\[\\]{}()+*^$|\\\\?.])", "\\\\\\1", project_id)
+  appusage_text_paste0("ProjectID[-_]", id, "([_.-]|$)")
 }
 
 appusage_merge_qc_with_second_level_skips <- function(qc, second) {
@@ -1905,7 +1905,7 @@ appusage_console_hms <- function(seconds) {
 
 appusage_console_emit <- function(progress, lines) {
   if (isTRUE(progress)) {
-    message(paste(lines, collapse = "\n"))
+    message(appusage_text_paste(lines, collapse = "\n"))
   }
   invisible(lines)
 }
@@ -1973,7 +1973,7 @@ appusage_console_file_stage <- function(progress, index, total, stage_label,
     skipped = "Skipped!"
   )
   if (identical(status, "failed") && is_present_string(diagnostic)) {
-    status_text <- paste0(status_text, " diagnostic: ", diagnostic)
+    status_text <- appusage_text_paste0(status_text, " diagnostic: ", diagnostic)
   }
   line <- sprintf(
     "[%s] %s/%s | %s | %s | %s",
@@ -2083,7 +2083,7 @@ appusage_console_file_label <- function(row) {
     }
   }
   if (is_present_string(participant) && is_present_string(export_type)) {
-    return(paste0(
+    return(appusage_text_paste0(
       "sub-", sanitize_entity_value(participant),
       "_type-", sanitize_entity_value(export_type)
     ))
@@ -2178,7 +2178,7 @@ appusage_console_percent_row <- function(label, flow_record) {
   sprintf(
     "| %s | %s | TOTAL: %s |",
     label,
-    paste(pieces, collapse = " | "),
+    appusage_text_paste(pieces, collapse = " | "),
     flow_record$total
   )
 }
@@ -2204,7 +2204,7 @@ appusage_failure_rows <- function(summary, stage) {
   if ("status" %in% names(summary)) {
     return(which(summary$status %in% c("error", "skipped") &
       !is.na(summary$error_message) &
-      nzchar(summary$error_message)))
+      appusage_text_nzchar(summary$error_message)))
   }
   integer()
 }
@@ -2286,11 +2286,11 @@ appusage_function_from_call <- function(call) {
   if (!is_present_string(call)) {
     return(NULL)
   }
-  x <- trimws(strsplit(call, "\n", fixed = TRUE)[[1]][[1]])
-  if (!grepl("^[[:alnum:]_.]+\\s*\\(", x)) {
+  x <- appusage_text_trim(appusage_text_split(call, "\n", fixed = TRUE)[[1]][[1]])
+  if (!appusage_text_grepl("^[[:alnum:]_.]+\\s*\\(", x)) {
     return(NULL)
   }
-  sub("^([[:alnum:]_.]+)\\s*\\(.*$", "\\1", x)
+  appusage_text_sub("^([[:alnum:]_.]+)\\s*\\(.*$", "\\1", x)
 }
 
 appusage_function_location <- function(function_name) {
@@ -2324,7 +2324,7 @@ appusage_srcref_location <- function(function_name) {
     return(NA_character_)
   }
   line <- as.integer(ref[[1]])
-  paste0(normalizePath(filename, winslash = "/", mustWork = FALSE), ":", line)
+  appusage_text_paste0(normalizePath(filename, winslash = "/", mustWork = FALSE), ":", line)
 }
 
 appusage_source_definition_location <- function(function_name) {
@@ -2338,15 +2338,15 @@ appusage_source_definition_location <- function(function_name) {
   if (length(source_dirs) == 0) {
     return(NA_character_)
   }
-  escaped <- gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", function_name)
-  pattern <- paste0("^", escaped, "\\s*<-\\s*function\\b")
+  escaped <- appusage_text_gsub("([\\[\\]{}()+*^$|\\\\?.])", "\\\\\\1", function_name)
+  pattern <- appusage_text_paste0("^", escaped, "\\s*<-\\s*function\\b")
   for (source_dir in source_dirs) {
     files <- list.files(source_dir, pattern = "\\.[rR]$", full.names = TRUE)
     for (file in files) {
       lines <- readLines(file, warn = FALSE, encoding = "UTF-8")
-      hit <- grep(pattern, lines)
+      hit <- appusage_text_grep(pattern, lines)
       if (length(hit) > 0) {
-        return(paste0(normalizePath(file, winslash = "/", mustWork = FALSE), ":", hit[[1]]))
+        return(appusage_text_paste0(normalizePath(file, winslash = "/", mustWork = FALSE), ":", hit[[1]]))
       }
     }
   }
@@ -2355,7 +2355,7 @@ appusage_source_definition_location <- function(function_name) {
 
 appusage_write_error_report <- function(error_context, error_dir) {
   dir.create(error_dir, recursive = TRUE, showWarnings = FALSE)
-  base <- paste(
+  base <- appusage_text_paste(
     "source",
     error_context$batch_index %||% "unknown",
     "stage",
@@ -2363,7 +2363,7 @@ appusage_write_error_report <- function(error_context, error_dir) {
     sep = "-"
   )
   if (is_present_string(error_context$source_basename)) {
-    base <- paste(
+    base <- appusage_text_paste(
       tools::file_path_sans_ext(error_context$source_basename),
       "stage",
       error_context$stage %||% "unknown",
@@ -2371,8 +2371,8 @@ appusage_write_error_report <- function(error_context, error_dir) {
     )
   }
   base <- sanitize_entity_value(base)
-  json_file <- file.path(error_dir, paste0(base, ".json"))
-  md_file <- file.path(error_dir, paste0(base, ".md"))
+  json_file <- file.path(error_dir, appusage_text_paste0(base, ".json"))
+  md_file <- file.path(error_dir, appusage_text_paste0(base, ".md"))
   report <- format_appusage_issue_report(error_context)
   jsonlite::write_json(error_context,
     path = json_file,
@@ -2401,21 +2401,21 @@ appusage_emit_diagnostic <- function(error_context, paths,
   lines <- c(
     "appusageR diagnostic",
     "Source data context:",
-    paste0("- stage: ", error_context$stage %||% NA_character_),
-    paste0("- source_file: ", error_context$source_file %||% NA_character_),
-    paste0("- source_basename: ", error_context$source_basename %||% NA_character_),
-    paste0("- file_size: ", error_context$file_size %||% NA_real_),
-    paste0("- wenjuanxing_sequence_id: ", error_context$wenjuanxing_sequence_id %||% NA_integer_),
-    paste0("- native_export_type: ", error_context$native_export_type %||% NA_character_),
+    appusage_text_paste0("- stage: ", error_context$stage %||% NA_character_),
+    appusage_text_paste0("- source_file: ", error_context$source_file %||% NA_character_),
+    appusage_text_paste0("- source_basename: ", error_context$source_basename %||% NA_character_),
+    appusage_text_paste0("- file_size: ", error_context$file_size %||% NA_real_),
+    appusage_text_paste0("- wenjuanxing_sequence_id: ", error_context$wenjuanxing_sequence_id %||% NA_integer_),
+    appusage_text_paste0("- native_export_type: ", error_context$native_export_type %||% NA_character_),
     "Error context:",
-    paste0("- code_function: ", error_context$code_function %||% NA_character_),
-    paste0("- code_location: ", error_context$code_location %||% NA_character_),
-    paste0("- condition_class: ", error_context$condition_class %||% NA_character_),
-    paste0("- condition_message: ", error_context$condition_message %||% NA_character_),
+    appusage_text_paste0("- code_function: ", error_context$code_function %||% NA_character_),
+    appusage_text_paste0("- code_location: ", error_context$code_location %||% NA_character_),
+    appusage_text_paste0("- condition_class: ", error_context$condition_class %||% NA_character_),
+    appusage_text_paste0("- condition_message: ", error_context$condition_message %||% NA_character_),
     "Traceback/report:",
-    paste0("- diagnostic_report: ", paths$md)
+    appusage_text_paste0("- diagnostic_report: ", paths$md)
   )
-  message(paste(lines, collapse = "\n"))
+  message(appusage_text_paste(lines, collapse = "\n"))
   invisible(NULL)
 }
 
@@ -2439,7 +2439,7 @@ appusage_source_excerpt <- function(source_file, max_lines = 5) {
     return(NA_character_)
   }
   lines <- utils::head(lines, max_lines)
-  paste(paste0(seq_along(lines), ": ", lines), collapse = "\n")
+  appusage_text_paste(appusage_text_paste0(seq_along(lines), ": ", lines), collapse = "\n")
 }
 
 appusage_abort_if_strict_failures <- function(summary, strict, stage) {
@@ -2508,7 +2508,7 @@ appusage_file_context <- function(source_file) {
     source_file = normalizePath(source_file, winslash = "/", mustWork = FALSE),
     source_basename = basename(source_file),
     file_size = if (is.null(info)) NA_real_ else as.numeric(info$size),
-    extension = tolower(tools::file_ext(source_file))
+    extension = appusage_text_lower(tools::file_ext(source_file))
   )
 }
 
@@ -2518,7 +2518,7 @@ appusage_format_issue_fields <- function(x, fields) {
     if (length(value) == 0 || all(is.na(value))) {
       value <- "NA"
     }
-    paste0("- ", field, ": ", paste(value, collapse = ";"))
+    appusage_text_paste0("- ", field, ": ", appusage_text_paste(value, collapse = ";"))
   }, character(1))
 }
 
@@ -2547,10 +2547,10 @@ appusage_effective_self_report_guess_max <- function(n_max = Inf,
 
 appusage_self_report_warning_category <- function(condition) {
   message <- conditionMessage(condition)
-  if (grepl("expecting|coerc|type", message, ignore.case = TRUE)) {
+  if (appusage_text_grepl("expecting|coerc|type", message, ignore.case = TRUE)) {
     return("type_coercion")
   }
-  if (grepl("parse|cell", message, ignore.case = TRUE)) {
+  if (appusage_text_grepl("parse|cell", message, ignore.case = TRUE)) {
     return("cell_parse")
   }
   "readxl_warning"
@@ -2693,7 +2693,7 @@ appusage_read_self_report_workbook <- function(self_report, sheet = 1,
     error_condition_call = if (is.null(read_error) || is.null(conditionCall(read_error))) {
       NULL
     } else {
-      paste(deparse(conditionCall(read_error)), collapse = " ")
+      appusage_text_paste(deparse(conditionCall(read_error)), collapse = " ")
     }
   )
   diagnostics_file <- tryCatch(
@@ -2705,7 +2705,7 @@ appusage_read_self_report_workbook <- function(self_report, sheet = 1,
   }
   if (length(warnings) > 0L && isTRUE(emit_warning)) {
     location <- if (is_present_string(diagnostics_file)) {
-      paste0(" Diagnostics: ", diagnostics_file)
+      appusage_text_paste0(" Diagnostics: ", diagnostics_file)
     } else {
       ""
     }
@@ -2754,7 +2754,7 @@ appusage_count_missing <- function(x) {
     return(NA_integer_)
   }
   x_chr <- as.character(x)
-  sum(is.na(x_chr) | !nzchar(trimws(x_chr)))
+  sum(is.na(x_chr) | !appusage_text_nzchar(appusage_text_trim(x_chr)))
 }
 
 appusage_count_duplicates <- function(x) {
@@ -2762,7 +2762,7 @@ appusage_count_duplicates <- function(x) {
     return(NA_integer_)
   }
   x_chr <- as.character(x)
-  x_chr <- x_chr[!is.na(x_chr) & nzchar(trimws(x_chr))]
+  x_chr <- x_chr[!is.na(x_chr) & appusage_text_nzchar(appusage_text_trim(x_chr))]
   sum(duplicated(x_chr))
 }
 
@@ -2880,8 +2880,8 @@ appusage_read_self_report_rows <- function(self_report, n_max = Inf) {
 }
 
 appusage_sequence_vector <- function(x) {
-  text <- trimws(as.character(x))
-  text[!nzchar(text)] <- NA_character_
+  text <- appusage_text_trim(as.character(x))
+  text[!appusage_text_nzchar(text)] <- NA_character_
   suppressWarnings(as.integer(text))
 }
 
@@ -2892,8 +2892,8 @@ appusage_datetime_vector <- function(x) {
   if (inherits(x, "Date")) {
     return(as.POSIXct(x, tz = "Asia/Shanghai"))
   }
-  text <- trimws(as.character(x))
-  text[!nzchar(text) | is.na(text)] <- NA_character_
+  text <- appusage_text_trim(as.character(x))
+  text[!appusage_text_nzchar(text) | is.na(text)] <- NA_character_
   out <- rep(as.POSIXct(NA), length(text))
   for (i in seq_along(text)) {
     if (is.na(text[[i]])) next
@@ -2923,16 +2923,16 @@ extract_wenjuanxing_upload_filenames <- function(x) {
   if (length(x) == 0 || is.na(x)) {
     return(character())
   }
-  text <- paste(as.character(x), collapse = " ")
-  text <- gsub("&amp;", "&", text, fixed = TRUE)
-  decoded <- tryCatch(utils::URLdecode(text), error = function(e) text)
+  text <- appusage_text_paste(as.character(x), collapse = " ")
+  text <- appusage_text_gsub("&amp;", "&", text, fixed = TRUE)
+  decoded <- tryCatch(appusage_text_url_decode(text), error = function(e) text)
   candidates <- c(
     appusage_extract_upload_query_values(decoded, c("filename", "attname")),
     appusage_extract_txt_like_names(decoded)
   )
-  candidates <- basename(gsub("\\\\", "/", candidates))
-  candidates <- trimws(candidates)
-  candidates <- candidates[nzchar(candidates)]
+  candidates <- basename(appusage_text_gsub("\\\\", "/", candidates))
+  candidates <- appusage_text_trim(candidates)
+  candidates <- candidates[appusage_text_nzchar(candidates)]
   candidates <- appusage_upload_candidate_variants(candidates)
   unique(candidates)
 }
@@ -2944,8 +2944,8 @@ appusage_upload_candidate_variants <- function(candidates) {
   }, character(1))
   out <- unique(c(candidates, stats::na.omit(native)))
   redundant_question_prefix <- vapply(out, function(x) {
-    grepl("^[0-9]+_AppUsage_", x, ignore.case = TRUE) &&
-      any(grepl(paste0("^[0-9]+_", gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", x), "$"), out, ignore.case = TRUE))
+    appusage_text_grepl("^[0-9]+_AppUsage_", x, ignore.case = TRUE) &&
+      any(appusage_text_grepl(appusage_text_paste0("^[0-9]+_", appusage_text_gsub("([\\[\\]{}()+*^$|\\\\?.])", "\\\\\\1", x), "$"), out, ignore.case = TRUE))
   }, logical(1))
   out[!redundant_question_prefix]
 }
@@ -2953,14 +2953,14 @@ appusage_upload_candidate_variants <- function(candidates) {
 appusage_extract_upload_query_values <- function(text, keys) {
   out <- character()
   for (key in keys) {
-    pattern <- paste0("(?i)(?:[?&;]|^)", key, "=([^&;\\s]+[.][Tt][Xx][Tt])")
-    matches <- gregexpr(pattern, text, perl = TRUE)[[1]]
+    pattern <- appusage_text_paste0("(?i)(?:[?&;]|^)", key, "=([^&;\\s]+[.][Tt][Xx][Tt])")
+    matches <- appusage_text_gregexpr(pattern, text, perl = TRUE)[[1]]
     if (identical(matches[[1]], -1L)) {
       next
     }
-    values <- regmatches(text, list(matches))[[1]]
-    values <- sub(paste0("(?i)^.*", key, "="), "", values, perl = TRUE)
-    values <- sub("[&;\\s].*$", "", values, perl = TRUE)
+    values <- appusage_text_regmatches(text, list(matches))[[1]]
+    values <- appusage_text_sub(appusage_text_paste0("(?i)^.*", key, "="), "", values, perl = TRUE)
+    values <- appusage_text_sub("[&;\\s].*$", "", values, perl = TRUE)
     out <- c(out, values)
   }
   out
@@ -2968,17 +2968,17 @@ appusage_extract_upload_query_values <- function(text, keys) {
 
 appusage_extract_txt_like_names <- function(text) {
   pattern <- "(?i)(?:[[:alnum:].()+ -]+_)?AppUsage_(?:line|meta|day|app)_[0-9]{4}_[0-9]{1,2}_[0-9]{1,2}_[0-9]{1,2}_[0-9]{1,2}_[0-9]{1,2}[.]txt|[0-9]+_[0-9]+_(?:run_ver[0-9]+|log|content_[0-9]+(?:[+][(][0-9]+[)])?)[.]txt"
-  matches <- gregexpr(pattern, text, perl = TRUE)[[1]]
+  matches <- appusage_text_gregexpr(pattern, text, perl = TRUE)[[1]]
   if (identical(matches[[1]], -1L)) {
     return(character())
   }
-  regmatches(text, list(matches))[[1]]
+  appusage_text_regmatches(text, list(matches))[[1]]
 }
 
 appusage_normalized_upload_name <- function(x) {
-  x <- basename(gsub("\\\\", "/", as.character(x)))
-  x <- tryCatch(utils::URLdecode(x), error = function(e) x)
-  tolower(trimws(x))
+  x <- basename(appusage_text_gsub("\\\\", "/", as.character(x)))
+  x <- tryCatch(appusage_text_url_decode(x), error = function(e) x)
+  appusage_text_lower(appusage_text_trim(x))
 }
 
 appusage_manifest_with_proc2_paths <- function(manifest, first, second, project_root) {
@@ -3020,7 +3020,7 @@ appusage_manifest_with_proc2_paths <- function(manifest, first, second, project_
   rda <- vapply(second_idx[has_second], function(i) {
     appusage_summary_proc2_path(second, i)
   }, character(1))
-  valid <- !is.na(rda) & nzchar(rda) & file.exists(rda)
+  valid <- !is.na(rda) & appusage_text_nzchar(rda) & file.exists(rda)
   target <- which(has_second)[valid]
   if (length(target) > 0) {
     normalized <- normalizePath(rda[valid], winslash = "/", mustWork = FALSE)
@@ -3047,9 +3047,9 @@ appusage_summary_proc2_path <- function(summary, index) {
 appusage_relative_path <- function(path, root) {
   path <- normalizePath(path, winslash = "/", mustWork = FALSE)
   root <- normalizePath(root, winslash = "/", mustWork = FALSE)
-  prefix <- paste0(root, "/")
-  if (startsWith(path, prefix)) {
-    substring(path, nchar(prefix) + 1L)
+  prefix <- appusage_text_paste0(root, "/")
+  if (appusage_text_starts(path, prefix)) {
+    appusage_text_substring(path, appusage_text_nchar(prefix) + 1L)
   } else {
     path
   }
@@ -3177,7 +3177,7 @@ appusage_match_output_row <- function(status, sequence_id,
     moSens_appusage_source_file = source_file,
     moSens_appusage_export_type = export_type,
     moSens_appusage_export_timestamp = export_timestamp,
-    moSens_match_warning = paste(unique(warning[nzchar(warning)]), collapse = ";"),
+    moSens_match_warning = appusage_text_paste(unique(warning[appusage_text_nzchar(warning)]), collapse = ";"),
     stringsAsFactors = FALSE
   )
 }
@@ -3201,7 +3201,7 @@ appusage_build_manifest_match_index <- function(manifest) {
       rep(NA_character_, n)
     }
     for (i in seq_len(n)) {
-      if (is_txt[[i]] && !is.na(value[[i]]) && nzchar(value[[i]])) {
+      if (is_txt[[i]] && !is.na(value[[i]]) && appusage_text_nzchar(value[[i]])) {
         names_by_row[[i]] <- c(names_by_row[[i]], value[[i]])
       }
     }
@@ -3209,14 +3209,14 @@ appusage_build_manifest_match_index <- function(manifest) {
   key_rows <- rep(seq_len(n), lengths(names_by_row))
   upload_names <- unlist(names_by_row, use.names = FALSE)
   sequence_values <- sequence[key_rows]
-  valid_upload <- !is.na(upload_names) & nzchar(upload_names)
-  valid <- !is.na(sequence_values) & nzchar(sequence_values) &
-    !is.na(upload_names) & nzchar(upload_names)
-  dual_key <- paste(sequence_values[valid], upload_names[valid], sep = "\r")
+  valid_upload <- !is.na(upload_names) & appusage_text_nzchar(upload_names)
+  valid <- !is.na(sequence_values) & appusage_text_nzchar(sequence_values) &
+    !is.na(upload_names) & appusage_text_nzchar(upload_names)
+  dual_key <- appusage_text_paste(sequence_values[valid], upload_names[valid], sep = "\r")
   dual_rows <- key_rows[valid]
   list(
     dual = split(dual_rows, dual_key),
-    sequence = unique(sequence[is_txt & !is.na(sequence) & nzchar(sequence)]),
+    sequence = unique(sequence[is_txt & !is.na(sequence) & appusage_text_nzchar(sequence)]),
     upload = unique(upload_names[valid_upload])
   )
 }
@@ -3226,7 +3226,7 @@ appusage_manifest_candidate_rows <- function(sequence_id, norm_candidates,
   if (is.na(sequence_id) || length(norm_candidates) == 0) {
     return(integer())
   }
-  keys <- paste(as.character(sequence_id), norm_candidates, sep = "\r")
+  keys <- appusage_text_paste(as.character(sequence_id), norm_candidates, sep = "\r")
   rows <- unlist(manifest_match_index$dual[keys], use.names = FALSE)
   sort(unique(as.integer(rows)))
 }
@@ -3286,19 +3286,19 @@ appusage_match_diagnostics <- function(matched, file_matches,
 appusage_matched_excel_path <- function(self_report_file, project_root,
                                         project_id) {
   stem <- tools::file_path_sans_ext(basename(self_report_file))
-  key <- sub(paste0("^ProjectID[-_]", appusage_plain_project_id(project_id), "[-_]?"), "", stem)
-  key <- if (grepl("^WJXraw", key, ignore.case = TRUE)) key else paste0("WJXraw-", key)
+  key <- appusage_text_sub(appusage_text_paste0("^ProjectID[-_]", appusage_plain_project_id(project_id), "[-_]?"), "", stem)
+  key <- if (appusage_text_grepl("^WJXraw", key, ignore.case = TRUE)) key else appusage_text_paste0("WJXraw-", key)
   key <- appusage_sanitize_excel_key(key)
   file.path(
     project_root,
-    paste0("ProjectID-", appusage_plain_project_id(project_id), "_", key, "_Stat-matched.xlsx")
+    appusage_text_paste0("ProjectID-", appusage_plain_project_id(project_id), "_", key, "_Stat-matched.xlsx")
   )
 }
 
 appusage_sanitize_excel_key <- function(x) {
-  x <- gsub("[<>:\"/\\\\|?*]+", "-", x)
-  x <- gsub("\\s+", " ", x)
-  trimws(x)
+  x <- appusage_text_gsub("[<>:\"/\\\\|?*]+", "-", x)
+  x <- appusage_text_gsub("\\s+", " ", x)
+  appusage_text_trim(x)
 }
 
 appusage_write_xlsx <- function(data, path) {
@@ -3354,7 +3354,7 @@ appusage_refresh_match_summary <- function(project_root, file_matches) {
   missing <- is.na(matched)
   if (any(missing)) {
     summary_key <- appusage_identity_summary_key(summary)
-    file_key <- paste(file_matches$wenjuanxing_sequence_id, file_matches$filename_export_type, sep = "\r")
+    file_key <- appusage_text_paste(file_matches$wenjuanxing_sequence_id, file_matches$filename_export_type, sep = "\r")
     matched[missing] <- match(summary_key[missing], file_key)
   }
   has_match <- !is.na(matched)
@@ -3373,7 +3373,7 @@ appusage_summary_proc2_paths <- function(summary) {
       next
     }
     value <- as.character(summary[[col]])
-    fill <- (is.na(paths) | !nzchar(paths)) & !is.na(value) & nzchar(value)
+    fill <- (is.na(paths) | !appusage_text_nzchar(paths)) & !is.na(value) & appusage_text_nzchar(value)
     paths[fill] <- value[fill]
   }
   paths
@@ -3395,5 +3395,5 @@ appusage_second_summary_has_inline_qc <- function(second) {
     return(FALSE)
   }
   qc_status <- as.character(second$qc_status[successful])
-  all(!is.na(qc_status) & nzchar(qc_status) & !qc_status %in% c("not_run", "pending"))
+  all(!is.na(qc_status) & appusage_text_nzchar(qc_status) & !qc_status %in% c("not_run", "pending"))
 }

@@ -38,7 +38,7 @@ read_appusage_text <- function(x, input = c("file", "text", "lines"),
     read_warning = if (length(warnings) == 0) {
       NA_character_
     } else {
-      paste(unique(warnings), collapse = "\n")
+      appusage_text_paste(unique(warnings), collapse = "\n")
     }
   )
   class(out) <- c("appusage_text", "list")
@@ -95,12 +95,13 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
   result <- tryCatch(
     withCallingHandlers(
       {
-        preflight <- appusage_source_preflight(
+        prepared <- appusage_prepare_source(
           x = parse_x,
           input = parse_input,
           encoding = encoding,
           filename_type = id_info$native_export_type_from_filename[[1]]
         )
+        preflight <- prepared$preflight
         if (!identical(preflight$status, "ok")) {
           detected_type <- if (length(preflight$detected_components) == 1L) {
             preflight$detected_components[[1]]
@@ -111,7 +112,7 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
           }
           stop(appusage_source_preflight_error(preflight))
         }
-        parse_x <- preflight$lines
+        parse_x <- prepared$context
         parse_input <- "lines"
         detected_type <- first_level_detect_type(
           x = parse_x,
@@ -125,7 +126,7 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
           cli::cli_abort("APP Usage export type could not be detected.")
         }
         if (isTRUE(preflight$filename_content_disagreement)) {
-          warnings <- c(warnings, paste0(
+          warnings <- c(warnings, appusage_text_paste0(
             "Filename export type '", preflight$filename_type,
             "' disagrees with content-selected component '", detected_type,
             "'; content selection was used."
@@ -240,7 +241,7 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
       )
     )
     if ((file.exists(data_file) || file.exists(metadata_file)) && !isTRUE(overwrite)) {
-      stop(batch_cache_exists_error(paste(c(data_file, metadata_file), collapse = "; ")))
+      stop(batch_cache_exists_error(appusage_text_paste(c(data_file, metadata_file), collapse = "; ")))
     }
     metadata$outputs$metadata_json <- normalizePath(metadata_file, winslash = "/", mustWork = FALSE)
     if (identical(result$status, "success")) {
@@ -493,13 +494,13 @@ extract_uncoded_apps <- function(x) {
     data$source_export_type <- NA_character_
   }
   missing_category <- is.na(data$Level_1_Category) | is.na(data$Level_2_Category) |
-    !nzchar(as.character(data$Level_1_Category)) |
-    !nzchar(as.character(data$Level_2_Category))
+    !appusage_text_nzchar(as.character(data$Level_1_Category)) |
+    !appusage_text_nzchar(as.character(data$Level_2_Category))
   data <- data[missing_category, , drop = FALSE]
   if (nrow(data) == 0) {
     return(empty_uncoded_apps_tibble())
   }
-  key <- paste(data$package_name, data$app_name, data$source_export_type, sep = "\r")
+  key <- appusage_text_paste(data$package_name, data$app_name, data$source_export_type, sep = "\r")
   groups <- split(seq_len(nrow(data)), key)
   rows <- lapply(groups, function(idx) {
     duration <- if ("duration_ms" %in% names(data)) {
@@ -648,7 +649,8 @@ run_appusage_workflow <- function(x, output_dir, ids = NULL,
 normalize_first_level_input <- function(x, input, encoding) {
   if (inherits(x, "appusage_text")) {
     return(list(
-      x = x$lines,
+      # read_appusage_text() has already decoded and normalized these lines.
+      x = appusage_parse_context(x$lines),
       input = "lines",
       source_file = x$source_path,
       metadata_input = x$input
@@ -700,7 +702,7 @@ first_level_wrapper_id_info <- function(source_file, input, participant_id) {
 parse_first_level_by_type <- function(x, input, type, participant_id,
                                       source_file, tz, encoding, strict) {
   switch(type,
-    line = parse_line(
+    line = appusage_parse_line_context(
       x,
       input = input,
       participant_id = participant_id,
@@ -709,7 +711,7 @@ parse_first_level_by_type <- function(x, input, type, participant_id,
       encoding = encoding,
       strict = strict
     ),
-    meta = parse_meta(
+    meta = appusage_parse_meta_context(
       x,
       input = input,
       participant_id = participant_id,
@@ -718,7 +720,7 @@ parse_first_level_by_type <- function(x, input, type, participant_id,
       encoding = encoding,
       strict = strict
     ),
-    day = parse_day(
+    day = appusage_parse_day_context(
       x,
       input = input,
       participant_id = participant_id,
@@ -727,7 +729,7 @@ parse_first_level_by_type <- function(x, input, type, participant_id,
       encoding = encoding,
       strict = strict
     ),
-    app = parse_app(
+    app = appusage_parse_app_context(
       x,
       input = input,
       participant_id = participant_id,

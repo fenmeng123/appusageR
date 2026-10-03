@@ -44,6 +44,7 @@ qc_appusage_anomalies <- function(data, metadata = NULL,
   )
 
   grains <- appusage_normalize_anomaly_input(data)
+  context <- appusage_qc_context(grains, source_qc_config)
   metrics <- appusage_empty_anomaly_qc(
     status = "success",
     thresholds = thresholds
@@ -52,7 +53,7 @@ qc_appusage_anomalies <- function(data, metadata = NULL,
   metrics <- appusage_check_episode_anomalies(
     metrics,
     grains$episode,
-    max_episode_ms = max_episode_ms
+    max_episode_ms = max_episode_ms, context = context
   )
   metrics <- appusage_check_event_anomalies(metrics, grains$event)
   metrics <- appusage_check_daily_anomalies(
@@ -61,18 +62,18 @@ qc_appusage_anomalies <- function(data, metadata = NULL,
     max_daily_app_ms = max_daily_app_ms,
     max_daily_total_ms = max_daily_total_ms,
     meta_diff_abs_ms = meta_diff_abs_ms,
-    meta_diff_ratio = meta_diff_ratio
+    meta_diff_ratio = meta_diff_ratio, context = context
   )
   metrics <- appusage_check_export_span_anomalies(
     metrics,
     grains,
     metadata,
-    max_export_lookback_days = max_export_lookback_days
+    max_export_lookback_days = max_export_lookback_days, context = context
   )
   metrics$source_anomaly_qc <- appusage_source_anomaly_qc(
     grains,
     config = source_qc_config,
-    metadata = metadata
+    metadata = metadata, context = context
   )
   metrics <- appusage_add_checks(
     metrics,
@@ -268,7 +269,7 @@ appusage_missing_any_time <- function(x, cols) {
       value_missing <- is.na(value)
     } else {
       value_chr <- as.character(value)
-      value_missing <- is.na(value_chr) | !nzchar(trimws(value_chr))
+      value_missing <- is.na(value_chr) | !appusage_text_nzchar(appusage_text_trim(value_chr))
     }
     missing <- missing & value_missing
   }
@@ -280,12 +281,12 @@ appusage_count_true <- function(x) {
 }
 
 appusage_check_episode_anomalies <- function(metrics, episode,
-                                             max_episode_ms) {
+                                             max_episode_ms, context = NULL) {
   if (!is.data.frame(episode) || nrow(episode) == 0L) {
     return(metrics)
   }
 
-  duration_ms <- appusage_num_col(episode, "duration_ms")
+  duration_ms <- appusage_qc_col(episode, "duration_ms", "num", context, "episode")
   missing_start <- appusage_missing_any_time(
     episode,
     c("start_ts_ms", "start_datetime", "start_time")
@@ -298,21 +299,21 @@ appusage_check_episode_anomalies <- function(metrics, episode,
   negative_duration <- !is.na(duration_ms) & duration_ms < 0
   zero_duration <- !is.na(duration_ms) & duration_ms == 0
   overlong_duration <- !is.na(duration_ms) & duration_ms > max_episode_ms
-  cross_date <- appusage_lgl_col(episode, "anomaly_cross_date")
+  cross_date <- appusage_qc_col(episode, "anomaly_cross_date", "lgl", context, "episode")
   if (!any(cross_date) && appusage_has_col(episode, "start_ts_ms") &&
     appusage_has_col(episode, "end_ts_ms")) {
-    start_date <- appusage_date_from_ms(appusage_num_col(episode, "start_ts_ms"))
-    end_date <- appusage_date_from_ms(appusage_num_col(episode, "end_ts_ms"))
+    start_date <- appusage_qc_date(episode, "start_ts_ms", context, "episode", ms = TRUE)
+    end_date <- appusage_qc_date(episode, "end_ts_ms", context, "episode", ms = TRUE)
     cross_date <- !is.na(start_date) & !is.na(end_date) & start_date != end_date
   }
-  device_boundary <- appusage_lgl_col(episode, "device_boundary_involved")
-  unmatched_start <- appusage_lgl_col(episode, "unmatched_start")
-  unmatched_end <- appusage_lgl_col(episode, "unmatched_end")
-  reconstruction_status <- appusage_chr_col(episode, "reconstruction_status")
+  device_boundary <- appusage_qc_col(episode, "device_boundary_involved", "lgl", context, "episode")
+  unmatched_start <- appusage_qc_col(episode, "unmatched_start", "lgl", context, "episode")
+  unmatched_end <- appusage_qc_col(episode, "unmatched_end", "lgl", context, "episode")
+  reconstruction_status <- appusage_qc_col(episode, "reconstruction_status", "chr", context, "episode")
   invalid_pair <- reconstruction_status %in% "invalid_pair" |
-    appusage_lgl_col(episode, "invalid_pair")
-  warning_text <- appusage_chr_col(episode, "reconstruction_warning")
-  reconstruction_warning <- !is.na(warning_text) & nzchar(trimws(warning_text))
+    appusage_qc_col(episode, "invalid_pair", "lgl", context, "episode")
+  warning_text <- appusage_qc_col(episode, "reconstruction_warning", "chr", context, "episode")
+  reconstruction_warning <- !is.na(warning_text) & appusage_text_nzchar(appusage_text_trim(warning_text))
 
   checks <- list(
     episode_missing_start_timestamp = list(
@@ -370,7 +371,7 @@ appusage_check_event_anomalies <- function(metrics, event) {
     c("event_type", "event_type_label")
   )
   event_label <- appusage_chr_col(event, "event_type_label")
-  unknown_type <- !is.na(event_label) & grepl("^EVENT_TYPE_[0-9]+$", event_label)
+  unknown_type <- !is.na(event_label) & appusage_text_grepl("^EVENT_TYPE_[0-9]+$", event_label)
   non_monotonic <- appusage_non_monotonic_events(event)
 
   checks <- list(
@@ -403,8 +404,8 @@ appusage_non_monotonic_events <- function(event) {
     rep("__all__", n)
   }
   out <- rep(FALSE, n)
-  for (key in unique(package)) {
-    idx <- which(package %in% key)
+  groups <- split(seq_len(n), match(package, unique(package)))
+  for (idx in groups) {
     if (length(idx) < 2L) {
       next
     }
@@ -417,12 +418,12 @@ appusage_check_daily_anomalies <- function(metrics, daily,
                                            max_daily_app_ms,
                                            max_daily_total_ms,
                                            meta_diff_abs_ms,
-                                           meta_diff_ratio) {
+                                           meta_diff_ratio, context = NULL) {
   if (!is.data.frame(daily) || nrow(daily) == 0L) {
     return(metrics)
   }
 
-  duration_ms <- appusage_num_col(daily, "duration_ms")
+  duration_ms <- appusage_qc_col(daily, "duration_ms", "num", context, "daily")
   missing_duration <- is.na(duration_ms)
   negative_duration <- !is.na(duration_ms) & duration_ms < 0
   zero_duration <- !is.na(duration_ms) & duration_ms == 0
@@ -430,14 +431,14 @@ appusage_check_daily_anomalies <- function(metrics, daily,
   total_by_date <- appusage_daily_total_by_date(
     daily,
     duration_ms,
-    max_daily_total_ms
+    max_daily_total_ms, context = context
   )
   impossible_total <- total_by_date$row_flag
 
-  duration_diff <- appusage_num_col(daily, "duration_diff_ms")
-  duration_diff_pct <- abs(appusage_num_col(daily, "duration_diff_pct"))
+  duration_diff <- appusage_qc_col(daily, "duration_diff_ms", "num", context, "daily")
+  duration_diff_pct <- abs(appusage_qc_col(daily, "duration_diff_pct", "num", context, "daily"))
   abs_diff <- abs(duration_diff)
-  agreement <- appusage_chr_col(daily, "duration_agreement_status")
+  agreement <- appusage_qc_col(daily, "duration_agreement_status", "chr", context, "daily")
   meta_disagreement <- agreement %in% "matched_with_difference" &
     (
       (!is.na(abs_diff) & abs_diff > meta_diff_abs_ms) |
@@ -483,10 +484,10 @@ appusage_check_daily_anomalies <- function(metrics, daily,
 }
 
 appusage_daily_total_by_date <- function(daily, duration_ms,
-                                         max_daily_total_ms) {
-  dates <- appusage_date_col(daily, "date")
+                                         max_daily_total_ms, context = NULL) {
+  dates <- appusage_qc_date(daily, "date", context, "daily")
   if (all(is.na(dates))) {
-    dates <- appusage_date_col(daily, "table_date")
+    dates <- appusage_qc_date(daily, "table_date", context, "daily")
   }
 
   row_flag <- rep(FALSE, appusage_n(daily))
@@ -512,9 +513,9 @@ appusage_daily_total_by_date <- function(daily, duration_ms,
 }
 
 appusage_check_export_span_anomalies <- function(metrics, grains, metadata,
-                                                 max_export_lookback_days) {
+                                                 max_export_lookback_days, context = NULL) {
   export_date <- appusage_metadata_export_date(metadata)
-  observed_dates <- appusage_observed_dates(grains)
+  observed_dates <- appusage_observed_dates(grains, context)
   if (is.na(export_date) || length(observed_dates) == 0L) {
     return(metrics)
   }
@@ -582,35 +583,35 @@ appusage_as_date <- function(x, tz = "Asia/Shanghai") {
     return(appusage_date_from_ms(x, tz = tz))
   }
   x_chr <- as.character(x)
-  suppressWarnings(as.Date(substr(x_chr, 1L, 10L)))
+  suppressWarnings(as.Date(appusage_text_substr(x_chr, 1L, 10L)))
 }
 
-appusage_observed_dates <- function(grains) {
+appusage_observed_dates <- function(grains, context = NULL) {
   dates <- as.Date(character())
 
   daily <- grains$daily
   if (is.data.frame(daily) && nrow(daily) > 0L) {
-    dates <- c(dates, appusage_date_col(daily, "date"))
-    dates <- c(dates, appusage_date_col(daily, "table_date"))
+    dates <- c(dates, appusage_qc_date(daily, "date", context, "daily"))
+    dates <- c(dates, appusage_qc_date(daily, "table_date", context, "daily"))
   }
 
   episode <- grains$episode
   if (is.data.frame(episode) && nrow(episode) > 0L) {
-    dates <- c(dates, appusage_date_col(episode, "date"))
-    dates <- c(dates, appusage_date_col(episode, "start_date"))
+    dates <- c(dates, appusage_qc_date(episode, "date", context, "episode"))
+    dates <- c(dates, appusage_qc_date(episode, "start_date", context, "episode"))
     if (appusage_has_col(episode, "start_ts_ms")) {
-      dates <- c(dates, appusage_date_from_ms(appusage_num_col(episode, "start_ts_ms")))
+      dates <- c(dates, appusage_qc_date(episode, "start_ts_ms", context, "episode", ms = TRUE))
     }
     if (appusage_has_col(episode, "end_ts_ms")) {
-      dates <- c(dates, appusage_date_from_ms(appusage_num_col(episode, "end_ts_ms")))
+      dates <- c(dates, appusage_qc_date(episode, "end_ts_ms", context, "episode", ms = TRUE))
     }
   }
 
   event <- grains$event
   if (is.data.frame(event) && nrow(event) > 0L) {
-    dates <- c(dates, appusage_date_col(event, "date"))
+    dates <- c(dates, appusage_qc_date(event, "date", context, "event"))
     if (appusage_has_col(event, "event_ts_ms")) {
-      dates <- c(dates, appusage_date_from_ms(appusage_num_col(event, "event_ts_ms")))
+      dates <- c(dates, appusage_qc_date(event, "event_ts_ms", context, "event", ms = TRUE))
     }
   }
 
@@ -655,8 +656,8 @@ appusage_parse_export_date <- function(x, tz = "Asia/Shanghai") {
     return(appusage_date_from_ms(x, tz = tz))
   }
   x_chr <- as.character(x)
-  if (!nzchar(trimws(x_chr))) {
+  if (!appusage_text_nzchar(appusage_text_trim(x_chr))) {
     return(as.Date(NA))
   }
-  suppressWarnings(as.Date(substr(x_chr, 1L, 10L)))
+  suppressWarnings(as.Date(appusage_text_substr(x_chr, 1L, 10L)))
 }

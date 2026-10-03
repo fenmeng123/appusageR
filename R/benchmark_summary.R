@@ -208,7 +208,7 @@ appusage_benchmark_character_column <- function(df, col, default) {
 
 appusage_benchmark_clean_character <- function(x, default) {
   out <- as.character(x)
-  out[is.na(out) | !nzchar(out)] <- default
+  out[is.na(out) | !appusage_text_nzchar(out)] <- default
   out
 }
 

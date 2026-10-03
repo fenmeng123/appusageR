@@ -120,7 +120,7 @@ plan_appusage_project_rebuild <- function(
   proc2_duplicate_identity <- proc2_identity_count > 1L
   proc2_extra_row_count <- sum(is.na(bridge$source_index_by_summary))
   audit_match <- appusage_plan_match_failure_audit(source_order, audit)
-  valid_key <- !is.na(source_keys) & nzchar(source_keys)
+  valid_key <- !is.na(source_keys) & appusage_text_nzchar(source_keys)
   duplicate_key <- valid_key & (
     duplicated(source_keys) | duplicated(source_keys, fromLast = TRUE)
   )
@@ -214,7 +214,7 @@ plan_appusage_project_rebuild <- function(
           proc2_extra_row_count > 0L
       ) "invalid" else "valid",
       proc2_cardinality_reason_codes = if (length(cardinality_reasons))
-        paste(cardinality_reasons, collapse = ";") else "current",
+        appusage_text_paste(cardinality_reasons, collapse = ";") else "current",
       failure_attribution_source = failure_evidence$attribution_source,
       failure_attribution = failure_evidence$attribution,
       failure_family_evidence = failure_evidence$family,
@@ -260,8 +260,8 @@ appusage_plan_project_id <- function(project_dir) {
   )
   value <- as.character(parsed$project_id %||% NA_character_)
   if (is_present_string(value)) return(value)
-  match <- regexec("ProjectID-([^_]+)", basename(project_dir), perl = TRUE)
-  groups <- regmatches(basename(project_dir), match)[[1L]]
+  match <- appusage_text_regexec("ProjectID-([^_]+)", basename(project_dir), perl = TRUE)
+  groups <- appusage_text_regmatches(basename(project_dir), match)[[1L]]
   if (length(groups) >= 2L) groups[[2L]] else NA_character_
 }
 
@@ -284,9 +284,9 @@ appusage_plan_read_failure_audit <- function(failure_audit, project_id) {
   )
   missing <- setdiff(required, names(audit))
   if (length(missing)) {
-    cli::cli_abort(paste0(
+    cli::cli_abort(appusage_text_paste0(
       "`failure_audit` is missing required column(s): ",
-      paste(missing, collapse = ", ")
+      appusage_text_paste(missing, collapse = ", ")
     ))
   }
   if (!is_present_string(project_id)) {
@@ -304,7 +304,7 @@ appusage_plan_vector <- function(x, candidates, default = NA_character_) {
   for (candidate in candidates) {
     if (!candidate %in% names(x)) next
     value <- as.character(x[[candidate]])
-    use <- (is.na(out) | !nzchar(out)) & !is.na(value) & nzchar(value)
+    use <- (is.na(out) | !appusage_text_nzchar(out)) & !is.na(value) & appusage_text_nzchar(value)
     out[use] <- value[use]
   }
   out
@@ -313,21 +313,21 @@ appusage_plan_vector <- function(x, candidates, default = NA_character_) {
 appusage_plan_normalize_path <- function(x) {
   x <- as.character(x)
   out <- rep(NA_character_, length(x))
-  valid <- !is.na(x) & nzchar(trimws(x))
-  out[valid] <- tolower(normalizePath(
-    trimws(x[valid]), winslash = "/", mustWork = FALSE
+  valid <- !is.na(x) & appusage_text_nzchar(appusage_text_trim(x))
+  out[valid] <- appusage_text_lower(normalizePath(
+    appusage_text_trim(x[valid]), winslash = "/", mustWork = FALSE
   ))
   out
 }
 
 appusage_plan_participant_type_identity <- function(x) {
   participant <- appusage_plan_vector(x, c("participant_id", "sub"))
-  type <- tolower(appusage_plan_vector(
+  type <- appusage_text_lower(appusage_plan_vector(
     x, c("detected_type", "native_export_type", "filename_export_type", "type")
   ))
-  valid <- !is.na(participant) & nzchar(participant) & !is.na(type) & nzchar(type)
+  valid <- !is.na(participant) & appusage_text_nzchar(participant) & !is.na(type) & appusage_text_nzchar(type)
   out <- rep(NA_character_, nrow(x))
-  out[valid] <- paste(participant[valid], type[valid], sep = "|")
+  out[valid] <- appusage_text_paste(participant[valid], type[valid], sep = "|")
   out
 }
 
@@ -336,9 +336,9 @@ appusage_plan_participant_type_timestamp_identity <- function(x) {
   timestamp <- appusage_plan_vector(
     x, c("native_export_created_at", "native_export_timestamp")
   )
-  valid <- !is.na(base) & !is.na(timestamp) & nzchar(timestamp)
+  valid <- !is.na(base) & !is.na(timestamp) & appusage_text_nzchar(timestamp)
   out <- rep(NA_character_, nrow(x))
-  out[valid] <- paste(base[valid], timestamp[valid], sep = "|")
+  out[valid] <- appusage_text_paste(base[valid], timestamp[valid], sep = "|")
   out
 }
 
@@ -351,8 +351,8 @@ appusage_plan_cross_schema_mapping <- function(source_order, second) {
   assign_candidates <- function(left, right, label, require_right_unique = FALSE) {
     left <- as.character(left)
     right <- as.character(right)
-    left_valid <- !is.na(left) & nzchar(left)
-    right_valid <- !is.na(right) & nzchar(right)
+    left_valid <- !is.na(left) & appusage_text_nzchar(left)
+    right_valid <- !is.na(right) & appusage_text_nzchar(right)
     left_count <- table(left[left_valid])
     right_count <- table(right[right_valid])
     for (j in which(is.na(source_index) & right_valid)) {
@@ -365,7 +365,7 @@ appusage_plan_cross_schema_mapping <- function(source_order, second) {
       } else if (length(candidate) > 1L ||
         (require_right_unique && !is.null(right_count[[value]]) &&
           right_count[[value]] > 1L)) {
-        ambiguity[[j]] <<- paste0("ambiguous_", label)
+        ambiguity[[j]] <<- appusage_text_paste0("ambiguous_", label)
       }
     }
   }
@@ -437,11 +437,11 @@ appusage_plan_cross_schema_mapping <- function(source_order, second) {
   }, integer(1))
   rule_by_source <- vapply(seq_len(n_source), function(i) {
     values <- unique(stats::na.omit(rule[source_index == i]))
-    if (length(values)) paste(values, collapse = ";") else NA_character_
+    if (length(values)) appusage_text_paste(values, collapse = ";") else NA_character_
   }, character(1))
   ambiguity_by_source <- vapply(seq_len(n_source), function(i) {
     values <- unique(stats::na.omit(ambiguity[source_index == i]))
-    if (length(values)) paste(values, collapse = ";") else NA_character_
+    if (length(values)) appusage_text_paste(values, collapse = ";") else NA_character_
   }, character(1))
   list(
     source_index_by_summary = source_index,
@@ -513,10 +513,10 @@ appusage_plan_match_failure_audit <- function(source_order, audit) {
       }
     } else if (length(candidates) > 1L) {
       out$status[[i]] <- "audit_ambiguous"
-      out$ambiguity[[i]] <- paste0("candidate_rows:", paste(candidates, collapse = ","))
+      out$ambiguity[[i]] <- appusage_text_paste0("candidate_rows:", appusage_text_paste(candidates, collapse = ","))
     } else if (length(candidates) == 1L && used[candidates[[1L]]]) {
       out$status[[i]] <- "audit_row_reuse_blocked"
-      out$ambiguity[[i]] <- paste0("audit_row_already_assigned:", candidates[[1L]])
+      out$ambiguity[[i]] <- appusage_text_paste0("audit_row_already_assigned:", candidates[[1L]])
     }
   }
   unused_audit <- which(!used & !is.na(audit_path))
@@ -536,7 +536,7 @@ appusage_plan_match_failure_audit <- function(source_order, audit) {
       out$status[[i]] <- "matched_source_file_multiple_audit_rows"
       extra_note <- "multiple_audit_rows_for_resolved_source"
       out$ambiguity[[i]] <- if (is_present_string(out$ambiguity[[i]])) {
-        paste(out$ambiguity[[i]], extra_note, sep = ";")
+        appusage_text_paste(out$ambiguity[[i]], extra_note, sep = ";")
       } else {
         extra_note
       }
@@ -546,7 +546,7 @@ appusage_plan_match_failure_audit <- function(source_order, audit) {
   out$matched_count <- vapply(out$indices, length, integer(1))
   out$row_ids <- vapply(out$indices, function(indices) {
     if (!length(indices)) return(NA_character_)
-    paste(audit$.audit_row_id[indices], collapse = ";")
+    appusage_text_paste(audit$.audit_row_id[indices], collapse = ";")
   }, character(1))
   out
 }
@@ -577,10 +577,10 @@ appusage_plan_failure_evidence <- function(first_row, first_metadata,
                                            audit_row = tibble::tibble(),
                                            audit_match_status = "audit_not_supplied",
                                            audit_ambiguity = NA_character_) {
-  summary_family <- tolower(as.character(appusage_plan_value(
+  summary_family <- appusage_text_lower(as.character(appusage_plan_value(
     first_row, "failure_family", "parser_or_unknown"
   )))
-  summary_attribution <- tolower(as.character(appusage_plan_value(
+  summary_attribution <- appusage_text_lower(as.character(appusage_plan_value(
     first_row, "failure_attribution", NA_character_
   )))
   audit_matched <- is.data.frame(audit_row) && nrow(audit_row) >= 1L
@@ -590,21 +590,21 @@ appusage_plan_failure_evidence <- function(first_row, first_metadata,
     action_values <- unique(stats::na.omit(as.character(audit_row$recommended_action)))
     conflicting <- length(attribution_values) != 1L || length(pattern_values) != 1L
     if (conflicting) {
-      audit_ambiguity <- paste(
+      audit_ambiguity <- appusage_text_paste(
         stats::na.omit(c(audit_ambiguity, "conflicting_audit_evidence")),
         collapse = ";"
       )
     }
     return(list(
-      family = if (length(pattern_values)) tolower(pattern_values[[1L]]) else NA_character_,
+      family = if (length(pattern_values)) appusage_text_lower(pattern_values[[1L]]) else NA_character_,
       attribution = if (length(attribution_values))
-        tolower(attribution_values[[1L]]) else NA_character_,
+        appusage_text_lower(attribution_values[[1L]]) else NA_character_,
       attribution_source = if (conflicting) "failure_audit_ambiguous" else "failure_audit",
       audit_pattern = if (length(pattern_values))
-        paste(pattern_values, collapse = ";") else NA_character_,
+        appusage_text_paste(pattern_values, collapse = ";") else NA_character_,
       recommended_action = if (length(action_values))
-        paste(action_values, collapse = ";") else NA_character_,
-      audit_row_id = paste(audit_row$.audit_row_id, collapse = ";"),
+        appusage_text_paste(action_values, collapse = ";") else NA_character_,
+      audit_row_id = appusage_text_paste(audit_row$.audit_row_id, collapse = ";"),
       audit_match_status = audit_match_status,
       audit_ambiguity = audit_ambiguity
     ))
@@ -613,9 +613,9 @@ appusage_plan_failure_evidence <- function(first_row, first_metadata,
   classified <- appusage_classify_failure_family(
     error_class = metadata_error$class,
     error_message = metadata_error$message,
-    status = tolower(as.character(appusage_plan_value(first_row, "status", "error")))
+    status = appusage_text_lower(as.character(appusage_plan_value(first_row, "status", "error")))
   )
-  cache_exists <- grepl("appusage_cache_exists|cache already exists", paste(
+  cache_exists <- appusage_text_grepl("appusage_cache_exists|cache already exists", appusage_text_paste(
     metadata_error$class, metadata_error$message
   ), ignore.case = TRUE)
   if (isTRUE(cache_exists)) classified <- "cache_exists"
@@ -650,16 +650,16 @@ appusage_plan_identity <- function(x) {
     rep(NA_character_, nrow(x))
   fingerprint <- if ("source_fingerprint" %in% names(x)) as.character(x$source_fingerprint) else
     rep(NA_character_, nrow(x))
-  out <- ifelse(!is.na(key) & nzchar(key), paste0("key:", key), NA_character_)
-  source_ok <- is.na(out) & !is.na(source) & nzchar(source)
-  out[source_ok] <- paste0("source:", tolower(normalizePath(
+  out <- ifelse(!is.na(key) & appusage_text_nzchar(key), appusage_text_paste0("key:", key), NA_character_)
+  source_ok <- is.na(out) & !is.na(source) & appusage_text_nzchar(source)
+  out[source_ok] <- appusage_text_paste0("source:", appusage_text_lower(normalizePath(
     source[source_ok], winslash = "/", mustWork = FALSE
   )))
-  fp_ok <- is.na(out) & !is.na(fingerprint) & nzchar(fingerprint)
-  out[fp_ok] <- paste0("fp:", fingerprint[fp_ok])
+  fp_ok <- is.na(out) & !is.na(fingerprint) & appusage_text_nzchar(fingerprint)
+  out[fp_ok] <- appusage_text_paste0("fp:", fingerprint[fp_ok])
   if ("index" %in% names(x)) {
     idx_ok <- is.na(out) & !is.na(x$index)
-    out[idx_ok] <- paste0("index:", x$index[idx_ok])
+    out[idx_ok] <- appusage_text_paste0("index:", x$index[idx_ok])
   }
   out
 }
@@ -680,7 +680,7 @@ appusage_plan_match_rows <- function(base, summary) {
       left <- appusage_plan_normalize_path(left)
       right <- appusage_plan_normalize_path(right)
     }
-    for (i in which(is.na(out) & !is.na(left) & nzchar(left))) {
+    for (i in which(is.na(out) & !is.na(left) & appusage_text_nzchar(left))) {
       candidates <- which(!used & !is.na(right) & right == left[[i]])
       if (length(candidates) > 1L && !is.na(base_index[[i]])) {
         indexed <- candidates[
@@ -707,7 +707,7 @@ appusage_plan_column_from_match <- function(base, summary, index, column, defaul
   out <- if (column %in% names(base)) base[[column]] else rep(default, nrow(base))
   if (!column %in% names(summary)) return(out)
   matched <- !is.na(index)
-  missing <- if (is.character(out)) is.na(out) | !nzchar(out) else is.na(out)
+  missing <- if (is.character(out)) is.na(out) | !appusage_text_nzchar(out) else is.na(out)
   use <- matched & missing
   out[use] <- summary[[column]][index[use]]
   out
@@ -740,7 +740,7 @@ appusage_plan_metadata <- function(row, column) {
 
 appusage_plan_pair_state <- function(first, index, output_dir) {
   if (!is.data.frame(first) || is.na(index) ||
-    !identical(tolower(as.character(first$status[[index]])), "success")) {
+    !identical(appusage_text_lower(as.character(first$status[[index]])), "success")) {
     return(list(status = "not_applicable", pair_state = "not_applicable",
       reason = "upstream_first_level_not_success", metadata = list()
     ))
@@ -771,19 +771,19 @@ appusage_plan_rebuild_decision <- function(first_row, second_row, pair,
                                             current_provenance,
                                             cardinality = list(),
                                             failure_evidence = list()) {
-  first_status <- tolower(as.character(appusage_plan_value(first_row, "status")))
-  second_status <- tolower(as.character(appusage_plan_value(
+  first_status <- appusage_text_lower(as.character(appusage_plan_value(first_row, "status")))
+  second_status <- appusage_text_lower(as.character(appusage_plan_value(
     second_row, "second_level_status", appusage_plan_value(second_row, "status")
   )))
-  type <- tolower(as.character(appusage_plan_value(first_row, "detected_type")))
-  family <- tolower(as.character(
+  type <- appusage_text_lower(as.character(appusage_plan_value(first_row, "detected_type")))
+  family <- appusage_text_lower(as.character(
     failure_evidence$family %||% appusage_plan_value(first_row, "failure_family")
   ))
-  attribution <- tolower(as.character(
+  attribution <- appusage_text_lower(as.character(
     failure_evidence$attribution %||%
       appusage_plan_value(first_row, "failure_attribution")
   ))
-  audit_pattern <- tolower(as.character(failure_evidence$audit_pattern %||% NA_character_))
+  audit_pattern <- appusage_text_lower(as.character(failure_evidence$audit_pattern %||% NA_character_))
   audit_authoritative <- identical(
     failure_evidence$attribution_source %||% "", "failure_audit"
   )
@@ -838,7 +838,7 @@ appusage_plan_rebuild_decision <- function(first_row, second_row, pair,
   summary_extra <- isTRUE(as.integer(cardinality$extra_count %||% 0L) > 0L)
   first_failure_missing_skip <- !identical(first_status, "success") &&
     !identical(second_status, "skipped")
-  qc_status <- tolower(as.character(appusage_plan_value(second_row, "qc_status")))
+  qc_status <- appusage_text_lower(as.character(appusage_plan_value(second_row, "qc_status")))
   qc_fp <- appusage_compare_provenance(
     second_provenance, current_provenance, "source_qc_config_fingerprint"
   )
@@ -855,7 +855,7 @@ appusage_plan_rebuild_decision <- function(first_row, second_row, pair,
     )
   preferred_changed <- appusage_plan_truth(second_row, "preferred_source_changed")
   matching_present <- nrow(second_row) > 0L && any(vapply(names(second_row), function(name) {
-    grepl("^self_report_", name) && is_present_string(second_row[[name]][[1L]])
+    appusage_text_grepl("^self_report_", name) && is_present_string(second_row[[name]][[1L]])
   }, logical(1)))
   matching_refresh <- matching_present && (path_changed || preferred_changed)
 
@@ -868,7 +868,7 @@ appusage_plan_rebuild_decision <- function(first_row, second_row, pair,
     }
   }
   add(package_retry, if (audit_authoritative)
-    paste0("failure_audit_", audit_pattern) else
+    appusage_text_paste0("failure_audit_", audit_pattern) else
       "package_attributed_first_level_failure", "retry_first_level")
   add(collision, if (audit_collision) "failure_audit_resume_cache_collision" else
     "source_key_cache_collision", "reconcile_cache_identity")
@@ -924,9 +924,9 @@ appusage_plan_rebuild_decision <- function(first_row, second_row, pair,
   }
   list(
     requested_action = primary,
-    requested_actions = if (length(actions)) paste(actions, collapse = ";") else "none",
+    requested_actions = if (length(actions)) appusage_text_paste(actions, collapse = ";") else "none",
     resume_stage = resume_stage,
-    reason_codes = if (length(reasons)) paste(reasons, collapse = ";") else "current",
+    reason_codes = if (length(reasons)) appusage_text_paste(reasons, collapse = ";") else "current",
     action_eligible = length(actions) > 0L,
     matching_refresh_required = matching_refresh,
     execution_helper = helper

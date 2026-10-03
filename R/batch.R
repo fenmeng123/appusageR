@@ -463,14 +463,14 @@ filter_second_level_rerun_candidates <- function(batch_summary, filter = NULL) {
       keep <- keep & appusage_validate_filter_result(value(batch_summary), n)
       next
     }
-    if (grepl("_regex$", nm)) {
-      col <- sub("_regex$", "", nm)
+    if (appusage_text_grepl("_regex$", nm)) {
+      col <- appusage_text_sub("_regex$", "", nm)
       if (!col %in% names(batch_summary)) {
         cli::cli_abort("Regex filter column is missing from `batch_summary`: {.field {col}}.")
       }
       text <- as.character(batch_summary[[col]])
       text[is.na(text)] <- ""
-      keep <- keep & grepl(paste(value, collapse = "|"), text)
+      keep <- keep & appusage_text_grepl(appusage_text_paste(value, collapse = "|"), text)
       next
     }
     if (!nm %in% names(batch_summary)) {
@@ -495,13 +495,13 @@ eligible_second_level_rerun_candidates <- function(batch_summary) {
   data_file <- as.character(batch_summary$data_file)
   data_file[is.na(data_file)] <- ""
   keep <- identical_first_level_success(batch_summary$status) &
-    nzchar(data_file) &
+    appusage_text_nzchar(data_file) &
     file.exists(data_file)
   batch_summary[keep %in% TRUE, , drop = FALSE]
 }
 
 identical_first_level_success <- function(status) {
-  tolower(as.character(status)) == "success"
+  appusage_text_lower(as.character(status)) == "success"
 }
 
 appusage_validate_filter_result <- function(keep, n) {
@@ -534,7 +534,7 @@ merge_subset_second_level_summary <- function(old_summary, new_summary, first_su
 }
 
 restore_previous_matching_fields <- function(summary, old_summary) {
-  matching_cols <- grep("^self_report_", names(old_summary), value = TRUE)
+  matching_cols <- appusage_text_grep("^self_report_", names(old_summary), value = TRUE)
   if (length(matching_cols) == 0 || nrow(summary) == 0 || nrow(old_summary) == 0) {
     return(summary)
   }
@@ -572,7 +572,7 @@ typed_summary_na <- function(template, n) {
 
 appusage_missing_summary_value <- function(x) {
   if (is.character(x)) {
-    return(is.na(x) | !nzchar(x))
+    return(is.na(x) | !appusage_text_nzchar(x))
   }
   is.na(x)
 }
@@ -594,16 +594,16 @@ first_level_summary_key <- function(summary) {
   out <- rep(NA_character_, nrow(summary))
   if ("source_record_key" %in% names(summary)) {
     value <- as.character(summary$source_record_key)
-    value[is.na(value) | !nzchar(value)] <- NA_character_
+    value[is.na(value) | !appusage_text_nzchar(value)] <- NA_character_
     out <- value
   }
   if ("data_file" %in% names(summary)) {
     value <- normalized_summary_path(summary$data_file)
-    fill <- (is.na(out) | !nzchar(out)) & !is.na(value) & nzchar(value)
+    fill <- (is.na(out) | !appusage_text_nzchar(out)) & !is.na(value) & appusage_text_nzchar(value)
     out[fill] <- value[fill]
   }
   fallback <- appusage_identity_summary_key(summary)
-  missing <- is.na(out) | !nzchar(out)
+  missing <- is.na(out) | !appusage_text_nzchar(out)
   out[missing] <- fallback[missing]
   out
 }
@@ -613,25 +613,25 @@ second_level_summary_key <- function(summary) {
   out <- rep(NA_character_, nrow(summary))
   if ("source_record_key" %in% names(summary)) {
     value <- as.character(summary$source_record_key)
-    value[is.na(value) | !nzchar(value)] <- NA_character_
+    value[is.na(value) | !appusage_text_nzchar(value)] <- NA_character_
     out <- value
   }
   for (col in c("first_level_data_file", "first_level_rda", "data_file")) {
     if (col %in% names(summary)) {
       value <- normalized_summary_path(summary[[col]])
-      fill <- (is.na(out) | !nzchar(out)) & !is.na(value) & nzchar(value)
+      fill <- (is.na(out) | !appusage_text_nzchar(out)) & !is.na(value) & appusage_text_nzchar(value)
       out[fill] <- value[fill]
     }
   }
   fallback <- appusage_identity_summary_key(summary)
-  missing <- is.na(out) | !nzchar(out)
+  missing <- is.na(out) | !appusage_text_nzchar(out)
   out[missing] <- fallback[missing]
   out
 }
 
 normalized_summary_path <- function(x) {
   x <- as.character(x)
-  missing <- is.na(x) | !nzchar(x)
+  missing <- is.na(x) | !appusage_text_nzchar(x)
   out <- x
   out[!missing] <- vapply(out[!missing], function(path) {
     normalizePath(path, winslash = "/", mustWork = FALSE)
@@ -651,7 +651,7 @@ appusage_identity_summary_key <- function(summary) {
       rep("", nrow(summary))
     }
   }
-  paste(
+  appusage_text_paste(
     "identity",
     get_col("participant_id"),
     get_col("detected_type"),
@@ -717,7 +717,7 @@ appusage_serializable_filter <- function(filter) {
     return(list(type = "all"))
   }
   if (is.function(filter)) {
-    return(list(type = "function", label = paste(deparse(filter), collapse = "\n")))
+    return(list(type = "function", label = appusage_text_paste(deparse(filter), collapse = "\n")))
   }
   if (is.list(filter)) {
     return(list(type = "list", criteria = appusage_serializable_list(filter)))
@@ -734,13 +734,13 @@ appusage_serializable_list <- function(x) {
   for (i in seq_along(x)) {
     value <- x[[i]]
     out[[i]] <- if (is.function(value)) {
-      list(type = "function", label = paste(deparse(value), collapse = "\n"))
+      list(type = "function", label = appusage_text_paste(deparse(value), collapse = "\n"))
     } else if (is.list(value) && !is.data.frame(value)) {
       appusage_serializable_list(value)
     } else if (is.atomic(value)) {
       as.character(value)
     } else {
-      paste(utils::capture.output(utils::str(value, give.attr = FALSE)), collapse = "\n")
+      appusage_text_paste(utils::capture.output(utils::str(value, give.attr = FALSE)), collapse = "\n")
     }
   }
   out
@@ -869,7 +869,7 @@ second_level_summary_fallback_row <- function(batch_summary, index,
     error_message = if (!is.na(row_index)) appusage_summary_cell(row_summary, "error_message", row_index) else appusage_summary_cell(batch_summary, "error_message", index),
     stringsAsFactors = FALSE
   )
-  for (col in grep("^self_report_", names(batch_summary), value = TRUE)) {
+  for (col in appusage_text_grep("^self_report_", names(batch_summary), value = TRUE)) {
     out[[col]] <- batch_summary[[col]][[index]]
   }
   tibble::as_tibble(out)
@@ -915,7 +915,7 @@ merge_second_level_row_diagnostics <- function(summary, row_summary) {
     }
     for (col in c("worker_task_index", "worker_pid")) {
       if (col %in% names(summary) && col %in% names(error_rows) &&
-        (is.na(summary[[col]][[j]]) || !nzchar(as.character(summary[[col]][[j]]))) &&
+        (is.na(summary[[col]][[j]]) || !appusage_text_nzchar(as.character(summary[[col]][[j]]))) &&
         !is.na(error_rows[[col]][[i]])) {
         summary[[col]][[j]] <- error_rows[[col]][[i]]
       }
@@ -1066,12 +1066,13 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
   result <- tryCatch(
     withCallingHandlers(
       {
-        preflight <- appusage_source_preflight(
+        prepared <- appusage_prepare_source(
           x = x,
           input = input,
           encoding = encoding,
           filename_type = id_info$native_export_type_from_filename[[1]]
         )
+        preflight <- prepared$preflight
         if (!identical(preflight$status, "ok")) {
           detected_type <- if (length(preflight$detected_components) == 1L) {
             preflight$detected_components[[1]]
@@ -1082,7 +1083,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           }
           stop(appusage_source_preflight_error(preflight))
         }
-        parse_x <- preflight$lines
+        parse_x <- prepared$context
         parse_input <- "lines"
         detected_type <- first_level_detect_type(
           x = parse_x,
@@ -1096,7 +1097,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           stop(batch_unsupported_error(detected_type))
         }
         if (isTRUE(preflight$filename_content_disagreement)) {
-          warnings <- c(warnings, paste0(
+          warnings <- c(warnings, appusage_text_paste0(
             "Filename export type '", preflight$filename_type,
             "' disagrees with content-selected component '", detected_type,
             "'; content selection was used."
@@ -1112,25 +1113,25 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
         )
 
         parsed_data <- switch(detected_type,
-          line = parse_line(
+          line = appusage_parse_line_context(
             parse_x,
             input = parse_input, participant_id = participant_id,
             source_file = source_file, tz = tz, encoding = encoding,
             strict = TRUE
           ),
-          meta = parse_meta(
+          meta = appusage_parse_meta_context(
             parse_x,
             input = parse_input, participant_id = participant_id,
             source_file = source_file, tz = tz, encoding = encoding,
             strict = TRUE
           ),
-          day = parse_day(
+          day = appusage_parse_day_context(
             parse_x,
             input = parse_input, participant_id = participant_id,
             source_file = source_file, tz = tz, encoding = encoding,
             strict = TRUE
           ),
-          app = parse_app(
+          app = appusage_parse_app_context(
             parse_x,
             input = parse_input, participant_id = participant_id,
             source_file = source_file, tz = tz, encoding = encoding,
@@ -1198,7 +1199,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
             )
           )
           if ((file.exists(data_file) || file.exists(metadata_file)) && !overwrite) {
-            stop(batch_cache_exists_error(paste(c(data_file, metadata_file), collapse = "; ")))
+            stop(batch_cache_exists_error(appusage_text_paste(c(data_file, metadata_file), collapse = "; ")))
           }
           data <- first_level_data
           save(data, file = data_file)
@@ -1226,7 +1227,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
         n_rows = NA_integer_,
         n_parse_warnings = NA_integer_,
         error = e,
-        traceback = paste(vapply(sys.calls(), deparse_one_call, character(1)), collapse = "\n")
+        traceback = appusage_text_paste(vapply(sys.calls(), deparse_one_call, character(1)), collapse = "\n")
       )
     }
   )
@@ -1338,9 +1339,9 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
     encoding_conversion_failures = preflight_fields$encoding_conversion_failures,
     memory_risk_signal = isTRUE(memory_risk_signal),
     memory_risk_reason = memory_risk_reason,
-    warning_messages = paste(unique(warnings), collapse = "\n"),
+    warning_messages = appusage_text_paste(unique(warnings), collapse = "\n"),
     error_message = if (is.null(error)) NA_character_ else conditionMessage(error),
-    error_class = if (is.null(error)) NA_character_ else paste(class(error), collapse = ","),
+    error_class = if (is.null(error)) NA_character_ else appusage_text_paste(class(error), collapse = ","),
     error_call = if (is.null(error) || is.null(conditionCall(error))) {
       NA_character_
     } else {
@@ -1357,7 +1358,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
 
 batch_unsupported_error <- function(detected_type) {
   structure(
-    list(message = paste0(
+    list(message = appusage_text_paste0(
       "Detected type '", detected_type,
       "' is not supported by batch preprocessing until the corresponding parser is implemented."
     )),
@@ -1367,7 +1368,7 @@ batch_unsupported_error <- function(detected_type) {
 
 batch_cache_exists_error <- function(output_file) {
   structure(
-    list(message = paste0("Output cache already exists: ", output_file)),
+    list(message = appusage_text_paste0("Output cache already exists: ", output_file)),
     class = c("appusage_cache_exists", "error", "condition")
   )
 }
@@ -1387,19 +1388,19 @@ filename_export_type_match <- function(id_info, detected_type) {
 sanitize_cache_name <- function(x, index) {
   x <- as.character(x)
   if (is.na(x) || x == "") {
-    x <- paste0("record_", index)
+    x <- appusage_text_paste0("record_", index)
   }
-  x <- gsub("[^A-Za-z0-9_-]+", "_", x)
-  x <- gsub("_+", "_", x)
-  x <- gsub("^_|_$", "", x)
+  x <- appusage_text_gsub("[^A-Za-z0-9_-]+", "_", x)
+  x <- appusage_text_gsub("_+", "_", x)
+  x <- appusage_text_gsub("^_|_$", "", x)
   if (x == "") {
-    x <- paste0("record_", index)
+    x <- appusage_text_paste0("record_", index)
   }
   x
 }
 
 deparse_one_call <- function(x) {
-  paste(deparse(x, width.cutoff = 500), collapse = "")
+  appusage_text_paste(deparse(x, width.cutoff = 500), collapse = "")
 }
 
 parsed_n_rows <- function(parsed_data) {
@@ -1429,7 +1430,7 @@ as_first_level_data <- function(parsed_data, detected_type) {
 
 first_level_empty_raw_data_error <- function(detected_type, diagnostics = NULL) {
   structure(
-    list(message = paste0(
+    list(message = appusage_text_paste0(
       "APP Usage ", detected_type,
       " export format was recognized, but the parsed raw data are empty."
     ), parser_diagnostics = diagnostics),
@@ -1445,7 +1446,7 @@ first_level_detect_type <- function(x, input, type, encoding, id_info,
     NA_character_
   }
   if (is_present_string(native_type_raw) &&
-    identical(tolower(trimws(native_type_raw)), "unlock")) {
+    identical(appusage_text_lower(appusage_text_trim(native_type_raw)), "unlock")) {
     return("unknown")
   }
   if (!is.null(preflight) && is_present_string(preflight$selected_component)) {
@@ -1645,13 +1646,13 @@ data_counts <- function(data, warnings) {
   for (nm in names(data)) {
     value <- data[[nm]]
     if (is.data.frame(value)) {
-      counts[[paste0("n_", nm, "_rows")]] <- nrow(value)
+      counts[[appusage_text_paste0("n_", nm, "_rows")]] <- nrow(value)
       if ("parse_warning" %in% names(value)) {
         counts$n_parse_warnings <- counts$n_parse_warnings + sum(!is.na(value$parse_warning))
       }
     }
   }
-  counts$n_rows <- sum(unlist(counts[grepl("^n_.*_rows$", names(counts))]), na.rm = TRUE)
+  counts$n_rows <- sum(unlist(counts[appusage_text_grepl("^n_.*_rows$", names(counts))]), na.rm = TRUE)
   counts$n_warning_messages <- length(unique(warnings))
   counts
 }
@@ -1666,7 +1667,7 @@ error_metadata <- function(error) {
   }
   list(list(
     message = conditionMessage(error),
-    class = paste(class(error), collapse = ","),
+    class = appusage_text_paste(class(error), collapse = ","),
     call = if (is.null(conditionCall(error))) NA_character_ else deparse_one_call(conditionCall(error))
   ))
 }
@@ -1703,12 +1704,12 @@ appusage_is_cluster_transport_error <- function(error) {
   ))) {
     return(TRUE)
   }
-  message <- tolower(conditionMessage(error))
+  message <- appusage_text_lower(conditionMessage(error))
   condition_call <- conditionCall(error)
   call_text <- if (is.null(condition_call)) {
     ""
   } else {
-    tolower(paste(deparse(condition_call), collapse = " "))
+    appusage_text_lower(appusage_text_paste(deparse(condition_call), collapse = " "))
   }
   patterns <- c(
     "error (reading|writing) from connection",
@@ -1728,15 +1729,15 @@ appusage_is_cluster_transport_error <- function(error) {
     "cannot open.*socket connection",
     "socketconnection"
   )
-  if (any(vapply(patterns, grepl, logical(1), x = message, perl = TRUE))) {
+  if (any(vapply(patterns, appusage_text_grepl, logical(1), x = message, perl = TRUE))) {
     return(TRUE)
   }
-  psock_call <- grepl(
+  psock_call <- appusage_text_grepl(
     "socketconnection|makepsockcluster|newpsocknode|makecluster",
     call_text,
     perl = TRUE
   )
-  psock_call && grepl("cannot open.*connection", message, perl = TRUE)
+  psock_call && appusage_text_grepl("cannot open.*connection", message, perl = TRUE)
 }
 
 appusage_second_level_retry_worker_counts <- function(worker_count) {
@@ -1839,7 +1840,7 @@ appusage_write_second_level_cluster_diagnostic <- function(
   diagnostics_dir <- file.path(project_path, "diagnostics")
   dir.create(diagnostics_dir, recursive = TRUE, showWarnings = FALSE)
   diagnostic_file <- tempfile(
-    pattern = paste0(
+    pattern = appusage_text_paste0(
       "second_level_cluster_failure_",
       format(Sys.time(), "%Y%m%dT%H%M%S"),
       "_"
@@ -1852,14 +1853,14 @@ appusage_write_second_level_cluster_diagnostic <- function(
     stage = "second-level",
     failure_scope = "cluster",
     timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%OS3 %z"),
-    condition_class = paste(class(error), collapse = ","),
+    condition_class = appusage_text_paste(class(error), collapse = ","),
     condition_message = conditionMessage(error),
     condition_call = if (is.null(condition_call)) {
       NA_character_
     } else {
       deparse_one_call(condition_call)
     },
-    initial_condition_class = paste(class(initial_error), collapse = ","),
+    initial_condition_class = appusage_text_paste(class(initial_error), collapse = ","),
     initial_condition_message = conditionMessage(initial_error),
     initial_condition_call = if (is.null(conditionCall(initial_error))) {
       NA_character_
@@ -2196,13 +2197,13 @@ appusage_second_level_checkpoint_version_path <- function(base_path, run_id,
 
 appusage_second_level_checkpoint_run_id <- function() {
   nonce <- basename(tempfile(pattern = "nonce-"))
-  run_id <- paste(
+  run_id <- appusage_text_paste(
     format(Sys.time(), "%Y%m%dT%H%M%OS6"),
     Sys.getpid(),
     nonce,
     sep = "-"
   )
-  gsub("[^A-Za-z0-9._-]", "-", run_id)
+  appusage_text_gsub("[^A-Za-z0-9._-]", "-", run_id)
 }
 
 appusage_validate_second_level_checkpoint <- function(
@@ -2240,7 +2241,7 @@ appusage_write_second_level_checkpoint <- function(
     stop("Second-level checkpoint version already exists: ", final_path)
   }
   temporary_path <- tempfile(
-    pattern = paste0(".", basename(base_path), "."),
+    pattern = appusage_text_paste0(".", basename(base_path), "."),
     tmpdir = dirname(base_path),
     fileext = ".tmp"
   )
@@ -2285,8 +2286,8 @@ appusage_second_level_checkpoint_files <- function(base_path) {
   stem <- tools::file_path_sans_ext(basename(base_path))
   candidates <- list.files(dirname(base_path), full.names = TRUE)
   candidates[
-    startsWith(basename(candidates), paste0(stem, ".run-")) &
-      endsWith(basename(candidates), ".csv")
+    appusage_text_starts(basename(candidates), appusage_text_paste0(stem, ".run-")) &
+      appusage_text_ends(basename(candidates), ".csv")
   ]
 }
 
@@ -2424,7 +2425,7 @@ appusage_emit_parallel_progress <- function(progress, stage, row, index, total) 
     pieces <- c(pieces, sprintf("error=%s", error_message))
   }
 
-  message(paste(pieces, collapse = " | "))
+  message(appusage_text_paste(pieces, collapse = " | "))
   invisible(NULL)
 }
 
@@ -2699,7 +2700,7 @@ second_level_processing_score <- function(batch_summary) {
   } else {
     rep(NA_character_, n)
   }
-  existing <- !is.na(data_file) & nzchar(data_file) & file.exists(data_file)
+  existing <- !is.na(data_file) & appusage_text_nzchar(data_file) & file.exists(data_file)
   file_size <- second_level_file_size_signal(batch_summary, data_file, existing)
   source_size <- second_level_numeric_first(
     batch_summary,
@@ -2795,14 +2796,14 @@ second_level_numeric_first <- function(batch_summary, columns, default = 0) {
 
 appusage_package_root_for_workers <- function(start = getwd()) {
   option_root <- getOption("appusageR.package_root", NULL)
-  if (length(option_root) == 1 && !is.na(option_root) && nzchar(option_root)) {
+  if (length(option_root) == 1 && !is.na(option_root) && appusage_text_nzchar(option_root)) {
     option_root <- normalizePath(option_root, winslash = "/", mustWork = FALSE)
     if (appusage_is_package_root(option_root)) {
       return(option_root)
     }
   }
   loaded_root <- tryCatch(system.file(package = "appusageR"), error = function(e) "")
-  if (length(loaded_root) == 1 && nzchar(loaded_root)) {
+  if (length(loaded_root) == 1 && appusage_text_nzchar(loaded_root)) {
     loaded_root <- normalizePath(loaded_root, winslash = "/", mustWork = FALSE)
     if (appusage_is_package_root(loaded_root)) {
       return(loaded_root)
@@ -2827,7 +2828,7 @@ appusage_is_package_root <- function(path) {
     return(FALSE)
   }
   lines <- readLines(desc, warn = FALSE)
-  any(grepl("^Package:\\s*appusageR\\s*$", lines))
+  any(appusage_text_grepl("^Package:\\s*appusageR\\s*$", lines))
 }
 
 process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
@@ -3110,7 +3111,7 @@ prepare_batch_output_project <- function(output_dir, project_name, project_id,
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   project_name <- project_name %||% next_study_project_name(output_dir)
   project_id <- project_id %||% generate_project_id()
-  folder_name <- paste0(sanitize_entity_value(project_name), "_", sanitize_entity_value(project_id))
+  folder_name <- appusage_text_paste0(sanitize_entity_value(project_name), "_", sanitize_entity_value(project_id))
   project_root <- file.path(output_dir, folder_name)
 
   if (dir.exists(project_root) && !isTRUE(overwrite) && !isTRUE(resume)) {
@@ -3137,8 +3138,8 @@ next_study_project_name <- function(output_dir) {
   existing <- list.dirs(output_dir, full.names = FALSE, recursive = FALSE)
   i <- 1L
   repeat {
-    candidate <- paste0("Study", i)
-    if (!any(grepl(paste0("^", candidate, "(?:_|$)"), existing))) {
+    candidate <- appusage_text_paste0("Study", i)
+    if (!any(appusage_text_grepl(appusage_text_paste0("^", candidate, "(?:_|$)"), existing))) {
       return(candidate)
     }
     i <- i + 1L
@@ -3146,7 +3147,7 @@ next_study_project_name <- function(output_dir) {
 }
 
 generate_project_id <- function() {
-  paste0(sample(c(0:9, letters[1:6]), size = 4, replace = TRUE), collapse = "")
+  appusage_text_paste0(sample(c(0:9, letters[1:6]), size = 4, replace = TRUE), collapse = "")
 }
 
 write_dataset_description_json <- function(project, summary, proclevel,
@@ -3217,7 +3218,7 @@ summarize_metadata_status <- function(summary, column) {
     return(list(status = "not_run", n_success = NA_integer_, n_error = NA_integer_))
   }
   values <- as.character(summary[[column]])
-  values <- values[!is.na(values) & nzchar(values)]
+  values <- values[!is.na(values) & appusage_text_nzchar(values)]
   if (length(values) == 0) {
     return(list(status = "not_run", n_success = 0L, n_error = 0L))
   }
@@ -3230,7 +3231,7 @@ summarize_metadata_status <- function(summary, column) {
     } else if (all(values == "not_run")) {
       "not_run"
     } else {
-      paste(names(table_values), table_values, sep = ":", collapse = "; ")
+      appusage_text_paste(names(table_values), table_values, sep = ":", collapse = "; ")
     },
     n_success = sum(values == "success"),
     n_error = sum(values == "error"),
@@ -3253,7 +3254,7 @@ existing_processing_directories <- function(project_root) {
   existing <- candidates[dir.exists(file.path(project_root, candidates))]
   out <- list()
   for (nm in existing) {
-    key <- gsub("-", "_", nm, fixed = TRUE)
+    key <- appusage_text_gsub("-", "_", nm, fixed = TRUE)
     out[[key]] <- normalizePath(file.path(project_root, nm), winslash = "/", mustWork = FALSE)
   }
   out
@@ -3266,7 +3267,7 @@ build_appusage_file_profile <- function(summary, existing = NULL) {
   }
   recognized <- summary$detected_type %in% c("meta", "line", "app", "day")
   types <- summary$detected_type[recognized]
-  dates <- as.Date(substr(summary$native_export_created_at[recognized], 1, 10))
+  dates <- as.Date(appusage_text_substr(summary$native_export_created_at[recognized], 1, 10))
   dates <- dates[!is.na(dates)]
   list(
     n_recognized_appusage_files = sum(recognized, na.rm = TRUE),
@@ -3382,7 +3383,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       second_level_data_file = cache$rda_file,
       second_level_metadata_file = cache$json_file,
       error_class = "appusage_source_cache_collision",
-      error_message = paste("Second-level cache ownership validation failed:", cache$reason),
+      error_message = appusage_text_paste("Second-level cache ownership validation failed:", cache$reason),
       started_at = format(started_at, "%Y-%m-%d %H:%M:%OS3 %z"),
       finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),
       elapsed_sec = as.numeric(difftime(finished_at, started_at, units = "secs")),
@@ -3437,7 +3438,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
     first_level_data_file = first_file,
     second_level_data_file = result$output,
     second_level_metadata_file = metadata_file,
-    error_class = if (is.null(result$error)) NA_character_ else paste(class(result$error), collapse = ","),
+    error_class = if (is.null(result$error)) NA_character_ else appusage_text_paste(class(result$error), collapse = ","),
     error_message = if (is.null(result$error)) NA_character_ else conditionMessage(result$error),
     started_at = format(started_at, "%Y-%m-%d %H:%M:%OS3 %z"),
     finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),
@@ -3661,7 +3662,7 @@ infer_project_root_from_summary <- function(batch_summary) {
 }
 
 project_info_from_root <- function(project_root) {
-  parts <- strsplit(basename(project_root), "_", fixed = TRUE)[[1]]
+  parts <- appusage_text_split(basename(project_root), "_", fixed = TRUE)[[1]]
   list(
     project_root = normalizePath(project_root, winslash = "/", mustWork = FALSE),
     proclevel_1 = normalizePath(file.path(project_root, "proclevel-1"), winslash = "/", mustWork = FALSE),

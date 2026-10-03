@@ -16,6 +16,8 @@ dev_samples/
 workflow_test/
 all_text_data/
 .githooks/
+__pycache__/
+*.py[cod]
 
 # Local app category dictionary sources are intentionally excluded from Git.
 # A future release may add a CRAN-style package data object under data/ or
