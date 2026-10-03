@@ -29,6 +29,24 @@ appusage_object_fingerprint <- function(x) {
 
 appusage_function_fingerprint <- function(function_names) {
   namespace <- asNamespace("appusageR")
+  # Include private helpers reachable from the entry functions, so an internal
+  # scientific fix cannot leave a stage incorrectly reusable. Base/imported
+  # functions are covered by recorded dependency versions, not package bodies.
+  pending <- unique(function_names)
+  expanded <- character()
+  while (length(pending)) {
+    name <- pending[[1L]]
+    pending <- pending[-1L]
+    if (name %in% expanded) next
+    expanded <- c(expanded, name)
+    fun <- get0(name, envir = namespace, inherits = FALSE)
+    if (!is.function(fun)) next
+    symbols <- all.names(body(fun), functions = TRUE, unique = TRUE)
+    local <- symbols[vapply(symbols, function(symbol)
+      is.function(get0(symbol, envir = namespace, inherits = FALSE)), logical(1))]
+    pending <- unique(c(pending, setdiff(local, expanded)))
+  }
+  function_names <- expanded
   text <- unlist(lapply(sort(unique(function_names)), function(name) {
     fun <- get0(name, envir = namespace, inherits = FALSE)
     if (!is.function(fun)) return(c(name, "<unavailable>"))
@@ -45,7 +63,7 @@ appusage_parser_implementation_fingerprint <- function() {
   appusage_function_fingerprint(c(appusage_text_implementation_functions(),
     "appusage_source_preflight", "first_level_detect_type", "normalize_first_level_input",
     "appusage_component_boundary_diagnostics", "header_position",
-    "parse_line", "parse_meta", "parse_day", "parse_app",
+    "parse_line", "parse_meta", "parse_day", "parse_app", "parse_first_level_by_type",
     "parse_line_block", "line_structural_quality", "appusage_parse_context",
     "appusage_context_row_text", "appusage_context_column", "appusage_context_hits",
     "appusage_context_records", "appusage_prepare_source", "appusage_structural_boundaries",
@@ -61,7 +79,8 @@ appusage_parser_implementation_fingerprint <- function() {
 
 appusage_second_level_implementation_fingerprint <- function() {
   appusage_function_fingerprint(c(appusage_text_implementation_functions(),
-    "make_second_level_appusage", "daily_from_episodes",
+    "make_second_level_appusage", "standardize_appusage", "build_appusage_daily",
+    "appusage_frame_timezone", "coerce_episode_column", "daily_from_episodes",
     "reconstruct_meta_episodes", "clip_overlapping_meta_timeline",
     "aggregate_meta_episodes_daily", "appusage_interval_segments",
     "appusage_validate_second_level_daily", "appusage_order_daily",
@@ -161,6 +180,8 @@ appusage_build_run_provenance <- function(
     git_build_marker = git$git_build_marker,
     parser_implementation_fingerprint = appusage_parser_implementation_fingerprint(),
     second_level_implementation_fingerprint = appusage_second_level_implementation_fingerprint(),
+    research_implementation_fingerprint = appusage_research_implementation_fingerprint(),
+    qc_implementation_fingerprint = appusage_qc_implementation_fingerprint(),
     source_qc_config_fingerprint = appusage_object_fingerprint(source_qc),
     source_qc_rule_version = source_qc$rule_version,
     created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3%z")

@@ -29,7 +29,9 @@ read_appusage_batch(
   worker_cap_override = FALSE,
   retry_memory_allocation = TRUE,
   memory_retry_workers = 1,
-  provenance = NULL
+  provenance = NULL,
+  project_dir = NULL,
+  parser_strict = TRUE
 )
 }
 \arguments{
@@ -92,6 +94,12 @@ with a reduced worker count.}
 
 \item{provenance}{Optional implementation provenance supplied by a project
 workflow. Standalone calls compute one provenance record for the batch.}
+
+\item{project_dir}{Optional exact output project directory. When supplied,
+it takes precedence over generated project-folder naming.}
+
+\item{parser_strict}{Whether malformed parser records raise a parser error;
+separate from the batch's stop-on-error \code{strict} policy.}
 }
 \value{
 Invisibly returns a tibble summary. It does not return parsed data.

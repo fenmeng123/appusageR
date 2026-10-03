@@ -2,6 +2,7 @@
 ^\.Rproj\.user$
 ^docs$
 ^tools/performance$
+^tools/architecture$
 ^old_r_codes$
 (^|[\\/])old_r_codes($|[\\/])
 ^dev_samples$

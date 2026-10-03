@@ -52,77 +52,27 @@ make_second_level_appusage <- function(data, export_type = NULL,
   if (!identical(meta_daily_source, "summary") && !isTRUE(reconstruct_meta)) {
     cli::cli_abort("`meta_daily_source = {.val {meta_daily_source}}` requires `reconstruct_meta = TRUE`.")
   }
-  first <- normalize_first_level_appusage(data, export_type = export_type)
-
-  event <- empty_second_event_tibble()
-  episode <- empty_second_episode_tibble()
-  daily <- empty_second_daily_tibble()
+  standardized <- standardize_appusage(data, export_type, tz,
+    max_episode_ms = max_episode_ms, max_daily_app_ms = max_daily_app_ms)
+  event <- standardized$event
+  episode <- standardized$episode
   meta_episode <- empty_second_episode_tibble()
-  meta_summary_daily <- empty_second_daily_tibble()
-  meta_episode_daily <- empty_second_daily_tibble()
-  line_segmentation_diagnostics <- NULL
-  line_daily_expected <- NULL
-  meta_daily_expected <- NULL
-
-  if (!is.null(first$meta_events)) {
-    event <- second_level_events(first$meta_events, tz = tz)
-  }
-  if (!is.null(first$line)) {
-    episode <- second_level_episodes(first$line, max_episode_ms = max_episode_ms, tz = tz)
-    daily <- daily_from_episodes(episode, max_daily_app_ms = max_daily_app_ms, tz = tz)
-    line_segmentation_diagnostics <- attr(
-      daily, "line_interval_segmentation_diagnostics", exact = TRUE
-    )
-    line_daily_expected <- attr(
-      daily, "daily_aggregation_expected", exact = TRUE
-    )
-  }
-  if (isTRUE(reconstruct_meta) && !is.null(first$meta_events)) {
+  if (isTRUE(reconstruct_meta) && !is.null(standardized$meta_events)) {
     meta_episode <- reconstruct_meta_episodes(
-      first$meta_events,
-      pairing = meta_pairing,
-      start_event_types = meta_start_event_types,
-      end_event_types = meta_end_event_types,
-      max_episode_ms = max_episode_ms,
-      merge_contiguous = merge_meta_episodes,
-      merge_gap_ms = meta_episode_merge_gap_ms,
-      tz = tz
-    )
+      standardized$meta_events, pairing = meta_pairing,
+      start_event_types = meta_start_event_types, end_event_types = meta_end_event_types,
+      max_episode_ms = max_episode_ms, merge_contiguous = merge_meta_episodes,
+      merge_gap_ms = meta_episode_merge_gap_ms, tz = tz)
     episode <- conform_second_episode(rbind(episode, meta_episode))
   }
-  if (!is.null(first$day)) {
-    daily <- second_level_daily(first$day, max_daily_app_ms = max_daily_app_ms)
-  }
-  if (!is.null(first$app)) {
-    daily <- second_level_daily(first$app, max_daily_app_ms = max_daily_app_ms)
-  }
-  if (!is.null(first$meta_summary)) {
-    meta_summary_daily <- second_level_meta_summary(
-      first$meta_summary,
-      max_daily_app_ms = max_daily_app_ms,
-      tz = tz
-    )
-  }
-  if (isTRUE(reconstruct_meta) && !is.null(first$meta_events)) {
-    meta_episode_daily <- aggregate_meta_episodes_daily(
-      meta_episode,
-      summary_daily = meta_summary_daily,
-      max_daily_app_ms = max_daily_app_ms,
-      tz = tz
-    )
-    meta_daily_expected <- attr(
-      meta_episode_daily, "daily_aggregation_expected", exact = TRUE
-    )
-  }
-  if (!is.null(first$meta_summary) || (isTRUE(reconstruct_meta) && !is.null(first$meta_events))) {
-    meta_summary_daily <- compare_meta_daily_sources(meta_summary_daily, meta_episode_daily)
-    meta_episode_daily <- compare_meta_daily_sources(meta_episode_daily, meta_summary_daily)
-    daily <- switch(meta_daily_source,
-      summary = meta_summary_daily,
-      episodes = meta_episode_daily,
-      both = conform_second_daily(rbind(meta_summary_daily, meta_episode_daily))
-    )
-  }
+  aggregation <- build_appusage_daily(standardized,
+    meta_episodes = if (isTRUE(reconstruct_meta) && !is.null(standardized$meta_events)) meta_episode else NULL,
+    meta_daily_source = meta_daily_source, max_daily_app_ms = max_daily_app_ms, tz = tz)
+  daily <- aggregation$daily
+  meta_episode_daily <- aggregation$meta_episode_daily
+  line_segmentation_diagnostics <- aggregation$line_segmentation
+  line_daily_expected <- aggregation$line_expected
+  meta_daily_expected <- aggregation$meta_expected
 
   if (!isTRUE(include_collection_app)) {
     event <- filter_collection_app(event)
@@ -141,8 +91,8 @@ make_second_level_appusage <- function(data, export_type = NULL,
   }
 
   out <- list(
-    event = event,
-    episode = episode,
+    event = appusage_frame_timezone(event, tz),
+    episode = appusage_frame_timezone(episode, tz),
     daily = appusage_order_daily(daily)
   )
   attr(out, "meta_reconstruction_diagnostics") <-
@@ -157,6 +107,9 @@ make_second_level_appusage <- function(data, export_type = NULL,
     line_episodes = line_daily_expected,
     meta_episodes = meta_daily_expected
   )
+  self_check <- appusage_validate_second_level_daily(out, tz = tz)
+  attr(out, "daily_aggregation_self_check") <- self_check
+  appusage_stop_on_daily_self_check(self_check)
   out
 }
 
@@ -309,6 +262,8 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     meta_daily_source = meta_daily_source,
     tz = tz
   )
+  # Revalidate at the persistence boundary: callers/extensions may have changed
+  # data after its computational validation. Never trust a stale attribute.
   daily_self_check <- appusage_validate_second_level_daily(second, tz = tz)
   attr(second, "daily_aggregation_self_check") <- daily_self_check
   appusage_stop_on_daily_self_check(daily_self_check)
@@ -440,6 +395,16 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     started_at = started_at,
     finished_at = finished_at
   )
+  effective_options <- appusage_second_effective_options(mget(
+    setdiff(names(formals(write_second_level_appusage)),
+      c("first_level_rda", "output_dir", "overwrite", "provenance")),
+    envir = environment(), inherits = FALSE))
+  metadata$module_state$research_data <- appusage_research_contract(effective_options, provenance)
+  metadata$module_state$artifact <- appusage_artifact_signature(transaction$temp_rda)
+  metadata$module_state$upstream_parse <- first_metadata$module_state$parse
+  if (isTRUE(inline_qc) && identical(inline_qc_result$qc_status, "success")) {
+    metadata$module_state$qc <- appusage_qc_contract(effective_options, provenance)
+  }
   write_metadata_json(metadata, transaction$temp_json)
   appusage_validate_second_level_success_metadata(
     transaction$temp_json,
@@ -2994,6 +2959,7 @@ coerce_episode_column <- function(x, template, name) {
     return(appusage_date_from_datetime(x, tz = appusage_default_timezone()))
   }
   if (inherits(template, "POSIXt")) {
+    if (inherits(x, "POSIXt")) return(as.POSIXct(x))
     if (is.numeric(x)) {
       return(as.POSIXct(x, origin = "1970-01-01", tz = appusage_default_timezone()))
     }

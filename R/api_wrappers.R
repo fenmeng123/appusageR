@@ -62,6 +62,8 @@ read_appusage_text <- function(x, input = c("file", "text", "lines"),
 #' @param output_dir Optional directory for first-level cache files.
 #' @param write_cache Whether to write first-level cache files.
 #' @param overwrite Whether existing cache files may be overwritten.
+#' @param parser_strict Parser tolerance, separate from stop-on-error behavior.
+#'   Defaults to `strict` for compatibility with the original single-source API.
 #'
 #' @return An `appusage_first_level` list with parsed data and metadata.
 #' @export
@@ -73,199 +75,31 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
                                      strict = FALSE,
                                      output_dir = NULL,
                                      write_cache = !is.null(output_dir),
-                                     overwrite = FALSE) {
+                                     overwrite = FALSE, parser_strict = strict) {
   input <- match.arg(input)
   type <- match.arg(type)
+  tz <- appusage_resolve_timezone(tz)
   normalized <- normalize_first_level_input(x, input = input, encoding = encoding)
-  parse_x <- normalized$x
-  parse_input <- normalized$input
-  source_file <- normalized$source_file
-  metadata_input <- normalized$metadata_input
-  id_info <- first_level_wrapper_id_info(
-    source_file = source_file,
-    input = metadata_input,
-    participant_id = participant_id
-  )
-  participant_id <- id_info$participant_id[[1]]
-  warnings <- character()
-  started_at <- Sys.time()
-  detected_type <- NA_character_
-  preflight <- NULL
-
-  result <- tryCatch(
-    withCallingHandlers(
-      {
-        prepared <- appusage_prepare_source(
-          x = parse_x,
-          input = parse_input,
-          encoding = encoding,
-          filename_type = id_info$native_export_type_from_filename[[1]]
-        )
-        preflight <- prepared$preflight
-        if (!identical(preflight$status, "ok")) {
-          detected_type <- if (length(preflight$detected_components) == 1L) {
-            preflight$detected_components[[1]]
-          } else if (length(preflight$detected_components) > 1L) {
-            "mixed"
-          } else {
-            "unknown"
-          }
-          stop(appusage_source_preflight_error(preflight))
-        }
-        parse_x <- prepared$context
-        parse_input <- "lines"
-        detected_type <- first_level_detect_type(
-          x = parse_x,
-          input = parse_input,
-          type = type,
-          encoding = encoding,
-          id_info = id_info,
-          preflight = preflight
-        )
-        if (identical(detected_type, "unknown")) {
-          cli::cli_abort("APP Usage export type could not be detected.")
-        }
-        if (isTRUE(preflight$filename_content_disagreement)) {
-          warnings <- c(warnings, appusage_text_paste0(
-            "Filename export type '", preflight$filename_type,
-            "' disagrees with content-selected component '", detected_type,
-            "'; content selection was used."
-          ))
-        }
-        parsed <- parse_first_level_by_type(
-          x = parse_x,
-          input = parse_input,
-          type = detected_type,
-          participant_id = participant_id,
-          source_file = source_file,
-          tz = tz,
-          encoding = encoding,
-          strict = strict
-        )
-        if (identical(detected_type, "line")) {
-          parsed_diagnostics <- parser_diagnostics(parsed)
-          structural_quality <- parsed_diagnostics$format_specific$structural_quality %||% list()
-          if (isTRUE(structural_quality$critical)) {
-            stop(appusage_line_structural_quality_error(parsed_diagnostics))
-          }
-        }
-        first_level_data <- as_first_level_data(parsed, detected_type)
-        if (first_level_is_empty(first_level_data)) {
-          stop(first_level_empty_raw_data_error(
-            detected_type,
-            parser_diagnostics(first_level_data)
-          ))
-        }
-        list(
-          status = "success",
-          type = detected_type,
-          parsed = parsed,
-          data = first_level_data,
-          error = NULL
-        )
-      },
-      warning = function(w) {
-        warnings <<- c(warnings, conditionMessage(w))
-        invokeRestart("muffleWarning")
-      }
-    ),
-    error = function(e) {
-      if (isTRUE(strict)) {
-        stop(e)
-      }
-      list(
-        status = "error",
-        type = if (!is.na(detected_type)) {
-          detected_type
-        } else if (identical(type, "auto")) {
-          NA_character_
-        } else {
-          type
-        },
-        parsed = NULL,
-        data = NULL,
-        error = e
-      )
-    }
-  )
-
-  finished_at <- Sys.time()
-  metadata <- build_metadata(
-    participant_id = participant_id,
-    participant_id_source = id_info$participant_id_source[[1]],
-    id_info = id_info,
-    source_file = source_file,
-    export_type = result$type,
-    export_type_match = filename_export_type_match(id_info, result$type),
-    input = metadata_input,
-    encoding = encoding,
-    tz = tz,
-    started_at = started_at,
-    finished_at = finished_at,
-    status = result$status,
-    data = result$data,
-    warnings = warnings,
-    error = result$error,
-    metadata_file = NA_character_,
-    data_file = NA_character_,
-    preflight = preflight
-  )
-
-  metadata_file <- NA_character_
-  data_file <- NA_character_
-  if (isTRUE(write_cache)) {
-    if (is.null(output_dir)) {
-      cli::cli_abort("`output_dir` is required when `write_cache = TRUE`.")
-    }
-    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
-    output_type <- result$type
-    if (!is_present_string(output_type)) {
-      output_type <- "unknown"
-    }
-    data_file <- file.path(
-      output_dir,
-      build_appusage_filename(
-        participant_id = participant_id,
-        export_type = output_type,
-        proc = 1,
-        extension = "rda"
-      )
-    )
-    metadata_file <- file.path(
-      output_dir,
-      build_appusage_filename(
-        participant_id = participant_id,
-        export_type = output_type,
-        proc = 1,
-        extension = "json"
-      )
-    )
-    if ((file.exists(data_file) || file.exists(metadata_file)) && !isTRUE(overwrite)) {
-      stop(batch_cache_exists_error(appusage_text_paste(c(data_file, metadata_file), collapse = "; ")))
-    }
-    metadata$outputs$metadata_json <- normalizePath(metadata_file, winslash = "/", mustWork = FALSE)
-    if (identical(result$status, "success")) {
-      data <- result$data
-      save(data, file = data_file)
-      metadata$outputs$first_level_rda <- normalizePath(data_file, winslash = "/", mustWork = FALSE)
-    } else {
-      data_file <- NA_character_
-      metadata$outputs$first_level_rda <- NA_character_
-    }
-    write_metadata_json(metadata, metadata_file)
+  id_info <- first_level_wrapper_id_info(normalized$source_file,
+    normalized$metadata_input, participant_id)
+  id_info$native_export_type_raw <- id_info$native_export_type_from_filename
+  if (isTRUE(write_cache) && is.null(output_dir)) {
+    cli::cli_abort("`output_dir` is required when `write_cache = TRUE`.")
   }
-
-  out <- list(
-    status = result$status,
-    type = result$type,
-    data = result$data,
-    parsed = result$parsed,
-    metadata = metadata,
-    data_file = ifelse(is.na(data_file), NA_character_, normalizePath(data_file, winslash = "/", mustWork = FALSE)),
-    metadata_file = ifelse(is.na(metadata_file), NA_character_, normalizePath(metadata_file, winslash = "/", mustWork = FALSE)),
-    error_message = if (is.null(result$error)) NA_character_ else conditionMessage(result$error)
+  identity_x <- if (normalized$metadata_input == "file") normalized$source_file else {
+    if (inherits(x, "appusage_text")) x$lines else x
+  }
+  out <- preprocess_one_appusage(
+    x = normalized$x, id_info = id_info, type = type, input = normalized$input,
+    output_dir = if (isTRUE(write_cache)) output_dir else NULL,
+    tz = tz, encoding = encoding, overwrite = overwrite, index = 1L,
+    return_result = TRUE, parser_strict = parser_strict,
+    source_ref = list(source_file = normalized$source_file,
+      input = normalized$metadata_input, identity_x = identity_x)
   )
-  class(out) <- c("appusage_first_level", "list")
+  if (isTRUE(strict) && !is.null(out$condition)) stop(out$condition)
+  if (inherits(out$condition, "appusage_cache_exists")) stop(out$condition)
+  out$condition <- NULL
   out
 }
 
@@ -522,8 +356,8 @@ extract_uncoded_apps <- function(x) {
 
 #' Run the standard APP Usage preprocessing workflow
 #'
-#' Module 6 high-level wrapper around existing batch preprocessing, second-level
-#' transformation, routine QC, and optional category enrichment.
+#' Shared, configuration-driven execution of faithful parsing, research-data
+#' construction, routine QC and optional category/relationship modules.
 #'
 #' @param x Input vector passed to [read_appusage_batch()].
 #' @param output_dir Parent output directory for the BIDS-like project folder.
@@ -549,8 +383,13 @@ extract_uncoded_apps <- function(x) {
 #'
 #' @return Invisibly returns an `appusage_workflow_result` list of compact
 #'   summaries and paths.
+#' @param config Validated [appusage_config()]. When supplied, it replaces the
+#'   legacy scientific/execution arguments.
+#' @param project_dir Exact output project directory for reproducible resumes.
+#' @param plan Optional [plan_appusage_workflow()] result; revalidated at run time.
+#' @param resume Whether compatible existing source stages may be reused.
 #' @export
-run_appusage_workflow <- function(x, output_dir, ids = NULL,
+run_appusage_workflow <- function(x = NULL, output_dir = NULL, ids = NULL,
                                   type = "auto", input = "file",
                                   tz = "Asia/Shanghai",
                                   encoding = "auto",
@@ -571,77 +410,42 @@ run_appusage_workflow <- function(x, output_dir, ids = NULL,
                                   meta_end_event_types = c(2, 23),
                                   merge_meta_episodes = TRUE,
                                   meta_episode_merge_gap_ms = 30 * 1000,
-                                  meta_daily_source = c("summary", "episodes", "both")) {
+                                  meta_daily_source = c("summary", "episodes", "both"),
+                                  config = NULL, project_dir = NULL, plan = NULL,
+                                  resume = TRUE) {
+  if (!is.null(config) || !is.null(plan)) {
+    supplied <- names(match.call())[-1L]
+    conflict <- setdiff(supplied, c("x", "output_dir", "ids", "config", "plan",
+      "project_dir", "project_name", "project_id", "run_second_level"))
+    if (length(conflict)) cli::cli_abort("Configure {paste(conflict, collapse = ', ')} inside `config`; do not mix explicit legacy settings with a configuration/plan.")
+  }
+  if (!is.null(plan)) {
+    if (!inherits(plan, "appusage_plan")) cli::cli_abort("`plan` must be an appusage_plan.")
+    x <- x %||% plan$manifest
+    config <- config %||% plan$config
+    project_dir <- project_dir %||% plan$project_dir
+  }
+  if (is.null(x) && !is.null(project_dir)) {
+    path <- file.path(project_dir, "appusage_manifest.rds")
+    if (file.exists(path)) x <- readRDS(path)
+    path <- file.path(project_dir, "appusage_configuration.rds")
+    if (is.null(config) && file.exists(path)) config <- readRDS(path)
+  }
+  if (is.null(output_dir) && is.null(project_dir)) cli::cli_abort("Supply `output_dir` or `project_dir`.")
+  output_dir <- output_dir %||% dirname(project_dir)
   tz <- appusage_resolve_timezone(tz)
-  meta_pairing <- match.arg(meta_pairing)
-  meta_daily_source <- match.arg(meta_daily_source)
-  first <- read_appusage_batch(
-    x,
-    ids = ids,
-    type = type,
-    input = input,
-    output_dir = output_dir,
-    project_name = project_name,
-    project_id = project_id,
-    tz = tz,
-    encoding = encoding,
-    strict = strict,
-    overwrite = overwrite,
-    progress = progress,
-    parallel = parallel,
-    n_cores = n_cores
-  )
-  project_dir <- unique(stats::na.omit(first$project_root))[[1]]
-  second <- NULL
-  qc <- NULL
-  categories <- NULL
-  latest <- first
-  if (isTRUE(run_second_level)) {
-    second <- write_second_level_batch(first,
-      overwrite = overwrite,
-      progress = progress,
-      reconstruct_meta = reconstruct_meta,
-      meta_pairing = meta_pairing,
-      meta_start_event_types = meta_start_event_types,
-      meta_end_event_types = meta_end_event_types,
-      merge_meta_episodes = merge_meta_episodes,
+  config <- config %||% appusage_config_from_legacy(type, input, encoding, tz,
+    second_options = list(reconstruct_meta = reconstruct_meta,
+      meta_pairing = match.arg(meta_pairing), meta_start_event_types = meta_start_event_types,
+      meta_end_event_types = meta_end_event_types, merge_meta_episodes = merge_meta_episodes,
       meta_episode_merge_gap_ms = meta_episode_merge_gap_ms,
-      meta_daily_source = meta_daily_source,
-      tz = tz
-    )
-    latest <- second
-  }
-  if (isTRUE(run_qc)) {
-    qc <- write_qc_metadata_batch(project_dir,
-      strict = strict,
-      progress = progress
-    )
-    latest <- qc
-  }
-  if (isTRUE(run_category)) {
-    if (is.null(dictionary)) {
-      cli::cli_abort("`dictionary` is required when `run_category = TRUE`.")
-    }
-    dictionary <- if (is.character(dictionary) && length(dictionary) == 1) {
-      read_app_category_dictionary(dictionary)
-    } else {
-      dictionary
-    }
-    categories <- write_app_categories_batch(project_dir,
-      dictionary = dictionary,
-      progress = progress
-    )
-    latest <- categories
-  }
-
-  out <- list(
-    project_dir = project_dir,
-    first_level = first,
-    second_level = second,
-    qc = qc,
-    categories = categories,
-    latest = latest
-  )
+      meta_daily_source = match.arg(meta_daily_source), inline_qc = run_qc),
+    execution = list(strict = strict, progress = progress, parallel = parallel,
+      workers = n_cores, overwrite = overwrite, resume = resume),
+    category = list(enabled = run_category, dictionary = dictionary))
+  out <- appusage_execute_pipeline(x, output_dir, config = config, ids = ids,
+    project_name = project_name, project_id = project_id, project_dir = project_dir,
+    run_second_level = run_second_level)
   class(out) <- c("appusage_workflow_result", "list")
   invisible(out)
 }

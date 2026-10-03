@@ -1441,7 +1441,7 @@ test_that("project workflow reads the self-report workbook once and reuses its t
   expect_equal(config$self_report_read$warning_count, 0L)
 })
 
-test_that("workflow configuration compatibility includes workbook read controls", {
+test_that("workbook read changes no longer invalidate preprocessing project identity", {
   current <- list(
     self_report_sheet = 1,
     self_report_guess_max = NA_real_,
@@ -1451,16 +1451,16 @@ test_that("workflow configuration compatibility includes workbook read controls"
 
   changed_sheet <- current
   changed_sheet$self_report_sheet <- "Survey"
-  expect_true("self_report_sheet" %in%
+  expect_false("self_report_sheet" %in%
     appusage_workflow_config_differences(current, changed_sheet))
 
   changed_guess <- current
   changed_guess$self_report_guess_max <- 1500
-  expect_true("self_report_guess_max" %in%
+  expect_false("self_report_guess_max" %in%
     appusage_workflow_config_differences(current, changed_guess))
 
   changed_types <- current
   changed_types$self_report_col_types <- c("text", "numeric")
-  expect_true("self_report_col_types" %in%
+  expect_false("self_report_col_types" %in%
     appusage_workflow_config_differences(current, changed_types))
 })

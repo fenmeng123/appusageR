@@ -1091,7 +1091,10 @@ write_complete_proc2_cache_for_test <- function(batch, index, output_dir) {
       n_parse_warnings = 0L
     ),
     qc = list(qc_status = "not_run"),
-    app_categories = list(app_category_status = "not_run")
+    app_categories = list(app_category_status = "not_run"),
+    module_state = list(
+      research_data = appusage_research_contract(appusage_second_effective_options()),
+      artifact = appusage_artifact_signature(paths$rda_file))
   )
   write_metadata_json(metadata, paths$json_file)
   paths

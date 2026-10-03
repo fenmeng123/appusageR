@@ -5,8 +5,8 @@
 \title{Run the standard APP Usage preprocessing workflow}
 \usage{
 run_appusage_workflow(
-  x,
-  output_dir,
+  x = NULL,
+  output_dir = NULL,
   ids = NULL,
   type = "auto",
   input = "file",
@@ -29,7 +29,11 @@ run_appusage_workflow(
   meta_end_event_types = c(2, 23),
   merge_meta_episodes = TRUE,
   meta_episode_merge_gap_ms = 30 * 1000,
-  meta_daily_source = c("summary", "episodes", "both")
+  meta_daily_source = c("summary", "episodes", "both"),
+  config = NULL,
+  project_dir = NULL,
+  plan = NULL,
+  resume = TRUE
 )
 }
 \arguments{
@@ -71,12 +75,21 @@ meta episodes for the same app when their time gap is small.}
 allowed when merging adjacent reconstructed meta episodes.}
 
 \item{meta_daily_source}{Source for meta daily rows.}
+
+\item{config}{Validated \code{\link[=appusage_config]{appusage_config()}}. When supplied, it replaces the
+legacy scientific/execution arguments.}
+
+\item{project_dir}{Exact output project directory for reproducible resumes.}
+
+\item{plan}{Optional \code{\link[=plan_appusage_workflow]{plan_appusage_workflow()}} result; revalidated at run time.}
+
+\item{resume}{Whether compatible existing source stages may be reused.}
 }
 \value{
 Invisibly returns an \code{appusage_workflow_result} list of compact
 summaries and paths.
 }
 \description{
-Module 6 high-level wrapper around existing batch preprocessing, second-level
-transformation, routine QC, and optional category enrichment.
+Shared, configuration-driven execution of faithful parsing, research-data
+construction, routine QC and optional category/relationship modules.
 }

@@ -71,7 +71,7 @@ test_that("run_first_level_appusage writes existing proc-1 cache format", {
   )
 
   expect_equal(first$status, "success")
-  expect_match(basename(first$data_file), "^sub-wrap-line_type-line_proc-1[.]rda$")
+  expect_match(basename(first$data_file), "^sub-wrap-line_type-line_src-[A-Za-z0-9-]+_proc-1[.]rda$")
   expect_true(file.exists(first$data_file))
   expect_true(file.exists(first$metadata_file))
   loaded <- load(first$data_file)
@@ -124,7 +124,7 @@ test_that("run_second_level_appusage writes proc-2 cache from first-level result
 
   expect_true(file.exists(second$data_file))
   expect_true(file.exists(second$metadata_file))
-  expect_match(basename(second$data_file), "^sub-wrap-line_type-line_proc-2[.]rda$")
+  expect_match(basename(second$data_file), "^sub-wrap-line_type-line_src-[A-Za-z0-9-]+_proc-2[.]rda$")
   expect_named(second$data, c("event", "episode", "daily"))
 })
 

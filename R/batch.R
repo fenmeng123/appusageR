@@ -41,6 +41,10 @@
 #' @param memory_retry_workers Worker count recorded for memory retries.
 #' @param provenance Optional implementation provenance supplied by a project
 #'   workflow. Standalone calls compute one provenance record for the batch.
+#' @param project_dir Optional exact output project directory. When supplied,
+#'   it takes precedence over generated project-folder naming.
+#' @param parser_strict Whether malformed parser records raise a parser error;
+#'   separate from the batch's stop-on-error `strict` policy.
 #'
 #' @return Invisibly returns a tibble summary. It does not return parsed data.
 #' @export
@@ -58,10 +62,12 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
                                  max_workers = 12, worker_cap_override = FALSE,
                                  retry_memory_allocation = TRUE,
                                  memory_retry_workers = 1,
-                                 provenance = NULL) {
+                                 provenance = NULL, project_dir = NULL,
+                                 parser_strict = TRUE) {
   input <- match.arg(input, c("file", "text", "lines"))
   tz <- appusage_resolve_timezone(tz)
   provenance <- appusage_resolve_run_provenance(provenance, tz = tz)
+  provenance$parser_strict <- parser_strict
   if (!identical(type, "auto") && !type %in% c("line", "meta", "day", "app")) {
     cli::cli_abort("`type` must be 'auto', 'line', 'meta', 'day', or 'app'.")
   }
@@ -99,7 +105,8 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
     resume = resume,
     n_inputs = length(x),
     input = input,
-    tz = tz
+    tz = tz,
+    project_root_override = project_dir
   )
 
   if (is.null(checkpoint_every)) {
@@ -118,6 +125,15 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
       resume = resume,
       overwrite = overwrite
     )
+  }
+
+  # Generated IDs belong to the source, not its current position in a manifest.
+  if (is.null(ids) && !is.null(existing_checkpoint) && nrow(existing_checkpoint) && input == "file" &&
+      all(c("source_file", "participant_id") %in% names(existing_checkpoint))) {
+    old <- match(normalizePath(x, winslash = "/", mustWork = FALSE),
+      normalizePath(existing_checkpoint$source_file, winslash = "/", mustWork = FALSE))
+    keep <- id_plan$participant_id_source %in% c("generated", "fallback") & !is.na(old)
+    id_plan$participant_id[keep] <- existing_checkpoint$participant_id[old[keep]]
   }
 
   rows <- process_batch_rows(
@@ -159,7 +175,7 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
     summary$project_root <- output_project$project_root
     summary$proclevel_1_dir <- output_project$proclevel_1
     summary_file <- file.path(output_project$project_root, "analytic_summary_table_proclevel-1.csv")
-    utils::write.csv(summary, summary_file, row.names = FALSE, na = "")
+    appusage_publish_first_summary(output_project$project_root, summary)
     write_dataset_description_json(
       output_project,
       summary = summary,
@@ -221,8 +237,9 @@ write_second_level_batch <- function(batch_summary, output_dir = NULL,
   if (!is.null(output_dir) && any(eligible, na.rm = TRUE)) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   }
-  provenance <- appusage_resolve_run_provenance(provenance)
   second_level_args <- list(...)
+  provenance <- appusage_resolve_run_provenance(provenance,
+    tz = second_level_args$tz %||% appusage_default_timezone())
   second_level_args$provenance <- provenance
   rows <- process_second_level_batch_rows(
     batch_summary = batch_summary,
@@ -255,9 +272,11 @@ write_second_level_batch <- function(batch_summary, output_dir = NULL,
     rows = rows,
     previous_summary = previous_summary
   )
+  attr(summary, "stage_reused") <- length(rows) > 0L && all(vapply(rows,
+    function(row) identical(row$skip_reason[[1]], "existing_proc2_cache"), logical(1)))
   if (!is.na(project_root)) {
     summary_file <- file.path(project_root, "analytic_summary_table_proclevel-2.csv")
-    utils::write.csv(summary, summary_file, row.names = FALSE, na = "")
+    appusage_project_summary(project_root, fresh = summary)
     project <- project_info_from_root(project_root)
     write_dataset_description_json(
       project,
@@ -1043,21 +1062,29 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
                                     tz, encoding, overwrite, index,
                                     memory_risk_signal = FALSE,
                                     memory_risk_reason = NA_character_,
-                                    provenance = NULL) {
+                                    provenance = NULL, return_result = FALSE,
+                                    parser_strict = NULL, source_ref = NULL) {
   warnings <- character()
   started_at <- Sys.time()
-  source_file <- source_file_label(x, input)
+  source_file <- source_ref$source_file %||% source_file_label(x, input)
+  source_input <- source_ref$input %||% input
+  identity_x <- source_ref$identity_x %||% x
+  parsed_data <- NULL
+  first_level_data <- NULL
+  info <- NULL
+  if (!is.null(output_dir)) dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   participant_id <- id_info$participant_id[[1]]
   participant_id_source <- id_info$participant_id_source[[1]]
   provenance <- appusage_resolve_run_provenance(provenance, tz = tz)
+  parser_strict <- parser_strict %||% provenance$parser_strict %||% TRUE
   detected_type <- NA_character_
   metadata_file <- NA_character_
   data_file <- NA_character_
   preflight <- NULL
   structural_quality <- NULL
   source_identity <- appusage_source_identity(
-    x = x,
-    input = input,
+    x = identity_x,
+    input = source_input,
     id_info = id_info,
     participant_id = participant_id,
     export_type = "unknown"
@@ -1104,39 +1131,18 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           ))
         }
         source_identity <- appusage_source_identity(
-          x = x,
-          input = input,
+          x = identity_x,
+          input = source_input,
           id_info = id_info,
           participant_id = participant_id,
           export_type = detected_type,
           fingerprint = source_identity$source_fingerprint
         )
 
-        parsed_data <- switch(detected_type,
-          line = appusage_parse_line_context(
-            parse_x,
-            input = parse_input, participant_id = participant_id,
-            source_file = source_file, tz = tz, encoding = encoding,
-            strict = TRUE
-          ),
-          meta = appusage_parse_meta_context(
-            parse_x,
-            input = parse_input, participant_id = participant_id,
-            source_file = source_file, tz = tz, encoding = encoding,
-            strict = TRUE
-          ),
-          day = appusage_parse_day_context(
-            parse_x,
-            input = parse_input, participant_id = participant_id,
-            source_file = source_file, tz = tz, encoding = encoding,
-            strict = TRUE
-          ),
-          app = appusage_parse_app_context(
-            parse_x,
-            input = parse_input, participant_id = participant_id,
-            source_file = source_file, tz = tz, encoding = encoding,
-            strict = TRUE
-          )
+        parsed_data <- parse_first_level_by_type(
+          parse_x, input = parse_input, type = detected_type,
+          participant_id = participant_id, source_file = source_file,
+          tz = tz, encoding = encoding, strict = parser_strict
         )
         if (identical(detected_type, "line")) {
           parsed_diagnostics <- parser_diagnostics(parsed_data)
@@ -1160,7 +1166,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           source_file = source_file,
           export_type = detected_type,
           export_type_match = filename_export_type_match(id_info, detected_type),
-          input = input,
+          input = source_input,
           encoding = encoding,
           tz = tz,
           started_at = started_at,
@@ -1177,6 +1183,9 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           provenance = provenance
         )
 
+        info$module_state$parse <- appusage_parse_contract(
+          type, source_input, encoding, tz, parser_strict, provenance)
+        info$module_state$source_stat <- appusage_source_stat(identity_x, source_input)
         if (!is.null(output_dir)) {
           data_file <- file.path(
             output_dir,
@@ -1203,6 +1212,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           }
           data <- first_level_data
           save(data, file = data_file)
+          info$module_state$artifact <- appusage_artifact_signature(data_file)
           info$outputs$metadata_json <- normalizePath(metadata_file, winslash = "/", mustWork = FALSE)
           info$outputs$first_level_rda <- normalizePath(data_file, winslash = "/", mustWork = FALSE)
           write_metadata_json(info, metadata_file)
@@ -1239,15 +1249,15 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
       condition_parser_diagnostics(error)$format_specific$structural_quality
   }
   source_identity <- appusage_source_identity(
-    x = x,
-    input = input,
+    x = identity_x,
+    input = source_input,
     id_info = id_info,
     participant_id = participant_id,
     export_type = ifelse(is.na(detected_type), "unknown", detected_type),
     fingerprint = source_identity$source_fingerprint
   )
-  if (!is.null(error) && !is.null(output_dir)) {
-    metadata_file <- file.path(
+  if (!is.null(error)) {
+    metadata_file <- if (is.null(output_dir)) NA_character_ else file.path(
       output_dir,
       build_appusage_filename(
         participant_id = participant_id,
@@ -1264,7 +1274,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
       source_file = source_file,
       export_type = detected_type,
       export_type_match = filename_export_type_match(id_info, detected_type),
-      input = input,
+      input = source_input,
       encoding = encoding,
       tz = tz,
       started_at = started_at,
@@ -1280,7 +1290,13 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
       source_identity = source_identity,
       provenance = provenance
     )
-    write_metadata_json(error_info, metadata_file)
+    error_info$module_state$parse <- appusage_parse_contract(
+      type, source_input, encoding, tz, parser_strict, provenance)
+    error_info$module_state$source_stat <- appusage_source_stat(identity_x, source_input)
+    info <- error_info
+    if (!is.null(output_dir) && !inherits(error, "appusage_cache_exists")) {
+      write_metadata_json(error_info, metadata_file)
+    }
   }
   preflight_fields <- appusage_preflight_summary_fields(preflight)
   structural_fields <- appusage_structural_quality_summary_fields(structural_quality)
@@ -1353,7 +1369,17 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
     elapsed_sec = as.numeric(difftime(finished_at, started_at, units = "secs")),
     stringsAsFactors = FALSE
   )
-  appusage_attach_provenance_summary(row, provenance)
+  row <- appusage_attach_provenance_summary(row, provenance)
+  if (!isTRUE(return_result)) return(row)
+  structure(list(
+    status = result$status, type = detected_type,
+    data = if (is.null(error)) first_level_data else NULL,
+    parsed = if (is.null(error)) parsed_data else NULL,
+    metadata = info, data_file = if (is.null(error)) data_file else NA_character_,
+    metadata_file = metadata_file,
+    error_message = if (is.null(error)) NA_character_ else conditionMessage(error),
+    condition = error
+  ), class = c("appusage_first_level", "list"))
 }
 
 batch_unsupported_error <- function(detected_type) {
@@ -2844,6 +2870,8 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
     parallel = parallel,
     n_cores = n_cores
   )
+  existing_rows <- appusage_align_first_level_seed(
+    existing_rows, x, id_plan, input, type, encoding, tz, provenance)
   rows <- appusage_restore_checkpoint_rows(existing_rows, length(x))
   seed_rows <- appusage_index_seed_rows(existing_rows, length(x))
   pending <- which(vapply(rows, is.null, logical(1)))
@@ -3100,19 +3128,20 @@ appusage_process_first_level_worker_task <- function(task) {
 
 prepare_batch_output_project <- function(output_dir, project_name, project_id,
                                          overwrite, resume = FALSE, n_inputs,
-                                         input, tz) {
-  if (is.null(output_dir)) {
+                                         input, tz, project_root_override = NULL) {
+  if (is.null(output_dir) && is.null(project_root_override)) {
     return(list(
       project_root = NULL,
       proclevel_1 = NULL
     ))
   }
 
+  if (!is.null(project_root_override)) output_dir <- dirname(project_root_override)
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   project_name <- project_name %||% next_study_project_name(output_dir)
   project_id <- project_id %||% generate_project_id()
   folder_name <- appusage_text_paste0(sanitize_entity_value(project_name), "_", sanitize_entity_value(project_id))
-  project_root <- file.path(output_dir, folder_name)
+  project_root <- project_root_override %||% file.path(output_dir, folder_name)
 
   if (dir.exists(project_root) && !isTRUE(overwrite) && !isTRUE(resume)) {
     cli::cli_abort("Project output folder already exists: {.path {project_root}}")
@@ -3305,6 +3334,8 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
     second_level_args$tz %||%
       appusage_summary_cell(batch_summary, "effective_timezone", index, NULL)
   )
+  second_level_args$tz <- effective_timezone
+  effective_options <- appusage_second_effective_options(second_level_args)
   if (!identical(status, "success") || is.na(first_file) || !file.exists(first_file)) {
     finished_at <- Sys.time()
     skip_reason <- if (!identical(status, "success")) {
@@ -3342,6 +3373,8 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
     batch_summary = batch_summary,
     index = index
   )
+  cache <- appusage_second_cache_for_options(cache, effective_options,
+    second_level_args$provenance %||% NULL)
   if (isTRUE(resume) && !isTRUE(overwrite) && identical(cache$status, "complete")) {
     finished_at <- Sys.time()
     return(appusage_attach_daily_self_check_summary(data.frame(
@@ -3516,6 +3549,7 @@ second_level_existing_cache_status <- function(first_level_rda, output_dir = NUL
       pair_state = pair_state,
       reason = reason,
       metadata = metadata,
+      upstream_parse = first_metadata$module_state$parse,
       legacy_name = legacy_name,
       owned_by_task = !identical(pair_state, "source_key_collision")
     ))

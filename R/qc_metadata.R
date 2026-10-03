@@ -88,7 +88,8 @@ write_qc_metadata_batch <- function(project_dir, output_dir = NULL,
     }
   }
 
-  summary <- build_qc_summary_from_metadata(metadata_files)
+  summary <- appusage_project_summary(project_dir,
+    fresh = build_qc_summary_from_metadata(metadata_files), write = FALSE)
   summary_file <- file.path(project_dir, "analytic_summary_table_proclevel-2.csv")
   utils::write.csv(summary, summary_file, row.names = FALSE, na = "")
   write_dataset_description_json(
@@ -203,6 +204,8 @@ write_qc_metadata_one <- function(metadata_file, overwrite,
       )
     )
   } else {
+    metadata <- appusage_sync_qc_labels(metadata, metadata_file,
+      max_episode_ms, max_daily_app_ms)
     second_level_rda <- infer_second_level_rda_path(
       metadata = metadata,
       metadata_file = metadata_file,
@@ -236,6 +239,12 @@ write_qc_metadata_one <- function(metadata_file, overwrite,
     started_at = started_at,
     finished_at = finished_at
   )
+  if (identical(result$qc_status, "success")) {
+    fields <- setdiff(names(formals(write_qc_metadata_one)), c("metadata_file", "overwrite"))
+    options <- mget(fields, envir = environment(), inherits = FALSE)
+    options$tz <- metadata$processing$effective_timezone %||% metadata$export$timezone %||% "Asia/Shanghai"
+    metadata$module_state$qc <- appusage_qc_contract(options)
+  } else metadata$module_state$qc <- NULL
   write_metadata_json(metadata, metadata_file)
   normalizePath(metadata_file, winslash = "/", mustWork = FALSE)
 }
@@ -423,6 +432,10 @@ run_qc_for_second_level_data <- function(data, second_level_rda, participant_id,
   }
   counts <- second_level_qc_counts(data)
   notify_stage("anomaly_qc", "started")
+  if (!is.null(attr(data, "effective_timezone", exact = TRUE))) {
+    metadata <- metadata %||% list()
+    metadata$processing$effective_timezone <- attr(data, "effective_timezone", exact = TRUE)
+  }
   anomaly_qc <- qc_appusage_anomalies(
     data,
     metadata = metadata,

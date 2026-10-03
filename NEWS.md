@@ -1,3 +1,28 @@
+# appusageR 0.3.6 (2026-10-03)
+
+- Add a generic manifest workflow, validated `appusage_config()`, read-only
+  `plan_appusage_workflow()` and independently callable `run_appusage_stage()`.
+  The Wenjuanxing project workflow remains a compatible optional adapter.
+- Share single-source parsing and workflow execution. Honor effective timezone,
+  parser strictness and QC configuration consistently across entry points.
+- Expose `standardize_appusage()`, `build_appusage_daily()`, complete in-memory
+  `assess_appusage_qc()` and `match_appusage_self_report()`. Existing raw parsers
+  and explicit meta reconstruction retain their scientific contracts.
+- Validate cache reuse per source and stage using configuration, implementation,
+  upstream dependencies and artifact integrity; repair partial/corrupt sources
+  and support raw-free downstream execution from compatible caches.
+- Persist questionnaire relationship results and project summaries through a
+  common projection. Preserve unselected sources, failures and matching fields
+  across QC, category and targeted rebuild operations. Overwrite no longer
+  deletes the complete project directory.
+- Keep schema 0.3.4, two main cache levels and the existing parallel scheduler.
+  R 4.5.3 validation: 1809 passing assertions and package check 0/0/0. One
+  isolated 559-source project completed with 500 successes through QC and 59
+  explained input failures; all 1000 RDA/1059 JSON artifacts, questionnaire
+  exports and unchanged/targeted recovery audits passed. The user accepted 0.3.6
+  on 2026-10-03 and authorized Git commit/push. Broader migration and tagged or
+  package publication remain separate decisions.
+
 # appusageR 0.3.5 (2026-10-03)
 
 - Share a file-local ragged parsing context across preflight, detection, table

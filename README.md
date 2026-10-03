@@ -3,11 +3,33 @@ appusageR
 
 `appusageR` parses, validates, standardizes, and summarizes exported APP
 Usage / Screen Time Android smartphone-use logs for reproducible
-research workflows. Version 0.3.5 provides faithful raw parsers,
+research workflows. Version 0.3.6 provides faithful raw parsers,
 BIDS-like per-source cache files, second-level event/episode/daily
 outputs, breakpoint-aware resume and rerun support, memory-aware
 parallel batch workflows, manual app-category enrichment, project-level
 Wenjuanxing/self-report matching, and structured workflow diagnostics.
+
+Version 0.3.6 adds a validated configuration, source-stage plan and shared generic
+workflow. Independent scientific modules remain usable without project IO.
+It retains scientific schema 0.3.4 and the accepted 0.3.5 performance structures.
+Validation passed 1809 assertions and R CMD check with 0 errors/warnings/notes.
+An isolated 559-source project and exhaustive artifact/recovery audits passed;
+500 sources completed through QC and 59 retained explained input failures.
+Version 0.3.6 was accepted by the user on 2026-10-03; no full-corpus migration is implied.
+
+```r
+library(appusageR)
+config <- appusage_config(time = list(tz = "Asia/Shanghai"))
+plan <- plan_appusage_workflow(c("raw/a.txt", "raw/b.txt"), "outputs/study", config)
+plan$tasks
+result <- run_appusage_workflow(plan = plan)
+result <- run_appusage_workflow(project_dir = "outputs/study")  # resume
+qc <- run_appusage_stage("qc", "outputs/study", config)
+```
+
+Use the optional `run_appusage_project_workflow()` adapter for Wenjuanxing
+discovery and matched Excel output. See the workflow vignette for standalone
+modules, configuration fields, cache verification and source-by-grain contracts.
 
 Version 0.3.5 refactors preprocessing structures, shares QC computation and
 uses stringi for data-text operations. The user accepted its measured performance
@@ -23,7 +45,7 @@ APP Usage exports measure Android foreground-use duration from Android
 usage statistics. They should not be interpreted directly as attention,
 engagement, or subjective involvement with an app.
 
-The 0.3.4 preprocessing core is designed around auditable per-source
+The preprocessing core uses scientific schema 0.3.4 and auditable per-source
 caches:
 
 - raw parsers remain faithful to APP Usage export content;
@@ -72,12 +94,12 @@ contains timestamps or dates.
 
 ## Module-Level Workflow
 
-The preferred 0.3.4 user-facing entry points are:
+The compatible user-facing entry points include:
 
 - `read_appusage_text()` for raw text I/O;
 - `run_first_level_appusage()` for one source file or text object;
 - `run_second_level_appusage()` for one first-level result/cache;
-- `run_appusage_workflow()` for the full serial cache workflow;
+- `run_appusage_workflow()` for the full configured cache workflow;
 - `run_appusage_project_workflow()` for project-level preprocessing and
   Wenjuanxing/self-report matching.
 
@@ -100,12 +122,13 @@ batch_summary <- read_appusage_batch(
 )
 ```
 
-Each source file produces two first-level files:
+Each successfully parsed source produces two first-level files:
 
 - a BIDS-like metadata JSON file;
 - a BIDS-like RDA data file.
 
 The RDA file contains exactly one object named `data`.
+Failed sources retain diagnostic JSON and a summary row without a successful RDA.
 
 The returned `batch_summary` records detected type, status, metadata
 path, data path, row counts, parse-warning counts, warnings, error

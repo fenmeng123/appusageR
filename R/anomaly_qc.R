@@ -634,7 +634,7 @@ appusage_metadata_export_date <- function(metadata) {
     if (!is.null(candidate) && length(candidate) > 0L && !is.na(candidate[[1L]])) {
       parsed <- appusage_parse_export_date(
         candidate[[1L]],
-        tz = metadata$export$timezone %||% metadata$processing$effective_timezone %||%
+        tz = metadata$processing$effective_timezone %||% metadata$export$timezone %||%
           appusage_default_timezone()
       )
       if (!is.na(parsed)) {

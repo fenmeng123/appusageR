@@ -31,6 +31,10 @@ plan_appusage_project_rebuild <- function(
   }
   project_dir <- normalizePath(project_dir, winslash = "/", mustWork = TRUE)
   current <- appusage_resolve_run_provenance(current_provenance, tz = tz)
+  config_path <- file.path(project_dir, "appusage_configuration.rds")
+  module_options <- if (file.exists(config_path)) {
+    appusage_config_second_options(appusage_validate_config(readRDS(config_path)))
+  } else NULL
   project_id <- appusage_plan_project_id(project_dir)
   audit <- appusage_plan_read_failure_audit(failure_audit, project_id)
   manifest <- appusage_plan_read_csv(file.path(
@@ -131,7 +135,7 @@ plan_appusage_project_rebuild <- function(
     si <- second_index[[i]]
     first_row <- appusage_plan_row(first, fi)
     second_row <- appusage_plan_row(second, si)
-    pair <- appusage_plan_pair_state(first, fi, output_dir)
+    pair <- appusage_plan_pair_state(first, fi, output_dir, module_options, current)
     if (isTRUE(duplicate_key[[i]])) {
       pair$pair_state <- "source_key_collision"
       pair$status <- "collision"
@@ -738,7 +742,7 @@ appusage_plan_metadata <- function(row, column) {
   tryCatch(jsonlite::read_json(path, simplifyVector = TRUE), error = function(e) list())
 }
 
-appusage_plan_pair_state <- function(first, index, output_dir) {
+appusage_plan_pair_state <- function(first, index, output_dir, options = NULL, provenance = NULL) {
   if (!is.data.frame(first) || is.na(index) ||
     !identical(appusage_text_lower(as.character(first$status[[index]])), "success")) {
     return(list(status = "not_applicable", pair_state = "not_applicable",
@@ -751,10 +755,12 @@ appusage_plan_pair_state <- function(first, index, output_dir) {
       reason = "missing_first_level_rda", metadata = list()
     ))
   }
-  second_level_existing_cache_status(
+  cache <- second_level_existing_cache_status(
     first_level_rda = rda, output_dir = output_dir,
     batch_summary = first, index = index
   )
+  if (is.null(options)) cache else appusage_second_cache_for_options(cache,
+    options, provenance, verify = FALSE)
 }
 
 appusage_plan_truth <- function(row, column) {

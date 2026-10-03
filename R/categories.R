@@ -441,7 +441,8 @@ write_app_categories_one <- function(second_level_rda, project_dir,
         project_dir,
         second_level_rda,
         summary,
-        dictionary
+        dictionary,
+        overwrite = overwrite
       )
       list(status = "success", error = NULL, summary = summary)
     },
@@ -463,7 +464,7 @@ write_app_categories_one <- function(second_level_rda, project_dir,
 
 write_app_category_second_level_pair <- function(data, project_dir,
                                                  second_level_rda, summary,
-                                                 dictionary) {
+                                                 dictionary, overwrite = TRUE) {
   metadata_file <- second_level_metadata_path(second_level_rda)
   if (!file.exists(metadata_file)) {
     metadata_file <- create_missing_second_level_metadata(second_level_rda, project_dir)
@@ -483,6 +484,8 @@ write_app_category_second_level_pair <- function(data, project_dir,
     add = TRUE
   )
   appusage_save_second_level_data(data, transaction$temp_rda)
+  metadata$module_state$artifact <- appusage_artifact_signature(transaction$temp_rda)
+  metadata$module_state$category <- appusage_category_contract(dictionary, overwrite)
   appusage_validate_nonempty_file(
     transaction$temp_rda, "Category-enriched second-level RDA temporary artifact"
   )
@@ -579,7 +582,8 @@ update_category_qc_summary <- function(project_dir) {
   if (length(metadata_files) == 0) {
     return(invisible(NULL))
   }
-  summary <- build_qc_summary_from_metadata(metadata_files)
+  summary <- appusage_project_summary(project_dir,
+    fresh = build_qc_summary_from_metadata(metadata_files), write = FALSE)
   summary_file <- file.path(
     project_dir,
     "analytic_summary_table_proclevel-2.csv"

@@ -12,6 +12,78 @@ vignette: >
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
 ```
 
+## Configuration, plans and independent stages (0.3.6)
+
+Start with a file manifest and an exact output project directory. Questionnaire
+discovery and matching are optional adapters, so ordinary APP Usage files do
+not need a Wenjuanxing directory layout.
+
+```{r}
+library(appusageR)
+sources <- data.frame(source_file = c("raw/a.txt", "raw/b.txt"),
+                      participant_id = c("p001", "p002"))
+config <- appusage_config(
+  time = list(tz = "Asia/Shanghai"),
+  daily = list(meta_daily_source = "summary"),
+  qc = list(enabled = TRUE),
+  execution = list(parallel = FALSE, workers = 1L, resume = TRUE)
+)
+plan <- plan_appusage_workflow(sources, "outputs/study", config)
+plan$tasks
+result <- run_appusage_workflow(plan = plan)
+
+# Resume the saved manifest and configuration with revalidation.
+result <- run_appusage_workflow(project_dir = "outputs/study")
+
+# Reassess QC without reparsing raw files.
+config$qc$min_nonempty_days <- 5
+qc <- run_appusage_stage("qc", "outputs/study", config)
+```
+
+The configuration sections are `parse`, `time`, `reconstruction`, `daily`, `qc`,
+`category`, `matching` and `execution`. Inspect `appusage_config()` to see every
+supported field/default. Unknown fields and mixed explicit legacy arguments
+with a configuration/plan are errors. `parser_strict` governs faithful parsing;
+`execution$strict` governs stopping after execution failures.
+
+Plan previews read JSON/summaries without raw/RDA content. Execution normally
+checks source fingerprints and RDA byte integrity. `source_verification="metadata"`
+uses size/mtime (weaker evidence); `"cache_only"` uses compatible saved proc-1
+caches and blocks unavailable upstream work. Cache integrity is distinct from
+scientific correctness, which is covered by package tests and artifact audits.
+Changing workers/progress does not invalidate scientific results. Reconstruction
+or daily changes invalidate research outputs; coverage-only settings refresh QC;
+duration thresholds also synchronize persisted anomaly labels. Category changes
+preserve numerical QC. Separate config, manifest, plan and run-record RDS files
+make the desired state and executed state inspectable.
+
+Scientific modules can also run entirely in memory:
+
+```{r}
+raw <- parse_meta("raw/meta.txt")
+standard <- standardize_appusage(raw, export_type = "meta", tz = "Asia/Shanghai")
+episodes <- reconstruct_meta_episodes(standard$meta_events)
+daily <- build_appusage_daily(standard, meta_episodes = episodes,
+                             meta_daily_source = "summary")
+research <- make_second_level_appusage(raw, export_type = "meta")
+quality <- assess_appusage_qc(research)
+```
+
+`parse_meta()` remains faithful; event reconstruction is explicit and later.
+`make_second_level_appusage()` is the composed research operation. Complete QC is
+`assess_appusage_qc()`; the legacy in-memory `run_qc_appusage()` remains coverage-only.
+Every proc-2 RDA contains exactly `data`, with typed `event`, `episode`, `daily`.
+Meta supports all three; line supports episode/daily; day/app support daily.
+Unavailable finer grains are typed zero-row tables, not fabricated observations.
+Proc-1 retains its format-specific faithful structure.
+
+Categories use a manually supplied dictionary (`add_app_categories`). Optional
+matching uses `match_appusage_self_report()` on a questionnaire and resolved source
+references; the persisted LinkResult retains unmatched questionnaire rows. Summary
+CSV is a projection and can be rebuilt with `run_appusage_stage("summary", ...)`.
+Unselected sources and upstream failures stay visible. Old caches remain readable;
+reuse requires sufficient configuration/implementation/integrity evidence.
+
 ## Batch Preprocessing
 
 `appusageR` parses exported APP Usage / Screen Time text files that already

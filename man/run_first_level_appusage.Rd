@@ -14,7 +14,8 @@ run_first_level_appusage(
   strict = FALSE,
   output_dir = NULL,
   write_cache = !is.null(output_dir),
-  overwrite = FALSE
+  overwrite = FALSE,
+  parser_strict = strict
 )
 }
 \arguments{
@@ -38,6 +39,9 @@ run_first_level_appusage(
 \item{write_cache}{Whether to write first-level cache files.}
 
 \item{overwrite}{Whether existing cache files may be overwritten.}
+
+\item{parser_strict}{Parser tolerance, separate from stop-on-error behavior.
+Defaults to \code{strict} for compatibility with the original single-source API.}
 }
 \value{
 An \code{appusage_first_level} list with parsed data and metadata.

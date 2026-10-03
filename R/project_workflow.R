@@ -284,7 +284,8 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
   diagnostic_verbosity <- match.arg(diagnostic_verbosity)
   tz <- appusage_resolve_timezone(tz)
   second_level_options <- list(...)
-  if (is.null(second_level_options$tz)) second_level_options$tz <- tz
+  second_level_options <- appusage_second_effective_options(second_level_options,
+    tz = tz, run_qc = run_qc)
   run_provenance <- appusage_build_run_provenance(
     tz = tz,
     source_qc_config = second_level_options$source_qc_config %||% NULL
@@ -308,10 +309,8 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     project_id = project_id,
     output_style = resolved$output_style
   )
-  if (isTRUE(overwrite) && dir.exists(project$project_root)) {
-    appusage_project_progress(progress, "overwrite=TRUE: removing existing output study folder")
-    unlink(project$project_root, recursive = TRUE, force = TRUE)
-  }
+  # Overwrite selected artifacts through their writers; never delete an entire
+  # study directory which can contain unrelated sources and questionnaire data.
 
   manifest <- build_appusage_project_manifest(project_dir, self_report_file)
   manifest <- appusage_limit_manifest_files(manifest, max_files = max_files)
@@ -481,203 +480,60 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     cli::cli_abort("No `.txt` files were found in `project_dir`.")
   }
 
-  first <- NULL
-  second <- NULL
-  qc <- NULL
-  resumed <- FALSE
-  if (isTRUE(resume_state$use_existing_second_level)) {
-    resumed <- TRUE
-    diagnostics <- appusage_prepare_diagnostics(project$project_root)
-    manifest_file <- appusage_write_project_manifest(manifest, diagnostics$diagnostics_dir)
-    first <- appusage_read_summary_csv(file.path(project$project_root, "analytic_summary_table_proclevel-1.csv"))
-    second <- appusage_read_summary_csv(file.path(project$project_root, "analytic_summary_table_proclevel-2.csv"))
-    qc <- if (isTRUE(run_qc)) second else NULL
-    completed_stages <- c("first_level", "second_level")
-    if (isTRUE(run_qc)) {
-      completed_stages <- c(completed_stages, "qc")
+  diagnostics <- appusage_prepare_diagnostics(project$project_root)
+  manifest_file <- appusage_write_project_manifest(manifest, diagnostics$diagnostics_dir)
+  resumed <- isTRUE(resume) && file.exists(file.path(project$project_root,
+    "analytic_summary_table_proclevel-1.csv"))
+  effective_config <- appusage_config_from_legacy(type, "file", encoding, tz,
+    second_options = second_level_options,
+    execution = list(strict = strict, resume = resume, overwrite = overwrite,
+      progress = FALSE, parallel = parallel, workers = n_cores,
+      checkpoint_every = first_level_checkpoint_every %||% 100L))
+  config$effective_config <- effective_config
+  first <- second <- qc <- NULL
+  stage_callback <- function(stage, status, value) {
+    if (status == "error") {
+      appusage_mark_workflow_stage_failed_safely(configuration_file, stage, value)
+      return(invisible(NULL))
     }
-    for (stage in completed_stages) {
-      config <- appusage_workflow_state_complete(config, stage)
-    }
-    configuration_file <- appusage_write_workflow_configuration(config)
-  } else {
-    config <- appusage_workflow_state_begin(config, "first_level")
-    configuration_file <- appusage_write_workflow_configuration(config)
-    tryCatch({
-      if (isTRUE(resume_state$use_existing_first_level)) {
-        resumed <- TRUE
-        first <- appusage_read_summary_csv(
-          file.path(project$project_root, "analytic_summary_table_proclevel-1.csv")
-        )
-        if (nrow(first) == 0) {
-          cli::cli_abort("Existing first-level summary is empty. Use `overwrite = TRUE` to recreate the selected output study folder.")
-        }
-        config$output_study_dir <- project$project_root
-        diagnostics <- appusage_prepare_diagnostics(project$project_root)
-        manifest_file <- appusage_write_project_manifest(manifest, diagnostics$diagnostics_dir)
-        appusage_console_emit_stage_summary(
-          progress = progress,
-          summary = first,
-          stage_label = "first-level",
-          total = n_appusage,
-          project_root = project$project_root,
-          status_col = "status"
-        )
-        appusage_abort_if_strict_failures(first, strict, "first_level")
-      } else {
-        first <- read_appusage_batch(
-          txt_files,
-          output_dir = output_root,
-          project_name = project$output_project_name,
-          project_id = project$output_project_id,
-          type = type,
-          input = "file",
-          tz = tz,
-          encoding = encoding,
-          strict = FALSE,
-          overwrite = overwrite,
-          progress = FALSE,
-          parallel = parallel,
-          n_cores = n_cores,
-          resume = resume,
-          checkpoint_every = first_level_checkpoint_every,
-          max_workers = first_level_max_workers,
-          worker_cap_override = first_level_worker_cap_override,
-          retry_memory_allocation = retry_memory_allocation,
-          memory_retry_workers = memory_retry_workers,
-          provenance = run_provenance
-        )
-        project$project_root <- unique(stats::na.omit(first$project_root))[[1]]
-        config$output_study_dir <- project$project_root
-        diagnostics <- appusage_prepare_diagnostics(project$project_root)
-        manifest_file <- appusage_write_project_manifest(manifest, diagnostics$diagnostics_dir)
-        first <- appusage_attach_diagnostics(
-          summary = first,
-          manifest = manifest,
-          stage = "first_level",
-          project = project,
-          diagnostics = diagnostics,
-          diagnostic_verbosity = diagnostic_verbosity
-        )
-        utils::write.csv(first,
-          file.path(project$project_root, "analytic_summary_table_proclevel-1.csv"),
-          row.names = FALSE,
-          na = ""
-        )
-        appusage_console_emit_stage_summary(
-          progress = progress,
-          summary = first,
-          stage_label = "first-level",
-          total = n_appusage,
-          project_root = project$project_root,
-          status_col = "status"
-        )
-        appusage_abort_if_strict_failures(first, strict, "first_level")
-      }
-    }, error = function(e) {
-      appusage_mark_workflow_stage_failed_safely(
-        configuration_file,
-        "first_level",
-        e
-      )
-      stop(e)
-    })
-    config <- appusage_workflow_state_complete(config, "first_level")
-    configuration_file <- appusage_write_workflow_configuration(config)
-
-    if (isTRUE(run_second_level)) {
-      config <- appusage_workflow_state_begin(config, "second_level")
-      configuration_file <- appusage_write_workflow_configuration(config)
-      tryCatch({
-        second <- write_second_level_batch(first,
-          overwrite = overwrite,
-          resume = resume,
-          progress = FALSE,
-          parallel = parallel,
-          n_cores = n_cores,
-          provenance = run_provenance,
-          ...
-        )
-        second <- appusage_attach_diagnostics(
-          summary = second,
-          manifest = manifest,
-          stage = "second_level",
-          project = project,
-          diagnostics = diagnostics,
-          source_summary = first,
-          diagnostic_verbosity = diagnostic_verbosity
-        )
-        utils::write.csv(second,
-          file.path(project$project_root, "analytic_summary_table_proclevel-2.csv"),
-          row.names = FALSE,
-          na = ""
-        )
-        appusage_console_emit_stage_summary(
-          progress = progress,
-          summary = second,
-          stage_label = "second-level",
-          total = n_appusage,
-          project_root = project$project_root,
-          status_col = "status"
-        )
-        appusage_abort_if_strict_failures(second, strict, "second_level")
-      }, error = function(e) {
-        appusage_mark_workflow_stage_failed_safely(
-          configuration_file,
-          "second_level",
-          e
-        )
-        stop(e)
-      })
-      config <- appusage_workflow_state_complete(config, "second_level")
-      configuration_file <- appusage_write_workflow_configuration(config)
-    }
-
-    if (isTRUE(run_qc) && !is.null(second)) {
-      config <- appusage_workflow_state_begin(config, "qc")
-      configuration_file <- appusage_write_workflow_configuration(config)
-      tryCatch({
-        qc <- if (appusage_second_summary_has_inline_qc(second)) {
-          second
-        } else {
-          write_qc_metadata_batch(project$project_root,
-            strict = FALSE,
-            progress = FALSE,
-            overwrite = TRUE
-          )
-        }
-        qc <- appusage_attach_diagnostics(
-          summary = qc,
-          manifest = manifest,
-          stage = "qc",
-          project = project,
-          diagnostics = diagnostics,
-          source_summary = first,
-          diagnostic_verbosity = diagnostic_verbosity
-        )
-        qc <- appusage_merge_qc_with_second_level_skips(qc, second)
-        utils::write.csv(qc,
-          file.path(project$project_root, "analytic_summary_table_proclevel-2.csv"),
-          row.names = FALSE,
-          na = ""
-        )
-        appusage_console_emit_stage_summary(
-          progress = progress,
-          summary = qc,
-          stage_label = "QC-daily-qc-v1",
-          total = n_appusage,
-          project_root = project$project_root,
-          status_col = "qc_status"
-        )
-        appusage_abort_if_strict_failures(qc, strict, "qc")
-      }, error = function(e) {
-        appusage_mark_workflow_stage_failed_safely(configuration_file, "qc", e)
-        stop(e)
-      })
-      config <- appusage_workflow_state_complete(config, "qc")
-      configuration_file <- appusage_write_workflow_configuration(config)
-    }
+    config <<- if (status == "started") appusage_workflow_state_begin(config, stage) else
+      appusage_workflow_state_complete(config, stage)
+    configuration_file <<- appusage_write_workflow_configuration(config)
+    invisible(NULL)
   }
+  result_callback <- function(stage, value) {
+    reused <- isTRUE(attr(value, "stage_reused"))
+    value <- appusage_attach_diagnostics(summary = value, manifest = manifest,
+      stage = stage, project = project, diagnostics = diagnostics,
+      source_summary = if (stage == "first_level") NULL else first,
+      diagnostic_verbosity = diagnostic_verbosity)
+    if (stage == "first_level") first <<- value
+    if (stage == "second_level") second <<- value
+    if (stage == "qc") value <- appusage_merge_qc_with_second_level_skips(value, second)
+    summary_path <- file.path(project$project_root, if (stage == "first_level")
+      "analytic_summary_table_proclevel-1.csv" else "analytic_summary_table_proclevel-2.csv")
+    if (stage == "first_level") appusage_publish_first_summary(project$project_root, value) else
+      appusage_project_summary(project$project_root, fresh = value)
+    appusage_console_emit_stage_summary(progress = progress && !reused, summary = value,
+      stage_label = switch(stage, first_level = "first-level", second_level = "second-level",
+        qc = "QC-daily-qc-v1", stage), total = n_appusage,
+      project_root = project$project_root,
+      status_col = if (stage == "qc") "qc_status" else "status")
+    appusage_abort_if_strict_failures(value, strict, stage)
+    value
+  }
+  pipeline <- appusage_execute_pipeline(txt_files, output_root,
+    config = effective_config, project_name = project$output_project_name,
+    project_id = project$output_project_id, project_dir = project$project_root,
+    run_second_level = run_second_level, provenance = run_provenance,
+    first_options = list(max_workers = first_level_max_workers,
+      worker_cap_override = first_level_worker_cap_override,
+      retry_memory_allocation = retry_memory_allocation,
+      memory_retry_workers = memory_retry_workers, strict = FALSE),
+    stage_callback = stage_callback, result_callback = result_callback)
+  first <- pipeline$first_level
+  second <- pipeline$second_level
+  qc <- pipeline$qc
 
   config <- appusage_workflow_state_begin(config, "self_report_matching")
   configuration_file <- appusage_write_workflow_configuration(config)
@@ -1692,8 +1548,7 @@ appusage_prepare_workflow_resume <- function(project, config, resume, overwrite)
   if (!file.exists(config_file)) {
     return(list(
       existing_config = NULL,
-      use_existing_first_level = isTRUE(resume) &&
-        appusage_first_level_summary_complete(first_summary_file),
+      use_existing_first_level = FALSE,
       use_existing_second_level = FALSE,
       first_level_checkpoint = if (file.exists(first_checkpoint_file)) {
         normalizePath(first_checkpoint_file, winslash = "/", mustWork = FALSE)
@@ -1708,15 +1563,10 @@ appusage_prepare_workflow_resume <- function(project, config, resume, overwrite)
   if (length(incompatible) > 0) {
     cli::cli_abort("Existing workflow configuration is incompatible for field(s): {paste(incompatible, collapse = ', ')}. Use `overwrite = TRUE` to recreate the selected output study folder.")
   }
-  use_existing <- isTRUE(resume) &&
-    length(list.files(file.path(project$project_root, "proclevel-2"),
-      pattern = "_proc-2[.]rda$",
-      full.names = TRUE
-    )) > 0 &&
-    file.exists(second_summary_file)
-  use_existing_first <- isTRUE(resume) &&
-    !isTRUE(use_existing) &&
-    appusage_first_level_summary_complete(first_summary_file)
+  # Source-level executors validate the selected inputs and effective settings.
+  # A summary (or one existing RDA) cannot certify an entire project complete.
+  use_existing <- FALSE
+  use_existing_first <- FALSE
   if (dir.exists(project$project_root) && !isTRUE(resume) && !isTRUE(use_existing)) {
     cli::cli_abort("Project output folder already exists: {.path {project$project_root}}")
   }
@@ -1735,10 +1585,8 @@ appusage_prepare_workflow_resume <- function(project, config, resume, overwrite)
 
 appusage_workflow_config_differences <- function(existing, current) {
   fields <- c(
-    "raw_data_root", "resolved_project_dir", "resolved_self_report_file",
-    "project_id", "project_name", "output_root", "sequence_col",
-    "upload_col", "submit_time_col", "max_files", "self_report_n_max",
-    "self_report_sheet", "self_report_guess_max", "self_report_col_types"
+    "raw_data_root", "resolved_project_dir",
+    "project_id", "project_name", "output_root"
   )
   defaults <- list(
     self_report_sheet = 1,
@@ -2797,6 +2645,7 @@ appusage_maybe_match_self_report <- function(self_report, self_report_file, mani
     project_id = project$project_id
   )
   appusage_write_xlsx(matched$matched_self_report, out_file)
+  appusage_save_link_result(project$project_root, matched)
   appusage_write_match_metadata(project$project_root, matched$diagnostics)
   appusage_refresh_match_summary(project$project_root, matched$file_matches)
   list(
@@ -2814,7 +2663,7 @@ appusage_match_self_report_table <- function(self_report, manifest,
                                              self_report_n_max = Inf,
                                              export_type_priority = c("line", "meta", "day", "app"),
                                              project_id = NA_character_,
-                                             project_name = NA_character_) {
+                                             project_name = NA_character_, resolved = FALSE) {
   data <- appusage_read_self_report_rows(self_report, self_report_n_max)
   required <- c(sequence_col, upload_col)
   missing <- setdiff(required, names(data))
@@ -2825,7 +2674,7 @@ appusage_match_self_report_table <- function(self_report, manifest,
     cli::cli_abort("Self-report table is missing `submit_time_col`: {.val {submit_time_col}}.")
   }
 
-  manifest <- appusage_manifest_with_proc2_paths(manifest, first, second, project_root)
+  if (!isTRUE(resolved)) manifest <- appusage_manifest_with_proc2_paths(manifest, first, second, project_root)
   upload_candidates <- lapply(data[[upload_col]], extract_wenjuanxing_upload_filenames)
   sequence <- appusage_sequence_vector(data[[sequence_col]])
   submit_time <- if (!is.null(submit_time_col)) {
@@ -2857,10 +2706,11 @@ appusage_match_self_report_table <- function(self_report, manifest,
       file_matches$self_report_match_status[[row_match$manifest_index]] <- row_match$row$moSens_match_status
     }
   }
-  additions <- tibble::as_tibble(do.call(rbind, rows))
+  additions <- if (length(rows)) tibble::as_tibble(do.call(rbind, rows)) else
+    tibble::as_tibble(appusage_match_output_row("unmatched_sequence", NA_integer_)[0, ])
   matched <- cbind(data, additions, stringsAsFactors = FALSE)
-  matched$moSens_project_id <- project_id
-  matched$moSens_project_name <- project_name
+  matched$moSens_project_id <- rep(project_id, nrow(matched))
+  matched$moSens_project_name <- rep(project_name, nrow(matched))
   diagnostics <- appusage_match_diagnostics(matched, file_matches,
     project_id = project_id,
     project_name = project_name
@@ -3003,7 +2853,7 @@ appusage_manifest_with_proc2_paths <- function(manifest, first, second, project_
   first_data_key <- normalized_summary_path(first_data)
   for (candidate_col in c("first_level_data_file", "first_level_rda")) {
     if (candidate_col %in% names(second)) {
-      missing <- is.na(second_idx) & has_first
+      missing <- is.na(second_idx) & has_first & !is.na(first_data_key)
       second_idx[missing] <- match(first_data_key[missing], normalized_summary_path(second[[candidate_col]]))
     }
   }
@@ -3011,6 +2861,7 @@ appusage_manifest_with_proc2_paths <- function(manifest, first, second, project_
   if (any(missing)) {
     first_key <- appusage_identity_summary_key(first)
     second_key <- appusage_identity_summary_key(second)
+    second_key[duplicated(second_key) | duplicated(second_key, fromLast = TRUE)] <- NA_character_
     second_idx[missing] <- match(first_key[first_idx[missing]], second_key)
   }
   has_second <- !is.na(second_idx)
@@ -3021,6 +2872,13 @@ appusage_manifest_with_proc2_paths <- function(manifest, first, second, project_
     appusage_summary_proc2_path(second, i)
   }, character(1))
   valid <- !is.na(rda) & appusage_text_nzchar(rda) & file.exists(rda)
+  status_field <- intersect(c("second_level_status", "status"), names(second))
+  if (length(status_field)) {
+    status <- as.character(second[[status_field[[1]]]][second_idx[has_second]])
+    reused <- if ("skip_reason" %in% names(second))
+      second$skip_reason[second_idx[has_second]] %in% "existing_proc2_cache" else FALSE
+    valid <- valid & (status %in% "success" | (status %in% "skipped" & reused))
+  }
   target <- which(has_second)[valid]
   if (length(target) > 0) {
     normalized <- normalizePath(rda[valid], winslash = "/", mustWork = FALSE)
@@ -3345,24 +3203,8 @@ appusage_refresh_match_summary <- function(project_root, file_matches) {
   if (nrow(summary) == 0) {
     return(invisible(NULL))
   }
-  summary$self_report_match_status <- NA_character_
-  summary$self_report_sequence_id <- NA_integer_
-  matched <- match(
-    normalized_summary_path(appusage_summary_proc2_paths(summary)),
-    normalized_summary_path(file_matches$second_level_rda)
-  )
-  missing <- is.na(matched)
-  if (any(missing)) {
-    summary_key <- appusage_identity_summary_key(summary)
-    file_key <- appusage_text_paste(file_matches$wenjuanxing_sequence_id, file_matches$filename_export_type, sep = "\r")
-    matched[missing] <- match(summary_key[missing], file_key)
-  }
-  has_match <- !is.na(matched)
-  if (any(has_match)) {
-    summary$self_report_match_status[has_match] <- file_matches$self_report_match_status[matched[has_match]]
-    summary$self_report_sequence_id[has_match] <- file_matches$self_report_sequence_id[matched[has_match]]
-  }
-  utils::write.csv(summary, summary_file, row.names = FALSE, na = "")
+  summary <- appusage_apply_match_projection(summary, file_matches)
+  appusage_project_summary(project_root, fresh = summary)
   invisible(summary_file)
 }
 
