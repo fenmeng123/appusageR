@@ -2,6 +2,12 @@
 
 S3method("[",appusage_parse_context)
 S3method(dim,appusage_parse_context)
+S3method(print,appusage_plan)
+S3method(print,appusage_project_workflow)
+S3method(print,appusage_workflow_result)
+S3method(summary,appusage_plan)
+S3method(summary,appusage_project_workflow)
+S3method(summary,appusage_workflow_result)
 export(add_app_categories)
 export(add_weekday)
 export(appusage_config)

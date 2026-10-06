@@ -220,7 +220,7 @@ appusage_proc1_row_from_json <- function(json_path,
                                          strict = FALSE) {
   json_norm <- normalizePath(json_path, winslash = "/", mustWork = FALSE)
   metadata <- tryCatch(
-    jsonlite::read_json(json_norm, simplifyVector = FALSE),
+    appusage_read_json(json_norm, simplifyVector = FALSE),
     error = function(e) e
   )
 

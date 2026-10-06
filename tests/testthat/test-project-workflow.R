@@ -1439,6 +1439,14 @@ test_that("project workflow reads the self-report workbook once and reuses its t
   expect_true(is.na(config$self_report_guess_max))
   expect_identical(config$self_report_col_types, character())
   expect_equal(config$self_report_read$warning_count, 0L)
+  resumed <- run_appusage_project_workflow(
+    raw_data_root = fixture$root, project_id = "123", project_name = "StudyA",
+    output_root = output_root, sequence_col = names(openxlsx::read.xlsx(fixture$excel))[[1]],
+    upload_col = "upload", submit_time_col = names(openxlsx::read.xlsx(fixture$excel))[[3]],
+    progress = FALSE, diagnostic_verbosity = "none")
+  expect_equal(read_count, 1L)
+  expect_identical(resumed$matched_self_report, result$matched_self_report)
+  expect_identical(resumed$self_report_read_diagnostics, result$self_report_read_diagnostics)
 })
 
 test_that("workbook read changes no longer invalidate preprocessing project identity", {

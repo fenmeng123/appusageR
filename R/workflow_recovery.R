@@ -25,7 +25,7 @@ appusage_align_first_level_seed <- function(existing, x, id_plan, input, type,
     if (!"participant_id" %in% names(row)) row$participant_id <- id_plan$participant_id[[i]]
     metadata_file <- appusage_get_col_value(row, "metadata_file", NA_character_)
     metadata <- if (is_present_string(metadata_file) && file.exists(metadata_file)) {
-      tryCatch(jsonlite::read_json(metadata_file, simplifyVector = TRUE), error = function(e) NULL)
+      tryCatch(appusage_read_json(metadata_file, simplifyVector = TRUE), error = function(e) NULL)
     } else NULL
     valid <- appusage_first_contract_valid(row, metadata, requested,
       x[[i]], input, provenance$source_verification %||% "content")
@@ -40,17 +40,32 @@ appusage_align_first_level_seed <- function(existing, x, id_plan, input, type,
   do.call(bind_appusage_summary_rows, rows)
 }
 
-appusage_second_cache_for_options <- function(cache, options, provenance = NULL, verify = TRUE) {
+appusage_second_cache_for_options <- function(cache, options, provenance = NULL, verify = TRUE,
+                                              requested = NULL) {
   if (!identical(cache$status, "complete")) return(cache)
-  requested <- appusage_research_contract(options, provenance)
+  requested <- requested %||% appusage_research_contract(options, provenance)
   upstream_ok <- (is.null(cache$metadata$module_state$upstream_parse) && is.null(cache$upstream_parse)) ||
     appusage_contract_equal(cache$metadata$module_state$upstream_parse, cache$upstream_parse)
-  if (!appusage_contract_equal(cache$metadata$module_state$research_data, requested) ||
-      !upstream_ok ||
-      !appusage_artifact_valid(cache$rda_file, cache$metadata$module_state$artifact, verify)) {
+  recorded <- cache$metadata$module_state$research_data
+  contract_ok <- appusage_research_values_compatible(recorded, requested)
+  artifact_ok <- appusage_artifact_valid(cache$rda_file, cache$metadata$module_state$artifact, verify)
+  if (!contract_ok || !upstream_ok || !artifact_ok) {
     cache$status <- "incomplete"
     cache$pair_state <- "stale_configuration"
-    cache$reason <- "research_configuration_or_implementation_changed"
+    cache$reason <- if (!contract_ok) {
+      if (is.null(recorded)) "verification_insufficient" else
+        if (!identical(recorded$implementation, requested$implementation)) "implementation_changed" else "configuration_changed"
+    } else if (!upstream_ok) "upstream_changed" else "artifact_corrupt_or_unverified"
   }
   cache
+}
+
+appusage_research_values_compatible <- function(recorded, requested) {
+  # These two settings own labels/counts, not numerical research values. The
+  # executor synchronizes them before publishing/reusing the research cache.
+  if (is.null(recorded)) return(FALSE)
+  for (name in c("max_episode_ms", "max_daily_app_ms")) {
+    recorded$configuration[[name]] <- requested$configuration[[name]]
+  }
+  appusage_contract_equal(recorded, requested)
 }

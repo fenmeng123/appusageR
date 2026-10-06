@@ -44,30 +44,69 @@ appusage_matching_manifest <- function(manifest) {
   manifest
 }
 
-appusage_run_matching_stage <- function(project_dir, config, first, second) {
+appusage_run_matching_stage <- function(project_dir, config, first, second,
+                                         adapter = NULL, publish = TRUE) {
   settings <- config$matching
+  adapter <- adapter %||% appusage_matching_adapter(project_dir, settings)
+  requested <- appusage_matching_request(project_dir, config, first, second, adapter = adapter)
+  prior_state <- appusage_projection_state(project_dir)$matching
+  owner <- file.path(project_dir, "self_report_link_result.rds")
+  if (config$execution$resume && !config$execution$overwrite &&
+      appusage_matching_request_valid(prior_state, requested, project_dir, "content")) {
+    prior <- readRDS(owner)
+    if (!is.null(adapter$workbook_read) &&
+        isTRUE(adapter$workbook_read$diagnostics$warning_count == 0)) {
+      prior_state$workbook_read <- adapter$workbook_read
+      appusage_save_projection_state(project_dir, "matching", prior_state)
+    }
+    attr(prior, "stage_reused") <- TRUE
+    if (publish) appusage_publish_project(project_dir, config, matching = prior, adapter = adapter)
+    return(prior)
+  }
   self_report <- settings$self_report %||% settings$self_report_file
   if (is.null(self_report)) cli::cli_abort("Matching requires a questionnaire table or file.")
-  self_report <- appusage_read_self_report_rows(self_report)
-  manifest <- appusage_matching_manifest(data.frame(source_file = first$source_file))
+  workbook_read <- NULL
+  self_report <- if (!is.null(adapter$data)) adapter$data else if (!is.null(adapter)) {
+    workbook_read <- appusage_read_self_report_workbook(self_report, sheet = adapter$self_report_sheet,
+      n_max = adapter$self_report_n_max,
+      guess_max = if (is.na(adapter$self_report_guess_max)) NULL else adapter$self_report_guess_max,
+      col_types = if (length(adapter$self_report_col_types)) adapter$self_report_col_types else NULL,
+      diagnostics_dir = file.path(project_dir, "diagnostics"))
+    workbook_read$data
+  } else appusage_read_self_report_rows(self_report)
+  manifest <- adapter$manifest %||% appusage_matching_manifest(data.frame(source_file = first$source_file))
+  missing_sources <- first$source_file[!normalized_summary_path(first$source_file) %in%
+    normalized_summary_path(manifest$source_file)]
+  if (length(missing_sources)) manifest <- bind_appusage_summary_rows(manifest,
+    appusage_matching_manifest(data.frame(source_file = missing_sources)))
   manifest <- appusage_manifest_with_proc2_paths(manifest, first, second, project_dir)
   contract <- list(configuration = settings[setdiff(names(settings), c("self_report", "self_report_file"))],
     questionnaire = appusage_object_fingerprint(self_report),
     references = appusage_object_fingerprint(manifest),
-    implementation = appusage_function_fingerprint(c("appusage_match_self_report_table",
-      "extract_wenjuanxing_upload_filenames", "appusage_match_one_self_report_row",
-      "appusage_resolve_duplicate_manifest_candidates", "appusage_build_manifest_match_index")))
-  owner <- file.path(project_dir, "self_report_link_result.rds")
-  if (file.exists(owner) && config$execution$resume && !config$execution$overwrite) {
-    prior <- tryCatch(readRDS(owner), error = function(e) NULL)
-    if (appusage_contract_equal(prior$contract, contract)) return(prior)
-  }
-  result <- match_appusage_self_report(self_report, manifest, project_dir,
-    settings$sequence_col, settings$upload_col, settings$submit_time_col,
-    settings$export_type_priority)
+    implementation = appusage_matching_implementation())
+  result <- appusage_match_self_report_table(self_report, manifest, project_dir,
+    first = first, second = second, sequence_col = settings$sequence_col,
+    upload_col = settings$upload_col, submit_time_col = settings$submit_time_col,
+    export_type_priority = settings$export_type_priority, resolved = TRUE,
+    project_id = adapter$project_id %||% NA_character_,
+    project_name = adapter$project_name %||% NA_character_)
+  class(result) <- c("appusage_link_result", "list")
   result$contract <- contract
   appusage_save_link_result(project_dir, result)
   appusage_write_match_metadata(project_dir, result$diagnostics)
-  appusage_project_summary(project_dir)
+  appusage_save_projection_state(project_dir, "matching", list(request = requested,
+    input_stat = if (is.character(settings$self_report_file)) appusage_source_stat(settings$self_report_file) else NULL,
+    owner = appusage_artifact_signature(owner),
+    workbook_read = {
+      read <- if (!is.null(workbook_read)) workbook_read[c("diagnostics", "diagnostics_file")] else
+        adapter$workbook_read
+      if (isTRUE(read$diagnostics$warning_count == 0)) read else NULL
+    }))
+  if (publish) appusage_publish_project(project_dir, config, matching = result, adapter = adapter)
+  attr(result, "stage_reused") <- FALSE
+  if (!is.null(workbook_read)) {
+    workbook_read$data <- NULL
+    attr(result, "self_report_read") <- workbook_read
+  }
   result
 }

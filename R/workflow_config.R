@@ -178,7 +178,8 @@ appusage_qc_implementation_fingerprint <- function() {
     "appusage_check_episode_anomalies", "appusage_check_daily_anomalies",
     "appusage_check_export_span_anomalies", "appusage_line_overlap_qc",
     "appusage_line_timestamp_qc", "appusage_meta_reconstruction_qc",
-    "appusage_source_qc_config", "appusage_source_qc_interval_segments"))
+    "appusage_source_qc_config", "appusage_source_qc_interval_segments",
+    "appusage_sync_qc_labels"))
 }
 
 appusage_contract_equal <- function(recorded, requested) {
@@ -187,6 +188,8 @@ appusage_contract_equal <- function(recorded, requested) {
     if (is.numeric(x)) return(as.numeric(x))
     x
   }
-  !is.null(recorded) && identical(appusage_object_fingerprint(normalize(recorded)),
-    appusage_object_fingerprint(normalize(requested)))
+  # Compare the same canonical values directly. The former comparison wrote
+  # two temporary files merely to compare their hashes on every source/stage.
+  !is.null(recorded) && identical(appusage_canonical_object(normalize(recorded)),
+    appusage_canonical_object(normalize(requested)))
 }

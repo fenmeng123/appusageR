@@ -239,7 +239,7 @@ appusage_stop_on_daily_self_check <- function(result) {
   stop(condition)
 }
 
-appusage_daily_self_check_summary_values <- function(metadata_file = NA_character_) {
+appusage_daily_self_check_summary_values <- function(metadata_file = NA_character_, metadata = NULL) {
   empty <- list(
     daily_self_check_status = NA_character_,
     daily_self_check_missing_source_keys = NA_integer_,
@@ -250,11 +250,7 @@ appusage_daily_self_check_summary_values <- function(metadata_file = NA_characte
     daily_self_check_order_violation = NA,
     daily_self_check_conservation_diff_ms = NA_real_
   )
-  if (!is_present_string(metadata_file) || !file.exists(metadata_file)) return(empty)
-  metadata <- tryCatch(
-    jsonlite::read_json(metadata_file, simplifyVector = TRUE),
-    error = function(e) NULL
-  )
+  if (missing(metadata)) metadata <- appusage_read_json_safely(metadata_file)
   check <- metadata$daily_aggregation_self_check
   if (!is.list(check)) return(empty)
   list(
@@ -283,12 +279,13 @@ appusage_daily_self_check_summary_values <- function(metadata_file = NA_characte
   )
 }
 
-appusage_attach_daily_self_check_summary <- function(row, metadata_file = NA_character_) {
-  values <- appusage_daily_self_check_summary_values(metadata_file)
+appusage_attach_daily_self_check_summary <- function(row, metadata_file = NA_character_, metadata = NULL) {
+  if (missing(metadata)) metadata <- appusage_read_json_safely(metadata_file)
+  values <- appusage_daily_self_check_summary_values(metadata_file, metadata)
   for (name in names(values)) row[[name]] <- values[[name]]
-  source_values <- appusage_source_qc_summary_values(metadata_file)
+  source_values <- appusage_source_qc_summary_from_metadata(metadata)
   for (name in names(source_values)) row[[name]] <- source_values[[name]]
-  provenance_values <- appusage_provenance_summary_values_from_file(metadata_file)
+  provenance_values <- appusage_provenance_summary_values(appusage_metadata_provenance(metadata))
   for (name in names(provenance_values)) row[[name]] <- provenance_values[[name]]
   row
 }

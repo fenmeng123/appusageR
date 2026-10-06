@@ -1,312 +1,154 @@
-appusageR
-================
+# appusageR <img src="man/figures/logo.png" align="right" width="150" alt="appusageR logo" />
 
-`appusageR` parses, validates, standardizes, and summarizes exported APP
-Usage / Screen Time Android smartphone-use logs for reproducible
-research workflows. Version 0.3.6 provides faithful raw parsers,
-BIDS-like per-source cache files, second-level event/episode/daily
-outputs, breakpoint-aware resume and rerun support, memory-aware
-parallel batch workflows, manual app-category enrichment, project-level
-Wenjuanxing/self-report matching, and structured workflow diagnostics.
+appusageR converts APP Usage / Screen Time Android text exports into structured
+data for behavioral and mobile-sensing research.
+Its architecture separates callable data-processing modules from a workflow
+that configures, sequences, and resumes their execution.
+Two per-source cache levels connect these modules: faithful parsed data
+(`proc-1`) and research data containing events, episodes, and daily summaries
+(`proc-2`).
 
-Version 0.3.6 adds a validated configuration, source-stage plan and shared generic
-workflow. Independent scientific modules remain usable without project IO.
-It retains scientific schema 0.3.4 and the accepted 0.3.5 performance structures.
-Validation passed 1809 assertions and R CMD check with 0 errors/warnings/notes.
-An isolated 559-source project and exhaustive artifact/recovery audits passed;
-500 sources completed through QC and 59 retained explained input failures.
-Version 0.3.6 was accepted by the user on 2026-10-03; no full-corpus migration is implied.
+<br clear="right" />
 
-```r
-library(appusageR)
-config <- appusage_config(time = list(tz = "Asia/Shanghai"))
-plan <- plan_appusage_workflow(c("raw/a.txt", "raw/b.txt"), "outputs/study", config)
-plan$tasks
-result <- run_appusage_workflow(plan = plan)
-result <- run_appusage_workflow(project_dir = "outputs/study")  # resume
-qc <- run_appusage_stage("qc", "outputs/study", config)
+```mermaid
+flowchart TB
+    W["Workflow: configure → plan → execute / resume"]
+    W --> P
+    subgraph Sources["Per-source processing"]
+        P["Text input and parsing<br/>proc-1 cache"]
+        S["Standardization and episode reconstruction"]
+        D["Daily aggregation"]
+        C["Research data<br/>proc-2 cache"]
+        Q["Quality control"]
+        A["App categories · optional"]
+        P --> S --> D --> C
+        C --> Q
+        C --> A
+    end
+    C --> M["Self-report matching · optional"]
+    Q --> O["Project summaries and exports"]
+    A --> O
+    M --> O
+    P -. "Source diagnostics" .-> O
 ```
 
-Use the optional `run_appusage_project_workflow()` adapter for Wenjuanxing
-discovery and matched Excel output. See the workflow vignette for standalone
-modules, configuration fields, cache verification and source-by-grain contracts.
-
-Version 0.3.5 refactors preprocessing structures, shares QC computation and
-uses stringi for data-text operations. The user accepted its measured performance
-on 2026-10-03. Public interfaces and output schema 0.3.4 remain unchanged.
-Historical-output migration remains a separate decision.
-
-Author: Kunru Song (<Kunrusong97@gmail.com>)
-
-The package parses files that already exist; it is not an Android data
-collector and does not implement questionnaire CIER detection.
-
-APP Usage exports measure Android foreground-use duration from Android
-usage statistics. They should not be interpreted directly as attention,
-engagement, or subjective involvement with an app.
-
-The preprocessing core uses scientific schema 0.3.4 and auditable per-source
-caches:
-
-- raw parsers remain faithful to APP Usage export content;
-- `duration_ms` and millisecond timestamp fields are the numeric sources
-  of truth;
-- formatted duration text is retained only as audit/display information;
-- `package_name` is the stable app identity key;
-- `app_name` is retained for human inspection and reporting;
-- diagnostics and category-enrichment outputs are metadata by default,
-  not row-deletion rules.
-
-The package does not scrape app stores and does not infer sensitive app
-categories automatically.
+The computational modules operate on R objects.
+The workflow adds file access, content-based cache validation, stage records,
+and project outputs.
 
 ## Installation
 
-``` r
-# Install from GitHub
-install.packages("devtools")
-devtools::install_github("fenmeng123/appusageR")
-```
-
-## Detect Export Type
-
-``` r
+```r
+install.packages("remotes")
+remotes::install_github("fenmeng123/appusageR")
 library(appusageR)
-
-detect_appusage_type("participant_AppUsage_line.txt")
-detect_appusage_type("participant_AppUsage_meta.txt")
-detect_appusage_type("participant_AppUsage_day.txt")
-detect_appusage_type("participant_AppUsage_app.txt")
 ```
 
-## Parse Individual Files
+## Workflow and recovery
 
-``` r
-line_records <- parse_line("participant_AppUsage_line.txt", participant_id = "p001")
-meta_records <- parse_meta("participant_AppUsage_meta.txt", participant_id = "p001")
-day_records <- parse_day("participant_AppUsage_day.txt", participant_id = "p001")
-app_records <- parse_app("participant_AppUsage_app.txt", participant_id = "p001")
-```
+The workflow combines module settings with execution controls in one configuration.
+Its plan explains which source and project stages will run, reuse results, or remain blocked.
+Execution validates current inputs and caches, then resumes the affected stages.
 
-`parse_meta()` returns `list(summary = ..., events = ...)`. The other
-parsers return tibbles. Rows are sorted chronologically where the export
-contains timestamps or dates.
+- `appusage_config()` sets parsing, timezone, reconstruction, daily, QC,
+  category, matching, and execution options.
+- `plan_appusage_workflow()` previews source tasks and project tasks.
+- `run_appusage_workflow()` executes a plan or resumes a saved project.
+- `run_appusage_stage()` runs `parse`, `research_data`, `qc`, `category`,
+  `matching`, or `summary` independently.
 
-## Module-Level Workflow
-
-The compatible user-facing entry points include:
-
-- `read_appusage_text()` for raw text I/O;
-- `run_first_level_appusage()` for one source file or text object;
-- `run_second_level_appusage()` for one first-level result/cache;
-- `run_appusage_workflow()` for the full configured cache workflow;
-- `run_appusage_project_workflow()` for project-level preprocessing and
-  Wenjuanxing/self-report matching.
-
-Existing lower-level parser and batch functions remain exported for
-advanced or developer-facing use.
-
-## Batch Preprocessing
-
-For large studies, use `read_appusage_batch()` to write per-file `.rda`
-caches and invisibly return a detailed summary table.
-
-``` r
-files <- list.files("raw_exports", pattern = "\\.txt$", full.names = TRUE)
-
-batch_summary <- read_appusage_batch(
-  files,
-  output_dir = "output_cache",
-  overwrite = FALSE,
-  progress = TRUE
+```r
+config <- appusage_config(time = list(tz = "Asia/Shanghai"))
+plan <- plan_appusage_workflow(
+  c("raw/a.txt", "raw/b.txt"), "outputs/study", config
 )
+print(plan)
+result <- run_appusage_workflow(plan = plan)
+result <- run_appusage_workflow(project_dir = "outputs/study")
+summary(result)
 ```
 
-Each successfully parsed source produces two first-level files:
+## Text input and parsing
 
-- a BIDS-like metadata JSON file;
-- a BIDS-like RDA data file.
+This module decodes text and detects the line, meta, day, and app export formats.
+The parsers retain the native records and source diagnostics.
+The first-level runner combines these steps and can save a parsed `proc-1` cache.
 
-The RDA file contains exactly one object named `data`.
-Failed sources retain diagnostic JSON and a summary row without a successful RDA.
+- `read_appusage_text()` reads and decodes input; `detect_appusage_type()`
+  identifies its content.
+- `parse_line()`, `parse_meta()`, `parse_day()`, and `parse_app()` parse
+  individual exports; `parse_meta()` returns separate summary and event tables.
+- `run_first_level_appusage()` processes one source; `read_appusage_batch()`
+  processes a file collection.
 
-The returned `batch_summary` records detected type, status, metadata
-path, data path, row counts, parse-warning counts, warnings, error
-messages, error classes, calls, traceback text, and timing.
+## Standardization and episodes
 
-Local reference directories are not package fixtures. In particular,
-`reference/all_text_data/` is not used in examples or tests and should
-remain untouched unless a full-data stress test is explicitly
-authorized.
+Standardization gives native records consistent columns, app identities, and numeric millisecond values.
+Episode reconstruction pairs meta start and end events and merges contiguous use of the same app.
+The resulting foreground timeline resolves overlapping episodes and retains their original durations in audit fields.
 
-## Breakpoint-Aware Resume and Rerun
+- `standardize_appusage()` prepares common event, episode, and daily inputs.
+- `reconstruct_meta_episodes()` builds episodes from parsed meta events.
+- `run_second_level_appusage()` composes standardization, reconstruction,
+  and daily aggregation into research data.
 
-``` r
-project <- run_appusage_project_workflow(
-  raw_data_root = "raw_project_exports",
-  output_root = "project_cache",
-  project_id = "123456789",
-  upload_col = "uploaded_file",
-  resume = TRUE,
-  overwrite = FALSE,
-  first_level_checkpoint_every = 100,
-  retry_memory_allocation = TRUE,
-  memory_retry_workers = 1
-)
-```
+## Daily aggregation
 
-Version 0.3.3 can resume interrupted project workflows without treating
-a missing final summary as proof that all first-level work must be
-repeated. When `resume = TRUE`, the workflow can rebuild first-level
-state from existing `proclevel-1` JSON/RDA cache metadata, distinguish
-successful caches from recorded errors or incomplete cache pairs, and
-continue missing or retryable files instead of reparsing valid
-successes.
+This module summarizes app use by local calendar date.
+It splits episodes at local midnight using the configured timezone.
+For meta exports, daily values come from the native summary by default, with options to retain episode-derived estimates or both sources as labeled rows.
 
-First-level batches write durable checkpoint summaries during long runs.
-Memory allocation failures are classified separately from malformed
-content and can be retried with a reduced worker count. Existing
-complete second-level caches are skipped when `resume = TRUE` and
-`overwrite = FALSE`, while incomplete or selected rows can be rebuilt
-through the same project cache layout.
+- `build_appusage_daily()` aggregates standardized data and optional meta
+  episodes; `meta_daily_source` selects `"summary"`, `"episodes"`, or `"both"`.
 
-## Parallel Batch Workflow
+## Quality control
 
-``` r
-files <- list.files("raw_exports", pattern = "\\.txt$", full.names = TRUE)
+QC evaluates daily coverage, duration anomalies, and source-level inconsistencies.
+It records flags and analysis eligibility for each available data grain.
+Workflow reports present execution status, QC findings, and eligibility separately.
 
-batch_summary <- read_appusage_batch(
-  files,
-  output_dir = "output_cache",
-  parallel = TRUE,
-  n_cores = 12,
-  max_workers = 12,
-  checkpoint_every = 100,
-  resume = TRUE,
-  progress = TRUE
-)
+- `assess_appusage_qc()` evaluates research data in memory.
+- `qc_appusage_anomalies()` inspects event, episode, and daily anomalies.
+- `write_qc_metadata_batch()` refreshes QC metadata and project summaries.
 
-second_level <- write_second_level_batch(
-  batch_summary,
-  parallel = TRUE,
-  n_cores = 12,
-  resume = TRUE
-)
-```
+## App categories
 
-The first-level worker selector is adaptive. It considers the requested
-worker count, available cores, source file count, source file sizes, and
-detectable memory information, then records the selected worker count
-and cap reason in the returned summary and workflow configuration. Users
-can explicitly request an override with `worker_cap_override = TRUE` or
-`first_level_worker_cap_override = TRUE` after accepting the memory
-risk.
+This optional module attaches categories from a user-supplied dictionary.
+It matches package names first, followed by exact, unambiguous app-name matches.
+It adds category fields and reports unmatched apps for manual review.
 
-Parallel workers return structured status rows to the main R process.
-The summary keeps task index, worker PID, stage, error class, error
-message, diagnostic report path, retry metadata, and final status where
-available. This keeps long batch runs auditable while preserving
-per-source cache files and returned summary order.
+- `read_app_category_dictionary()` loads a dictionary.
+- `add_app_categories()` annotates an R object; `write_app_categories_batch()`
+  updates project caches.
+- `extract_uncoded_apps()` collects apps requiring dictionary entries.
 
-## Provenance and Targeted Rebuild Planning
+## Self-report matching
 
-Each workflow run computes one implementation-provenance record. The
-workflow configuration records the current run, while proc-1/proc-2
-metadata and summary rows retain the provenance of the run that created
-each cache. The record includes package/schema versions, effective
-timezone, a workflow run ID, a Git build marker when available, and
-deterministic parser, second-level, and source QC fingerprints.
-Fingerprints describe implementation/configuration only; they do not
-hash raw participant data, filenames, or absolute project paths.
+This optional module links questionnaire rows to available APP Usage sources.
+It matches sequence IDs and uploaded filenames, then resolves multiple candidates by export type and timestamp.
+It retains unmatched questionnaire rows alongside the resolved source relationships.
 
-Use the metadata-only planner to preview narrowly targeted recovery
-work:
+- `match_appusage_self_report()` matches a questionnaire data frame against
+  a source manifest.
+- `run_appusage_project_workflow()` adapts Wenjuanxing project folders and
+  workbooks to the shared workflow and writes matched Excel output.
 
-``` r
-plan <- plan_appusage_project_rebuild(
-  "Study-Example_ProjectID-001",
-  write_plan = FALSE
-)
+## Cache summaries and exports
 
-subset(plan, eligible & requested_action != "none")
-```
+Each source has paired RDA and JSON caches for parsed and research data.
+Project summaries combine source identities, stage outcomes, QC, categories, and matching information.
+The summary stage rebuilds these projections from valid caches, while object inspection provides a compact overview.
 
-Planning is dry-run by default. It reads manifests, summaries, JSON
-metadata, and cache-pair state without loading RDA payloads or modifying
-caches. The plan uses stable `source_record_key`/fingerprint identity
-and identifies the existing filtered helper to use where execution is
-safe; it never starts a full-project overwrite itself.
+- `run_appusage_stage("summary", project_dir)` refreshes project summaries
+  and enabled matching exports.
+- `rebuild_first_level_summary_from_cache()` rebuilds the first-level source
+  summary.
+- `print()` and `summary()` inspect plan and workflow results.
 
-## Second-Level Cache Workflow
+For configuration details and examples, see the
+[workflow guide](vignettes/appusageR-workflow.Rmd).
+Version history and development records are in [NEWS.md](NEWS.md).
 
-``` r
-second_level <- write_second_level_batch(batch_summary, overwrite = TRUE)
-```
+Author: Kunru Song · <Kunrusong97@gmail.com>
 
-Second-level RDA files contain `data$event`, `data$episode`, and
-`data$daily`. Each successful second-level cache has a matching
-`proc-2.json` metadata file. Second-level summary tables are refreshed
-from metadata and worker result rows without loading every RDA payload
-into memory.
-
-Supported second-level grains by export type are:
-
-- line exports: `data$episode` and line-episode-derived `data$daily`;
-- meta exports by default: faithful `data$event` and Table 1
-  summary-derived `data$daily`;
-- meta exports with explicit reconstruction: opt-in `data$episode`, and
-  episode-derived or combined daily rows when `meta_daily_source` is
-  requested;
-- day and app exports: `data$daily`.
-
-Unavailable grains are represented by zero-row tables so downstream code
-can bind or inspect the same top-level elements. Each second-level RDA
-still contains exactly one object named `data`.
-
-Second-level tables include `activity_type` where app identity is
-available. The value is `"background"` when APP Usage app labels contain
-the background / streaming marker and `"foreground"` otherwise. This is
-a flag only; it does not drop rows or alter duration calculations.
-
-## Explicit Meta Reconstruction
-
-`parse_meta()` is faithful to the raw meta export and returns
-`list(summary = ..., events = ...)`. It never reconstructs episodes.
-
-Meta event-to-episode reconstruction is explicit and opt-in:
-
-``` r
-episodes <- reconstruct_meta_episodes(meta_records$events)
-
-second_level_meta <- run_second_level_appusage(
-  first_level_meta,
-  reconstruct_meta = TRUE,
-  meta_daily_source = "both"
-)
-```
-
-`meta_daily_source = "summary"` is the default and keeps daily rows
-based on Table 1 summary data. `"episodes"` and `"both"` require
-explicit reconstruction and retain provenance through daily-source and
-duration-comparison columns.
-
-## Manual App Categories
-
-``` r
-dict <- read_app_category_dictionary(
-  "apptypedict/apptyp_dictionary_v251016.xlsx"
-)
-
-category_summary <- write_app_categories_batch(
-  unique(batch_summary$project_root),
-  dictionary = dict,
-  overwrite = TRUE
-)
-```
-
-Category enrichment writes `Level_1_Category` and `Level_2_Category`
-back into second-level `proc-2.rda` files and records match diagnostics
-in `proc-2.json`. Matching uses `package_name` against dictionary
-`App_UUID` first, then exact unambiguous `app_name` matches against
-`App_Name_Repaired` and `App_Name`. It does not infer sensitive
-categories or use fuzzy matching.
+License: [GPL-3](LICENSE)

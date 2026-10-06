@@ -18,7 +18,9 @@ run_appusage_stage(stage, project_dir, config = NULL, x = NULL)
 parse stage; omitted for all existing sources.}
 }
 \value{
-The stage's compact summary or matching result.
+The stage's compact summary or matching result, with a \code{run_record}
+attribute describing actual scope, actions and timings. Project projections
+are refreshed through the same service used by the full workflow.
 }
 \description{
 Uses the same scientific and storage functions as the workflow. Existing

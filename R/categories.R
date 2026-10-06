@@ -469,7 +469,7 @@ write_app_category_second_level_pair <- function(data, project_dir,
   if (!file.exists(metadata_file)) {
     metadata_file <- create_missing_second_level_metadata(second_level_rda, project_dir)
   }
-  metadata <- jsonlite::read_json(metadata_file, simplifyVector = TRUE)
+  metadata <- appusage_read_json(metadata_file, simplifyVector = TRUE)
   metadata <- update_category_metadata(
     metadata, summary, dictionary, second_level_rda
   )
@@ -507,7 +507,7 @@ update_matching_second_level_metadata <- function(project_dir, second_level_rda,
   if (!file.exists(metadata_file)) {
     metadata_file <- create_missing_second_level_metadata(second_level_rda, project_dir)
   }
-  metadata <- jsonlite::read_json(metadata_file, simplifyVector = TRUE)
+  metadata <- appusage_read_json(metadata_file, simplifyVector = TRUE)
   metadata <- update_category_metadata(
     metadata,
     summary,

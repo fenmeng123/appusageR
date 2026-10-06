@@ -4,15 +4,22 @@ appusage_execute_pipeline <- function(x, output_root, config, ids = NULL,
                                       project_name = NULL, project_id = NULL,
                                       project_dir = NULL, run_second_level = TRUE,
                                       first_options = list(), provenance = NULL,
-                                      stage_callback = NULL, result_callback = NULL) {
+                                      stage_callback = NULL, result_callback = NULL,
+                                      matching_adapter = NULL, runtime_context = NULL) {
   config <- appusage_validate_config(config)
   provenance <- appusage_resolve_run_provenance(provenance, tz = config$time$tz)
   provenance$source_verification <- config$execution$source_verification
   execution <- config$execution
+  context <- runtime_context %||% appusage_runtime_context(provenance)
+  previous_context <- getOption("appusageR.runtime_context")
+  options(appusageR.runtime_context = context)
+  on.exit(options(appusageR.runtime_context = previous_context), add = TRUE)
   project_name <- project_name %||% next_study_project_name(output_root)
   project_id <- project_id %||% generate_project_id()
   project_dir <- project_dir %||% file.path(output_root,
     appusage_text_paste0(sanitize_entity_value(project_name), "_", sanitize_entity_value(project_id)))
+  project_dir <- normalizePath(project_dir, winslash = "/", mustWork = FALSE)
+  appusage_resume_index_load(project_dir, context)
   plan <- NULL
   if (config$parse$input == "file") {
     manifest <- appusage_workflow_manifest(x, ids)
@@ -21,11 +28,14 @@ appusage_execute_pipeline <- function(x, output_root, config, ids = NULL,
       if (anyNA(manifest$participant_id)) cli::cli_abort("Participant IDs must be supplied for every source or omitted for all.")
       ids <- manifest$participant_id
     }
-    plan <- plan_appusage_workflow(manifest, project_dir, config,
-      verify = if (execution$source_verification == "metadata") "metadata" else execution$source_verification)
+    plan <- appusage_runtime_measure(context, "planning", appusage_prepare_workflow_plan(manifest, project_dir, config,
+      verify = execution$source_verification, provenance = provenance, context = context))
     if (!isTRUE(run_second_level)) {
       plan$tasks$action[plan$tasks$stage != "parse"] <- "disabled"
       plan$tasks$reason[plan$tasks$stage != "parse"] <- "outside_requested_scope"
+      plan$tasks$reason_code[plan$tasks$stage != "parse"] <- "outside_requested_scope"
+      plan$project_tasks$action <- "disabled"
+      plan$project_tasks$reason_code <- "outside_requested_scope"
     }
   }
   dir.create(project_dir, recursive = TRUE, showWarnings = FALSE)
@@ -41,21 +51,17 @@ appusage_execute_pipeline <- function(x, output_root, config, ids = NULL,
     saveRDS(manifest, manifest_path)
     saveRDS(plan, file.path(project_dir, "appusage_plan.rds"))
   }
-  record <- list(started_at = appusage_workflow_timestamp(), status = "running",
-    stages = list(), plan_file = if (!is.null(plan)) "appusage_plan.rds" else NULL)
+  state <- appusage_new_run_record(project_dir, plan)
+  first <- NULL
   notify <- function(stage, status, value = NULL) {
-    record$stages[[stage]] <<- list(status = status, updated_at = appusage_workflow_timestamp())
-    if (status == "error") {
-      record$status <<- "error"
-      record$error <<- conditionMessage(value)
-    }
-    saveRDS(record, file.path(project_dir, "appusage_run_record.rds"))
+    appusage_record_stage(state, stage, status, value)
     if (is.function(stage_callback)) stage_callback(stage, status, value)
   }
   execute <- function(stage, fun) {
     notify(stage, "started")
     tryCatch({
       value <- fun()
+      appusage_record_execution(state, stage, value, first)
       if (is.function(result_callback)) value <- result_callback(stage, value)
       notify(stage, "completed", value)
       value
@@ -65,6 +71,7 @@ appusage_execute_pipeline <- function(x, output_root, config, ids = NULL,
     })
   }
   first <- execute("first_level", function() {
+    if (!is.null(plan)) appusage_rebuild_first_level_summary_if_needed(project_dir, manifest)
     if (!is.null(plan) && execution$resume && !execution$overwrite &&
         execution$source_verification != "metadata" &&
         all(plan$tasks$action[plan$tasks$stage == "parse"] == "reuse")) {
@@ -73,6 +80,7 @@ appusage_execute_pipeline <- function(x, output_root, config, ids = NULL,
       first <- first[index, , drop = FALSE]
       first$index <- seq_len(nrow(first))
       attr(first, "stage_reused") <- TRUE
+      attr(first, "execution_actions") <- rep("reuse", nrow(first))
       return(first)
     }
     if (identical(execution$source_verification, "cache_only")) {
@@ -88,6 +96,8 @@ appusage_execute_pipeline <- function(x, output_root, config, ids = NULL,
           appusage_read_json_safely(first$metadata_file[[i]]), requested, verify = "cache_only")
       }, logical(1))
       if (!all(valid)) cli::cli_abort("Cache-only execution needs compatible, intact first-level caches; use content verification to rebuild.")
+      attr(first, "stage_reused") <- TRUE
+      attr(first, "execution_actions") <- rep("reuse", nrow(first))
       return(first)
     }
     args <- list(x = x, ids = ids, output_dir = output_root, project_dir = project_dir,
@@ -122,24 +132,37 @@ appusage_execute_pipeline <- function(x, output_root, config, ids = NULL,
   }
   if (config$category$enabled && !is.null(second)) {
     categories <- execute("category", function() {
-      appusage_refresh_category_stage(project_dir, second,
+      appusage_refresh_category_stage(project_dir, qc %||% second,
         config$category$dictionary, overwrite = config$category$overwrite,
         resume = execution$resume && !execution$overwrite)
     })
   }
-  matching <- if (config$matching$enabled && !is.null(second)) execute("matching", function() {
-    appusage_run_matching_stage(project_dir, config, first, second)
+  matching <- if (config$matching$enabled) execute("matching", function() {
+    matching_first <- appusage_read_summary_csv(file.path(project_dir, "analytic_summary_table_proclevel-1.csv"))
+    matching_second <- appusage_project_summary(project_dir, fresh = categories %||% qc %||% second, write = FALSE)
+    appusage_run_matching_stage(project_dir, config, matching_first, matching_second,
+      adapter = matching_adapter, publish = FALSE)
   }) else NULL
-  latest <- qc %||% second %||% first
-  record$failures <- list(parse = sum(first$status == "error", na.rm = TRUE),
+  projected <- if (!is.null(second) || !is.null(matching)) execute("summary", function() {
+    appusage_publish_project(project_dir, config, fresh = categories %||% qc %||% second,
+      matching = matching, adapter = matching_adapter)
+  }) else NULL
+  latest <- projected %||% qc %||% second %||% first
+  state$record$failures <- list(parse = sum(first$status == "error", na.rm = TRUE),
     research_data = if (is.null(second)) 0L else sum(second$second_level_status == "error", na.rm = TRUE),
     qc = if (is.null(qc)) 0L else sum(qc$qc_status == "error", na.rm = TRUE))
-  record$status <- if (sum(unlist(record$failures)) > 0L) "completed_with_errors" else "completed"
-  record$finished_at <- appusage_workflow_timestamp()
-  saveRDS(record, file.path(project_dir, "appusage_run_record.rds"))
+  state$record$status <- if (sum(unlist(state$record$failures)) > 0L) "completed_with_errors" else "completed"
+  state$record$finished_at <- appusage_workflow_timestamp()
+  state$record$metrics <- appusage_runtime_metrics(context)
+  saveRDS(state$record, state$path)
+  report_first <- appusage_read_summary_csv(file.path(project_dir, "analytic_summary_table_proclevel-1.csv"))
+  if (!nrow(report_first)) report_first <- first
+  appusage_resume_index_save(project_dir, context)
   list(project_dir = project_dir, first_level = first, second_level = second,
     qc = qc, categories = categories, matching = matching, latest = latest,
-    plan = plan, run_record = record,
+    plan = plan, run_record = state$record,
+    overview = appusage_workflow_overview(report_first,
+      if (is.null(second) && is.null(matching)) NULL else latest, config = config),
     effective_config = config, implementation_provenance = provenance)
 }
 
@@ -156,29 +179,43 @@ appusage_refresh_category_stage <- function(project_dir, summary, dictionary,
   dictionary <- as_app_category_dictionary(dictionary)
   expected <- appusage_category_contract(dictionary, overwrite)
   paths <- appusage_summary_proc2_paths(summary)
-  for (path in paths) {
+  actions <- rep("blocked", length(paths))
+  for (i in seq_along(paths)) {
+    path <- paths[[i]]
     if (!is_present_string(path) || !file.exists(path)) next
-    metadata <- appusage_read_json_safely(second_level_metadata_path(path))
-    if (resume && appusage_contract_equal(metadata$module_state$category, expected)) next
+    metadata <- tryCatch(appusage_read_validation_json(second_level_metadata_path(path)),
+      error = function(e) NULL)
+    if (resume && appusage_contract_equal(metadata$module_state$category, expected)) {
+      actions[[i]] <- "reuse"
+      next
+    }
+    actions[[i]] <- "run"
     result <- write_app_categories_one(path, project_dir, dictionary, overwrite)
     if (identical(result$status[[1]], "error")) cli::cli_abort("Category update failed: {result$error_message[[1]]}")
   }
-  appusage_project_summary(project_dir)
+  result <- if (!any(actions == "run")) summary else appusage_project_summary(project_dir, write = FALSE)
+  attr(result, "execution_actions") <- actions
+  attr(result, "stage_reused") <- !any(actions == "run")
+  result
 }
 
 appusage_refresh_qc_stage <- function(project_dir, summary, options,
-                                      provenance = NULL, strict = FALSE, progress = FALSE) {
+                                      provenance = NULL, strict = FALSE, progress = FALSE,
+                                      resume = TRUE) {
   paths <- appusage_summary_proc2_paths(summary)
+  provenance <- appusage_resolve_run_provenance(provenance, tz = options$tz)
   expected <- appusage_qc_contract(options, provenance)
+  requested_research <- appusage_research_contract(options, provenance)
   changed <- 0L
+  actions <- rep("blocked", length(paths))
+  refreshed <- list()
   qc_args <- options[intersect(names(options), setdiff(names(formals(write_qc_metadata_one)),
     c("metadata_file", "overwrite")))]
   for (i in seq_along(paths)) {
     if (!is_present_string(paths[[i]]) || !file.exists(paths[[i]])) next
     json <- second_level_metadata_path(paths[[i]])
     if (!file.exists(json)) next
-    metadata <- jsonlite::read_json(json, simplifyVector = TRUE)
-    requested_research <- appusage_research_contract(options, provenance)
+    metadata <- appusage_read_validation_json(json)
     recorded_research <- metadata$module_state$research_data
     # Duration labels can be synchronized by QC. Other research changes need
     # their upstream stage, rather than falsely recording a new QC contract.
@@ -190,21 +227,28 @@ appusage_refresh_qc_stage <- function(project_dir, summary, options,
         cli::cli_abort("QC requires compatible research_data; run the research_data stage or the full workflow first.")
       }
     }
-    if (identical(metadata$processing$qc_status, "success") &&
-        appusage_contract_equal(metadata$module_state$qc, expected)) next
+    if (isTRUE(resume) && identical(metadata$processing$qc_status, "success") &&
+        appusage_contract_equal(metadata$module_state$qc, expected)) {
+      actions[[i]] <- "reuse"
+      next
+    }
     if (progress) message(sprintf("Refreshing QC file %d/%d", i, length(paths)))
     changed <- changed + 1L
-    do.call(write_qc_metadata_one, c(list(metadata_file = json, overwrite = TRUE), qc_args))
-    metadata <- jsonlite::read_json(json, simplifyVector = TRUE)
+    actions[[i]] <- "run"
+    do.call(write_qc_metadata_one, c(list(metadata_file = json, overwrite = TRUE, provenance = provenance), qc_args))
+    metadata <- appusage_read_json(json, simplifyVector = TRUE)
     if (identical(metadata$processing$qc_status, "success")) {
       metadata$module_state$qc <- expected
       appusage_atomic_write_metadata_json(metadata, json)
     } else if (strict) {
       cli::cli_abort("QC failed for source {i}: {metadata$qc$qc_error_message}")
     }
+    refreshed[[length(refreshed) + 1L]] <- qc_summary_row_from_metadata(json, metadata = metadata)
   }
-  result <- appusage_project_summary(project_dir)
+  result <- if (length(refreshed)) appusage_project_summary(project_dir,
+    fresh = do.call(bind_appusage_summary_rows, refreshed), write = FALSE) else summary
   attr(result, "stage_reused") <- changed == 0L
+  attr(result, "execution_actions") <- actions
   result
 }
 

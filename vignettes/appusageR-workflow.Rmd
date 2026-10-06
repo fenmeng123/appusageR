@@ -12,7 +12,7 @@ vignette: >
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
 ```
 
-## Configuration, plans and independent stages (0.3.6)
+## Configuration, plans and independent stages (0.3.7)
 
 Start with a file manifest and an exact output project directory. Questionnaire
 discovery and matching are optional adapters, so ordinary APP Usage files do
@@ -30,6 +30,8 @@ config <- appusage_config(
 )
 plan <- plan_appusage_workflow(sources, "outputs/study", config)
 plan$tasks
+plan$project_tasks
+summary(plan)$artifacts
 result <- run_appusage_workflow(plan = plan)
 
 # Resume the saved manifest and configuration with revalidation.
@@ -38,6 +40,8 @@ result <- run_appusage_workflow(project_dir = "outputs/study")
 # Reassess QC without reparsing raw files.
 config$qc$min_nonempty_days <- 5
 qc <- run_appusage_stage("qc", "outputs/study", config)
+summary(result)$overview
+result$run_record$tasks
 ```
 
 The configuration sections are `parse`, `time`, `reconstruction`, `daily`, `qc`,
@@ -83,6 +87,34 @@ references; the persisted LinkResult retains unmatched questionnaire rows. Summa
 CSV is a projection and can be rebuilt with `run_appusage_stage("summary", ...)`.
 Unselected sources and upstream failures stay visible. Old caches remain readable;
 reuse requires sufficient configuration/implementation/integrity evidence.
+
+Plans distinguish `parse`, `research_data`, `qc`, `category` source tasks from
+`matching` and `summary` project tasks. Task IDs are based on source paths and
+stages, independently of input row order; an unparsed source has no invented
+scientific source key. `reason_code`, `details` and `verification` explain the
+evidence. Metadata previews are explicitly unverified for raw/RDA/Excel content.
+Execution evaluates current evidence even when given an older saved plan.
+
+`summary(result)` separates execution from coverage QC, source anomalies and
+grain-specific eligibility. Unavailable or unprocessed grains are not QC failures.
+Its suggested calls are text only. Neither print nor summary methods read files
+or run repairs. Independent stages attach their actual run record as an attribute.
+
+`appusage_projection_state.rds` stores compact contracts, output signatures,
+column order and keyed diagnostic-report references needed to rebuild summaries;
+it contains no scientific payloads. LinkResult owns relationships; CSV and Excel
+are projections. Content hashes are still checked before reuse. Unchanged
+projections retain their bytes; a missing export is reconstructed from valid
+relationships. Duration threshold changes use the existing proc-1 recomputation
+as an equality check before updating only anomaly fields in the proc-2 RDA.
+
+For a separate diagnostic run, `options(appusageR.diagnostics = TRUE)` enables
+internal operation counters in `result$run_record$metrics`. Counts include hash
+I/O, JSON parsing, RDA loads, scientific work and projection. Nested counters
+overlap; do not sum them into a total byte count or elapsed time. Formal timing
+uses fresh R processes with diagnostics disabled and measures the complete
+workflow externally. Run-local observers and loaded payloads are not saved in
+scientific caches or sent back by workers.
 
 ## Batch Preprocessing
 

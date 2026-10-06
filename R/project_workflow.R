@@ -281,6 +281,10 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
                                           run_qc = TRUE,
                                           diagnostic_verbosity = c("summary", "full", "none"),
                                           ...) {
+  runtime_context <- appusage_runtime_context()
+  previous_context <- getOption("appusageR.runtime_context")
+  options(appusageR.runtime_context = runtime_context)
+  on.exit(options(appusageR.runtime_context = previous_context), add = TRUE)
   diagnostic_verbosity <- match.arg(diagnostic_verbosity)
   tz <- appusage_resolve_timezone(tz)
   second_level_options <- list(...)
@@ -313,9 +317,13 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
   # study directory which can contain unrelated sources and questionnaire data.
 
   manifest <- build_appusage_project_manifest(project_dir, self_report_file)
+  appusage_resume_index_load(project$project_root, runtime_context)
   manifest <- appusage_limit_manifest_files(manifest, max_files = max_files)
   n_appusage <- sum(manifest$is_txt %in% TRUE, na.rm = TRUE)
-  self_report_read <- appusage_read_self_report_workbook(
+  self_report_read <- if (isTRUE(resume) && !isTRUE(overwrite) && !isTRUE(dry_run))
+    appusage_reuse_workbook_read(project$project_root, self_report_file,
+      self_report_sheet, self_report_n_max, self_report_guess_max, self_report_col_types) else NULL
+  self_report_read <- self_report_read %||% appusage_read_self_report_workbook(
     self_report = self_report_file,
     sheet = self_report_sheet,
     n_max = self_report_n_max,
@@ -325,7 +333,7 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     emit_warning = TRUE
   )
   self_report_data <- self_report_read$data
-  n_survey <- nrow(self_report_data)
+  n_survey <- if (is.null(self_report_data)) self_report_read$diagnostics$n_rows else nrow(self_report_data)
   txt_files <- manifest$source_file[manifest$is_txt %in% TRUE]
   first_level_worker_decision <- appusage_first_level_worker_decision(
     parallel = parallel,
@@ -490,8 +498,20 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
       progress = FALSE, parallel = parallel, workers = n_cores,
       checkpoint_every = first_level_checkpoint_every %||% 100L))
   config$effective_config <- effective_config
+  effective_config$matching <- utils::modifyList(effective_config$matching, list(
+    enabled = is_present_string(self_report_file) && is_present_string(upload_col),
+    self_report_file = self_report_file, sequence_col = sequence_col,
+    upload_col = upload_col, submit_time_col = submit_time_col,
+    export_type_priority = export_type_priority), keep.null = TRUE)
+  effective_config <- appusage_validate_config(effective_config)
+  config$effective_config <- effective_config
+  matching_adapter <- config
+  matching_adapter$data <- self_report_data
+  matching_adapter$workbook_read <- self_report_read[c("diagnostics", "diagnostics_file")]
+  matching_adapter$manifest <- manifest
   first <- second <- qc <- NULL
   stage_callback <- function(stage, status, value) {
+    if (stage == "matching") stage <- "self_report_matching"
     if (status == "error") {
       appusage_mark_workflow_stage_failed_safely(configuration_file, stage, value)
       return(invisible(NULL))
@@ -502,18 +522,16 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     invisible(NULL)
   }
   result_callback <- function(stage, value) {
+    if (!stage %in% c("first_level", "second_level", "qc")) return(value)
     reused <- isTRUE(attr(value, "stage_reused"))
-    value <- appusage_attach_diagnostics(summary = value, manifest = manifest,
+    if (!reused) value <- appusage_attach_diagnostics(summary = value, manifest = manifest,
       stage = stage, project = project, diagnostics = diagnostics,
       source_summary = if (stage == "first_level") NULL else first,
       diagnostic_verbosity = diagnostic_verbosity)
     if (stage == "first_level") first <<- value
     if (stage == "second_level") second <<- value
     if (stage == "qc") value <- appusage_merge_qc_with_second_level_skips(value, second)
-    summary_path <- file.path(project$project_root, if (stage == "first_level")
-      "analytic_summary_table_proclevel-1.csv" else "analytic_summary_table_proclevel-2.csv")
-    if (stage == "first_level") appusage_publish_first_summary(project$project_root, value) else
-      appusage_project_summary(project$project_root, fresh = value)
+    if (stage == "first_level" && !reused) appusage_publish_first_summary(project$project_root, value)
     appusage_console_emit_stage_summary(progress = progress && !reused, summary = value,
       stage_label = switch(stage, first_level = "first-level", second_level = "second-level",
         qc = "QC-daily-qc-v1", stage), total = n_appusage,
@@ -530,37 +548,25 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
       worker_cap_override = first_level_worker_cap_override,
       retry_memory_allocation = retry_memory_allocation,
       memory_retry_workers = memory_retry_workers, strict = FALSE),
-    stage_callback = stage_callback, result_callback = result_callback)
+    stage_callback = stage_callback, result_callback = result_callback,
+    matching_adapter = matching_adapter, runtime_context = runtime_context)
   first <- pipeline$first_level
   second <- pipeline$second_level
   qc <- pipeline$qc
+  updated_read <- attr(pipeline$matching, "self_report_read", exact = TRUE)
+  if (!is.null(updated_read)) {
+    self_report_read <- updated_read
+    n_survey <- updated_read$diagnostics$n_rows
+  }
 
-  config <- appusage_workflow_state_begin(config, "self_report_matching")
-  configuration_file <- appusage_write_workflow_configuration(config)
-  match_result <- tryCatch(
-    appusage_maybe_match_self_report(
-      self_report = self_report_data,
-      self_report_file = self_report_file,
-      manifest = manifest,
-      project = project,
-      first = first,
-      second = second,
-      sequence_col = sequence_col,
-      upload_col = upload_col,
-      submit_time_col = submit_time_col,
-      export_type_priority = export_type_priority
-    ),
-    error = function(e) {
-      appusage_mark_workflow_stage_failed_safely(
-        configuration_file,
-        "self_report_matching",
-        e
-      )
-      stop(e)
-    }
-  )
-  config <- appusage_workflow_state_complete(config, "self_report_matching")
-  configuration_file <- appusage_write_workflow_configuration(config)
+  match_result <- list(matched_self_report = pipeline$matching$matched_self_report,
+    matched_self_report_file = if (is.null(pipeline$matching)) NA_character_ else
+      normalizePath(appusage_matching_export_path(project$project_root, effective_config,
+        matching_adapter), winslash = "/", mustWork = FALSE),
+    diagnostics = pipeline$matching$diagnostics)
+  if (is.null(pipeline$matching)) {
+    config <- appusage_workflow_state_complete(config, "self_report_matching")
+  }
   if (is_present_string(match_result$matched_self_report_file)) {
     appusage_console_matching_stage(
       progress = progress,
@@ -595,6 +601,8 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
   )
   config <- appusage_workflow_state_completed(config)
   configuration_file <- appusage_write_workflow_configuration(config)
+  pipeline$run_record$metrics <- appusage_runtime_metrics(runtime_context)
+  saveRDS(pipeline$run_record, file.path(project$project_root, "appusage_run_record.rds"))
 
   out <- list(
     project_dir = project$project_root,
@@ -615,6 +623,10 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
     benchmark_summary_file = benchmark$file,
     sample_size_flow = flow,
     implementation_provenance = run_provenance,
+    plan = pipeline$plan,
+    run_record = pipeline$run_record,
+    overview = pipeline$overview,
+    effective_config = effective_config,
     resumed = resumed,
     dry_run = FALSE
   )
@@ -1634,10 +1646,25 @@ appusage_read_summary_csv <- function(path) {
   if (!file.exists(path)) {
     return(tibble::tibble())
   }
-  tibble::as_tibble(utils::read.csv(path,
+  context <- getOption("appusageR.runtime_context")
+  key <- normalizePath(path, winslash = "/", mustWork = FALSE)
+  signature <- if (!is.null(context)) appusage_artifact_signature(key) else NULL
+  cached <- if (!is.null(context)) context$summary_csv[[key]] else NULL
+  if (!is.null(signature) && identical(signature, cached$signature)) {
+    appusage_count("summary_csv_reuse")
+    return(cached$value)
+  }
+  appusage_count("summary_csv_read", file.info(path)$size)
+  value <- tibble::as_tibble(utils::read.csv(path,
     stringsAsFactors = FALSE,
     check.names = FALSE
   ))
+  if (!is.null(context)) {
+    if (!identical(signature, appusage_artifact_signature(key)))
+      cli::cli_abort("Summary changed during content verification: {.path {key}}")
+    context$summary_csv[[key]] <- list(signature = signature, value = value)
+  }
+  value
 }
 
 appusage_prepare_diagnostics <- function(project_root) {
@@ -2020,8 +2047,10 @@ appusage_console_percent_values <- function(counts, total, digits = 1) {
 appusage_console_percent_row <- function(label, flow_record) {
   counts <- flow_record$counts
   percents <- flow_record$percents
+  labels <- names(counts)
+  labels[labels == "Passed"] <- "Execution succeeded"
   pieces <- vapply(seq_along(counts), function(i) {
-    sprintf("%s: %s (%.1f%%)", names(counts)[[i]], counts[[i]], percents[[i]])
+    sprintf("%s: %s (%.1f%%)", labels[[i]], counts[[i]], percents[[i]])
   }, character(1))
   sprintf(
     "| %s | %s | TOTAL: %s |",
@@ -2614,47 +2643,6 @@ appusage_count_duplicates <- function(x) {
   sum(duplicated(x_chr))
 }
 
-appusage_maybe_match_self_report <- function(self_report, self_report_file, manifest,
-                                             project, first, second,
-                                             sequence_col, upload_col,
-                                             submit_time_col,
-                                             export_type_priority) {
-  if (!is_present_string(self_report_file) || !is_present_string(upload_col)) {
-    return(list(
-      matched_self_report = NULL,
-      matched_self_report_file = NA_character_,
-      diagnostics = NULL
-    ))
-  }
-  matched <- appusage_match_self_report_table(
-    self_report = self_report,
-    manifest = manifest,
-    project_root = project$project_root,
-    first = first,
-    second = second,
-    sequence_col = sequence_col,
-    upload_col = upload_col,
-    submit_time_col = submit_time_col,
-    export_type_priority = export_type_priority,
-    project_id = project$project_id,
-    project_name = project$project_name
-  )
-  out_file <- appusage_matched_excel_path(
-    self_report_file = self_report_file,
-    project_root = project$project_root,
-    project_id = project$project_id
-  )
-  appusage_write_xlsx(matched$matched_self_report, out_file)
-  appusage_save_link_result(project$project_root, matched)
-  appusage_write_match_metadata(project$project_root, matched$diagnostics)
-  appusage_refresh_match_summary(project$project_root, matched$file_matches)
-  list(
-    matched_self_report = matched$matched_self_report,
-    matched_self_report_file = normalizePath(out_file, winslash = "/", mustWork = FALSE),
-    diagnostics = matched$diagnostics
-  )
-}
-
 appusage_match_self_report_table <- function(self_report, manifest,
                                              project_root, first, second,
                                              sequence_col = "\u5e8f\u53f7",
@@ -2664,6 +2652,7 @@ appusage_match_self_report_table <- function(self_report, manifest,
                                              export_type_priority = c("line", "meta", "day", "app"),
                                              project_id = NA_character_,
                                              project_name = NA_character_, resolved = FALSE) {
+  appusage_count("matching_compute", 0)
   data <- appusage_read_self_report_rows(self_report, self_report_n_max)
   required <- c(sequence_col, upload_col)
   missing <- setdiff(required, names(data))
@@ -3175,7 +3164,7 @@ appusage_write_match_metadata <- function(project_root, diagnostics) {
   description_file <- file.path(project_root, "dataset_descriptions.json")
   description <- if (file.exists(description_file)) {
     tryCatch(
-      jsonlite::read_json(description_file, simplifyVector = TRUE),
+      appusage_read_json(description_file, simplifyVector = TRUE),
       error = function(e) list()
     )
   } else {

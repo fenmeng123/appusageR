@@ -2,12 +2,13 @@ appusage_stable_text_md5 <- function(text) {
   path <- tempfile("appusage-source-identity-", fileext = ".bin")
   on.exit(unlink(path, force = TRUE), add = TRUE)
   writeBin(charToRaw(stringi::stri_enc_toutf8(appusage_text_paste(text, collapse = "\r\n"))), path)
-  unname(as.character(tools::md5sum(path))[[1]])
+  unname(as.character(appusage_file_md5(path))[[1]])
 }
 
 appusage_source_fingerprint <- function(x, input = "file") {
+  appusage_count("source_fingerprint", if (input == "file") file.info(x)$size else 0)
   if (identical(input, "file") && length(x) == 1L && !is.na(x) && file.exists(x)) {
-    content_md5 <- unname(as.character(tools::md5sum(x))[[1]])
+    content_md5 <- unname(as.character(appusage_file_md5(x))[[1]])
     return(appusage_stable_text_md5(c(appusage_text_lower(basename(x)), content_md5)))
   }
   appusage_stable_text_md5(as.character(x))

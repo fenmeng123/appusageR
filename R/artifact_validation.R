@@ -3,7 +3,7 @@
 appusage_artifact_signature <- function(path) {
   if (!is_present_string(path) || !file.exists(path)) return(NULL)
   list(size = unname(file.info(path)$size[[1]]),
-    md5 = unname(as.character(tools::md5sum(path))[[1]]))
+    md5 = unname(as.character(appusage_file_md5(path))[[1]]))
 }
 
 appusage_artifact_valid <- function(path, recorded, verify = TRUE) {
@@ -20,23 +20,44 @@ appusage_source_stat <- function(path, input = "file") {
 
 appusage_first_contract_valid <- function(row, metadata, requested, x = NULL,
                                           input = "file", verify = "content") {
-  if (is.null(metadata) || !appusage_contract_equal(metadata$module_state$parse, requested)) return(FALSE)
+  appusage_parse_evidence(row, metadata, requested, x, input, verify)$valid
+}
+
+appusage_parse_evidence <- function(row, metadata, requested, x = NULL,
+                                    input = "file", verify = "content", context = NULL) {
+  source_verified <- FALSE
+  result <- function(valid, reason) list(valid = valid, reason = reason, source_verified = source_verified)
+  if (is.null(row)) return(result(FALSE, "parse_artifact_missing"))
+  if (is.null(metadata)) return(result(FALSE, if (file.exists(row$metadata_file[[1]]))
+    "parse_metadata_corrupt" else "parse_metadata_missing"))
+  recorded <- metadata$module_state$parse
+  if (is.null(recorded)) return(result(FALSE, "verification_insufficient"))
+  if (!appusage_contract_equal(recorded, requested)) return(result(FALSE,
+    if (!identical(recorded$implementation, requested$implementation)) "implementation_changed" else "configuration_changed"))
   if (verify == "content") {
-    if (input == "file" && !file.exists(x)) return(FALSE)
+    if (input == "file" && !file.exists(x)) return(result(FALSE, "source_missing"))
     old <- appusage_get_col_value(row, "source_fingerprint", NA_character_)
-    if (!identical(old, appusage_source_fingerprint(x, input))) return(FALSE)
+    fresh <- appusage_runtime_measure(context, "source_hash", appusage_source_fingerprint(x, input),
+      bytes = if (input == "file") unname(file.info(x)$size[[1]]) else 0)
+    if (!identical(old, fresh)) return(result(FALSE, "source_changed"))
+    source_verified <- TRUE
   } else if (verify == "metadata" && !is.null(x)) {
     if (!appusage_contract_equal(metadata$module_state$source_stat,
-        appusage_source_stat(x, input))) return(FALSE)
+        appusage_source_stat(x, input))) return(result(FALSE, "source_stat_changed"))
   }
   if (identical(row$status[[1]], "success")) {
-    return(appusage_artifact_valid(row$data_file[[1]],
-      metadata$module_state$artifact, verify != "preview"))
+    valid <- appusage_runtime_measure(context, "parse_artifact_check",
+      appusage_artifact_valid(row$data_file[[1]], metadata$module_state$artifact, verify != "preview"),
+      bytes = if (verify != "preview" && file.exists(row$data_file[[1]])) unname(file.info(row$data_file[[1]])$size[[1]]) else 0)
+    return(result(valid, if (valid) "up_to_date" else if (!file.exists(row$data_file[[1]]))
+      "parse_artifact_missing" else if (is.null(metadata$module_state$artifact))
+      "verification_insufficient" else "parse_artifact_corrupt"))
   }
-  appusage_first_level_seed_row_complete(row)
+  valid <- appusage_first_level_seed_row_complete(row)
+  result(valid, if (valid) "up_to_date" else "incomplete_parse")
 }
 
 appusage_read_json_safely <- function(path) {
   if (!is_present_string(path) || !file.exists(path)) return(NULL)
-  tryCatch(jsonlite::read_json(path, simplifyVector = TRUE), error = function(e) NULL)
+  tryCatch(appusage_read_json(path, simplifyVector = TRUE), error = function(e) NULL)
 }

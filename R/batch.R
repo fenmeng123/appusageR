@@ -171,6 +171,9 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
   summary$first_level_worker_cap_override <- worker_decision$worker_cap_override
   summary <- appusage_attach_provenance_summary(summary, provenance)
   attr(summary, "first_level_worker_decision") <- worker_decision
+  attr(summary, "execution_actions") <- vapply(rows,
+    function(row) attr(row, "execution_action") %||% "run", character(1))
+  attr(summary, "stage_reused") <- all(attr(summary, "execution_actions") == "reuse")
   if (!is.null(output_project$project_root)) {
     summary$project_root <- output_project$project_root
     summary$proclevel_1_dir <- output_project$proclevel_1
@@ -241,6 +244,10 @@ write_second_level_batch <- function(batch_summary, output_dir = NULL,
   provenance <- appusage_resolve_run_provenance(provenance,
     tz = second_level_args$tz %||% appusage_default_timezone())
   second_level_args$provenance <- provenance
+  if (isTRUE(resume) && !isTRUE(overwrite)) {
+    reused <- appusage_reuse_second_batch(batch_summary, output_dir, second_level_args)
+    if (!is.null(reused)) return(invisible(reused))
+  }
   rows <- process_second_level_batch_rows(
     batch_summary = batch_summary,
     output_dir = output_dir,
@@ -266,14 +273,28 @@ write_second_level_batch <- function(batch_summary, output_dir = NULL,
   } else {
     tibble::tibble()
   }
+  execution_actions <- vapply(rows, function(row) {
+    if (identical(row$skip_reason[[1]], "existing_proc2_cache")) "reuse" else
+      if (identical(row$status[[1]], "skipped")) "blocked" else "run"
+  }, character(1))
+  if (!any(execution_actions == "run") && nrow(previous_summary) &&
+      appusage_projection_valid(appusage_projection_state(project_root)$summary, project_root)) {
+    previous_index <- match(first_level_summary_key(batch_summary), second_level_summary_key(previous_summary))
+    if (!anyNA(previous_index) && !anyDuplicated(previous_index)) {
+      summary <- tibble::as_tibble(previous_summary[previous_index, , drop = FALSE])
+      attr(summary, "execution_actions") <- execution_actions
+      attr(summary, "stage_reused") <- TRUE
+      return(invisible(summary))
+    }
+  }
   summary <- refresh_second_level_summary_from_metadata(
     batch_summary = batch_summary,
     output_dir = output_dir,
     rows = rows,
     previous_summary = previous_summary
   )
-  attr(summary, "stage_reused") <- length(rows) > 0L && all(vapply(rows,
-    function(row) identical(row$skip_reason[[1]], "existing_proc2_cache"), logical(1)))
+  attr(summary, "execution_actions") <- execution_actions
+  attr(summary, "stage_reused") <- !any(attr(summary, "execution_actions") == "run")
   if (!is.na(project_root)) {
     summary_file <- file.path(project_root, "analytic_summary_table_proclevel-2.csv")
     appusage_project_summary(project_root, fresh = summary)
@@ -1064,6 +1085,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
                                     memory_risk_reason = NA_character_,
                                     provenance = NULL, return_result = FALSE,
                                     parser_strict = NULL, source_ref = NULL) {
+  appusage_count("parse", 0)
   warnings <- character()
   started_at <- Sys.time()
   source_file <- source_ref$source_file %||% source_file_label(x, input)
@@ -1699,6 +1721,9 @@ error_metadata <- function(error) {
 }
 
 write_metadata_json <- function(info, metadata_file) {
+  if (inherits(info, "appusage_validation_metadata"))
+    cli::cli_abort("Compact validation metadata cannot replace a full source JSON.")
+  appusage_runtime_invalidate(metadata_file)
   jsonlite::write_json(
     info,
     path = metadata_file,
@@ -2875,6 +2900,7 @@ process_batch_rows <- function(x, id_plan, type, input, output_dir, tz,
   rows <- appusage_restore_checkpoint_rows(existing_rows, length(x))
   seed_rows <- appusage_index_seed_rows(existing_rows, length(x))
   pending <- which(vapply(rows, is.null, logical(1)))
+  for (i in setdiff(seq_along(rows), pending)) attr(rows[[i]], "execution_action") <- "reuse"
   checkpoint_every <- suppressWarnings(as.integer(checkpoint_every %||% progress_every))
   if (is.na(checkpoint_every) || checkpoint_every < 1L) {
     checkpoint_every <- length(x)
@@ -3187,7 +3213,7 @@ write_dataset_description_json <- function(project, summary, proclevel,
   description_file <- file.path(project$project_root, "dataset_descriptions.json")
   existing <- if (file.exists(description_file)) {
     tryCatch(
-      jsonlite::read_json(description_file, simplifyVector = TRUE),
+      appusage_read_json(description_file, simplifyVector = TRUE),
       error = function(e) list()
     )
   } else {
@@ -3376,6 +3402,9 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
   cache <- appusage_second_cache_for_options(cache, effective_options,
     second_level_args$provenance %||% NULL)
   if (isTRUE(resume) && !isTRUE(overwrite) && identical(cache$status, "complete")) {
+    cache$metadata <- appusage_sync_qc_labels(cache$metadata, cache$json_file,
+      effective_options$max_episode_ms, effective_options$max_daily_app_ms,
+      second_level_args$provenance %||% NULL)
     finished_at <- Sys.time()
     return(appusage_attach_daily_self_check_summary(data.frame(
       index = batch_summary$index[[index]],
@@ -3397,7 +3426,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       finished_at = format(finished_at, "%Y-%m-%d %H:%M:%OS3 %z"),
       elapsed_sec = as.numeric(difftime(finished_at, started_at, units = "secs")),
       stringsAsFactors = FALSE
-    ), cache$json_file))
+    ), cache$json_file, metadata = cache$metadata))
   }
   if (identical(cache$pair_state, "source_key_collision")) {
     finished_at <- Sys.time()
@@ -3503,7 +3532,7 @@ second_level_expected_paths <- function(first_level_rda, output_dir = NULL) {
 
 second_level_existing_cache_status <- function(first_level_rda, output_dir = NULL,
                                                batch_summary = NULL,
-                                               index = NULL) {
+                                               index = NULL, first_metadata = NULL) {
   paths <- second_level_expected_paths(first_level_rda, output_dir)
   entities <- parse_appusage_filename(first_level_rda)
   expected_key <- if (!is.null(batch_summary) && !is.null(index)) {
@@ -3516,8 +3545,10 @@ second_level_existing_cache_status <- function(first_level_rda, output_dir = NUL
   } else {
     NA_character_
   }
-  first_metadata <- tryCatch(
-    read_first_level_metadata_for_second(first_level_rda),
+  first_metadata <- first_metadata %||% tryCatch(
+    if (file.exists(first_level_metadata_path(first_level_rda)))
+      appusage_read_validation_json(first_level_metadata_path(first_level_rda)) else
+      read_first_level_metadata_for_second(first_level_rda),
     error = function(e) NULL
   )
   first_identity <- if (is.null(first_metadata)) list() else appusage_metadata_source_identity(first_metadata)
@@ -3569,7 +3600,7 @@ second_level_existing_cache_status <- function(first_level_rda, output_dir = NUL
     return(result("incomplete", "rda_only_incomplete", "rda_only_partial_cache"))
   }
   metadata <- tryCatch(
-    jsonlite::read_json(paths$json_file, simplifyVector = TRUE),
+    appusage_read_validation_json(paths$json_file),
     error = function(e) e
   )
   if (inherits(metadata, "error")) {

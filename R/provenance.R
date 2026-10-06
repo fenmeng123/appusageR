@@ -251,7 +251,7 @@ appusage_provenance_summary_values_from_file <- function(metadata_file) {
     return(appusage_provenance_summary_values())
   }
   metadata <- tryCatch(
-    jsonlite::read_json(metadata_file, simplifyVector = TRUE),
+    appusage_read_json(metadata_file, simplifyVector = TRUE),
     error = function(e) list()
   )
   appusage_provenance_summary_values(appusage_metadata_provenance(metadata))

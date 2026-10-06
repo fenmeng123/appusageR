@@ -79,7 +79,7 @@ write_qc_metadata_batch <- function(project_dir, output_dir = NULL,
       meta_diff_ratio = meta_diff_ratio
     )
     if (isTRUE(strict)) {
-      qc_metadata <- jsonlite::read_json(metadata_files[[i]], simplifyVector = TRUE)
+      qc_metadata <- appusage_read_json(metadata_files[[i]], simplifyVector = TRUE)
       qc_status <- qc_metadata_value(qc_metadata, c("processing", "qc_status"))
       if (identical(qc_status, "error")) {
         message <- qc_metadata_value(qc_metadata, c("qc", "qc_error_message"))
@@ -182,7 +182,7 @@ write_qc_metadata_one <- function(metadata_file, overwrite,
                                   max_daily_total_ms,
                                   max_export_lookback_days,
                                   meta_diff_abs_ms,
-                                  meta_diff_ratio) {
+                                  meta_diff_ratio, provenance = NULL) {
   started_at <- Sys.time()
   metadata_read <- read_first_level_metadata(metadata_file)
   metadata <- metadata_read$metadata
@@ -205,7 +205,7 @@ write_qc_metadata_one <- function(metadata_file, overwrite,
     )
   } else {
     metadata <- appusage_sync_qc_labels(metadata, metadata_file,
-      max_episode_ms, max_daily_app_ms)
+      max_episode_ms, max_daily_app_ms, provenance)
     second_level_rda <- infer_second_level_rda_path(
       metadata = metadata,
       metadata_file = metadata_file,
@@ -240,10 +240,10 @@ write_qc_metadata_one <- function(metadata_file, overwrite,
     finished_at = finished_at
   )
   if (identical(result$qc_status, "success")) {
-    fields <- setdiff(names(formals(write_qc_metadata_one)), c("metadata_file", "overwrite"))
+    fields <- setdiff(names(formals(write_qc_metadata_one)), c("metadata_file", "overwrite", "provenance"))
     options <- mget(fields, envir = environment(), inherits = FALSE)
     options$tz <- metadata$processing$effective_timezone %||% metadata$export$timezone %||% "Asia/Shanghai"
-    metadata$module_state$qc <- appusage_qc_contract(options)
+    metadata$module_state$qc <- appusage_qc_contract(options, provenance)
   } else metadata$module_state$qc <- NULL
   write_metadata_json(metadata, metadata_file)
   normalizePath(metadata_file, winslash = "/", mustWork = FALSE)
@@ -252,7 +252,7 @@ write_qc_metadata_one <- function(metadata_file, overwrite,
 read_first_level_metadata <- function(metadata_file) {
   tryCatch(
     list(
-      metadata = jsonlite::read_json(metadata_file, simplifyVector = TRUE),
+      metadata = appusage_read_json(metadata_file, simplifyVector = TRUE),
       error = NULL
     ),
     error = function(e) {
@@ -424,6 +424,7 @@ run_qc_for_second_level_data <- function(data, second_level_rda, participant_id,
                                          meta_diff_abs_ms = 60 * 1000,
                                          meta_diff_ratio = 0.20,
                                          stage_callback = NULL) {
+  appusage_count("scientific_qc", 0)
   notify_stage <- function(stage, status, details = NULL) {
     if (is.function(stage_callback)) {
       stage_callback(stage, status, details)
@@ -520,6 +521,7 @@ run_qc_for_second_level_data <- function(data, second_level_rda, participant_id,
 }
 
 load_appusage_data_object <- function(path) {
+  appusage_count("rda_load", file.info(path)$size)
   env <- new.env(parent = emptyenv())
   loaded <- load(path, envir = env)
   if (!identical(loaded, "data")) {
@@ -705,8 +707,8 @@ build_qc_summary_from_metadata <- function(metadata_files, project_dir = NULL,
 }
 
 qc_summary_row_from_metadata <- function(metadata_file, legacy_file = NA_character_,
-                                         strict = FALSE) {
-  current <- read_qc_summary_metadata(metadata_file,
+                                         strict = FALSE, metadata = NULL) {
+  current <- if (!is.null(metadata)) list(metadata = metadata, error = NULL) else read_qc_summary_metadata(metadata_file,
     metadata_label = "proc-2",
     strict = strict
   )
@@ -774,6 +776,8 @@ qc_summary_row_from_legacy_metadata <- function(legacy_file, strict = FALSE) {
 }
 
 qc_summary_row_from_loaded_metadata <- function(metadata, metadata_file) {
+  cached <- attr(metadata, "appusage_summary_row", exact = TRUE)
+  if (!is.null(cached)) return(cached)
   qc_status <- qc_metadata_value(metadata, c("processing", "qc_status"))
   second_level_status <- qc_metadata_value(metadata, c("processing", "second_level_status"))
   row <- data.frame(
@@ -1019,7 +1023,7 @@ qc_summary_row_from_loaded_metadata <- function(metadata, metadata_file) {
 read_qc_summary_metadata <- function(metadata_file, metadata_label, strict) {
   tryCatch(
     list(
-      metadata = jsonlite::read_json(metadata_file, simplifyVector = TRUE),
+      metadata = appusage_read_validation_json(metadata_file),
       error = NULL
     ),
     error = function(e) {

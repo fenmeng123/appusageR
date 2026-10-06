@@ -608,7 +608,7 @@ appusage_source_qc_summary_values <- function(metadata_file = NA_character_) {
     return(appusage_source_qc_summary_from_metadata(list()))
   }
   metadata <- tryCatch(
-    jsonlite::read_json(metadata_file, simplifyVector = TRUE),
+    appusage_read_json(metadata_file, simplifyVector = TRUE),
     error = function(e) list()
   )
   appusage_source_qc_summary_from_metadata(metadata)

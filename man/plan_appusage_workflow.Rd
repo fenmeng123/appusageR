@@ -25,8 +25,11 @@ plan_appusage_workflow(
 \item{ids}{Optional participant IDs for a file vector.}
 }
 \value{
-An \code{appusage_plan} with manifest, effective configuration and a task
-table. Actions are \code{reuse}, \code{run}, \code{blocked}, or \code{disabled}.
+An \code{appusage_plan} with manifest, effective configuration, source-level
+\code{tasks} and \code{project_tasks} for matching/summary. Both tables provide stable
+task IDs, action, reason codes, differences and verification scope. Actions
+are \code{reuse}, \code{run}, \code{blocked}, or \code{disabled}. Print and summary methods use
+only these stored tables; a preview does not authorize stale cache reuse.
 }
 \description{
 The default preview reads summaries and JSON metadata only. It does not

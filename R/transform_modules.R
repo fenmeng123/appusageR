@@ -49,6 +49,7 @@ build_appusage_daily <- function(data, meta_episodes = NULL,
                                  meta_daily_source = c("summary", "episodes", "both"),
                                  max_daily_app_ms = 86400000,
                                  tz = data$effective_timezone) {
+  appusage_count("daily_module", 0)
   if (!inherits(data, "appusage_standardized")) {
     cli::cli_abort("`data` must come from standardize_appusage().")
   }

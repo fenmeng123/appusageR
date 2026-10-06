@@ -46,6 +46,7 @@ make_second_level_appusage <- function(data, export_type = NULL,
                                        meta_episode_merge_gap_ms = 30 * 1000,
                                        meta_daily_source = c("summary", "episodes", "both"),
                                        tz = "Asia/Shanghai") {
+  appusage_count("research_data", 0)
   tz <- appusage_resolve_timezone(tz)
   meta_pairing <- match.arg(meta_pairing)
   meta_daily_source <- match.arg(meta_daily_source)
@@ -612,7 +613,7 @@ appusage_write_second_level_breadcrumb <- function(breadcrumb, path) {
     temporary,
     "Second-level breadcrumb temporary artifact"
   )
-  jsonlite::read_json(temporary, simplifyVector = TRUE)
+  appusage_read_json(temporary, simplifyVector = TRUE)
   if (file.exists(path)) {
     if (!isTRUE(file.rename(path, backup))) {
       stop("Could not back up the existing second-level breadcrumb.")
@@ -710,7 +711,7 @@ appusage_normalized_paths_equal <- function(x, y) {
 appusage_validate_second_level_success_metadata <- function(
     path, output_file, metadata_file) {
   appusage_validate_nonempty_file(path, "Second-level JSON temporary artifact")
-  metadata <- jsonlite::read_json(path, simplifyVector = TRUE)
+  metadata <- appusage_read_json(path, simplifyVector = TRUE)
   status <- appusage_nested_value(metadata, c("processing", "second_level_status"))
   recorded_rda <- appusage_nested_value(metadata, c("outputs", "second_level_rda"))
   recorded_json <- appusage_nested_value(metadata, c("outputs", "metadata_json"))
@@ -744,7 +745,9 @@ appusage_validate_second_level_success_metadata <- function(
 }
 
 appusage_promote_file <- function(from, to) {
-  isTRUE(file.rename(from, to))
+  promoted <- isTRUE(file.rename(from, to))
+  if (promoted) appusage_runtime_invalidate(c(from, to))
+  promoted
 }
 
 appusage_publish_second_level_pair <- function(transaction, output_file,
@@ -822,7 +825,7 @@ appusage_atomic_write_metadata_json <- function(metadata, metadata_file) {
     transaction$temp_json,
     "Second-level status JSON temporary artifact"
   )
-  jsonlite::read_json(transaction$temp_json, simplifyVector = TRUE)
+  appusage_read_json(transaction$temp_json, simplifyVector = TRUE)
   on.exit({
     if (!committed && old_backed && file.exists(transaction$backup_json) &&
       !file.exists(metadata_file)) {
@@ -1640,6 +1643,7 @@ reconstruct_meta_episodes <- function(events, pairing = c("package", "package_cl
                                       merge_contiguous = TRUE,
                                       merge_gap_ms = 30 * 1000,
                                       ...) {
+  appusage_count("reconstruction", 0)
   tz <- appusage_resolve_timezone(tz)
   pairing <- match.arg(pairing)
   events <- normalize_meta_events_for_reconstruction(events, tz = tz)
@@ -2489,6 +2493,7 @@ second_level_meta_summary <- function(x, max_daily_app_ms,
 }
 
 daily_from_episodes <- function(x, max_daily_app_ms, tz = "Asia/Shanghai") {
+  appusage_count("daily_aggregation", 0)
   if (nrow(x) == 0) {
     return(empty_second_daily_tibble())
   }

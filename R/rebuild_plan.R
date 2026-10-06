@@ -739,7 +739,7 @@ appusage_plan_first_value <- function(base_row, summary_row, column) {
 appusage_plan_metadata <- function(row, column) {
   path <- appusage_plan_value(row, column)
   if (!is_present_string(path) || !file.exists(path)) return(list())
-  tryCatch(jsonlite::read_json(path, simplifyVector = TRUE), error = function(e) list())
+  tryCatch(appusage_read_json(path, simplifyVector = TRUE), error = function(e) list())
 }
 
 appusage_plan_pair_state <- function(first, index, output_dir, options = NULL, provenance = NULL) {
