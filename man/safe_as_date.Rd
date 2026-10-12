@@ -10,7 +10,7 @@ safe_as_date(x)
 \item{x}{Date values.}
 }
 \value{
-Date vector.
+Date vector. Missing or invalid dates are returned as \code{NA}.
 }
 \description{
 Safely parse APP Usage dates

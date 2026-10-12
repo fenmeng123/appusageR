@@ -20,7 +20,14 @@ appusage_binary_signature <- function(bytes) {
     windows_executable = c(77, 90)
   )
   hit <- names(signatures)[vapply(signatures, starts_with, logical(1))]
-  if (length(hit) == 0L) NA_character_ else hit[[1]]
+  if (length(hit)) return(hit[[1]])
+  # ISO base media stores its box type after a four-byte big-endian size.
+  # Compressed media can stay below both byte-ratio gates despite embedded NULs.
+  if (length(values) == 8L && identical(values[5:8], c(102L, 116L, 121L, 112L))) {
+    box_size <- sum(values[1:4] * 256^(3:0))
+    if (box_size >= 16 && box_size <= length(bytes)) return("iso_base_media")
+  }
+  NA_character_
 }
 
 appusage_byte_ratios <- function(bytes) {
@@ -261,7 +268,10 @@ appusage_source_preflight <- function(x, input = c("file", "text", "lines"),
         encoding_diagnostics = encoding_diagnostics
       ))
     }
-    decoded <- decode_raw_text(bytes, encoding = encoding)
+    # The file reader already removes NULs before decoding. Apply the same
+    # contract after the binary gates, retaining diagnostics of original bytes.
+    text_bytes <- if (ratios$nul_byte_ratio > 0) bytes[bytes != as.raw(0)] else bytes
+    decoded <- decode_raw_text(text_bytes, encoding = encoding)
     encoding_diagnostics <- attr(decoded, "encoding_diagnostics") %||%
       encoding_diagnostics
     lines <- split_lines(decoded)
@@ -317,6 +327,8 @@ appusage_source_preflight <- function(x, input = c("file", "text", "lines"),
     failure_family = family,
     lines = lines,
     byte_count = if (is.null(bytes)) NA_real_ else length(bytes),
+    nul_byte_ratio = if (is.null(bytes)) 0 else ratios$nul_byte_ratio,
+    control_byte_ratio = if (is.null(bytes)) 0 else ratios$control_byte_ratio,
     detected_components = components,
     selected_component = selected_component,
     mixed_content = length(components) > 1L,

@@ -1,3 +1,34 @@
+# appusageR 0.3.8 (2026-10-12)
+
+- Apply the existing file-reader NUL cleanup during preflight after the binary
+  gates. Sparse-NUL non-APP Usage logs retain an unknown-content diagnosis;
+  original byte counts and ratios remain available for inspection.
+- Recognize ISO base media (`ftyp`) uploads before text decoding, including
+  compressed videos with NUL/control-byte ratios below the existing thresholds.
+  Retain these sources as diagnosed binary-input failures.
+- Validate decimal and exponent spellings of ordinary numeric Excel cells by
+  exact numeric value. Preserve literal character/date/time cell checks and
+  continue to reject changed values and missing cells.
+- Return `NA` for invalid APP Usage date tokens without aborting type detection.
+  Unknown text containing malformed date-like values keeps its source diagnosis;
+  valid calendar dates and scientific processing rules remain unchanged.
+- Add `run_appusage_projects()` for serial project collections with configurable
+  file workers, compact checkpoints, failure isolation and completed-project reuse.
+  Validate registry identities, directories and questionnaire columns before execution.
+- Add read-only `validate_appusage_project()` with metadata previews and content
+  checks for source inventories, stage ownership, RDA types, links and Excel cells.
+  Retain diagnosed input failures in completed delivery reports.
+- Pass the existing worker cap override from the collection runner. Collection
+  runs select eight file workers by default and retain existing retry behavior.
+  Protect accepted outputs with a `read_only` registry policy and share compact
+  metadata between planning and inspection. Scientific schema remains 0.3.4.
+- Preserve saved diagnostic columns when summary CSV and Excel are both missing;
+  restore projections from intact caches without scientific recomputation.
+  Missing second-level summaries produce explicit checks without column warnings.
+- Reconstruct missing first-summary metadata in memory before checking scientific
+  cache protection. Unverified or unidentified existing payloads require explicit
+  rebuild approval; compatible summary recovery keeps scientific artifacts intact.
+
 # appusageR 0.3.7 (2026-10-06)
 
 Development and performance acceptance completed on 2026-10-06.

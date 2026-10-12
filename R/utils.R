@@ -170,13 +170,13 @@ parse_split_screen_ms <- function(x) {
 #'
 #' @param x Date values.
 #'
-#' @return Date vector.
+#' @return Date vector. Missing or invalid dates are returned as `NA`.
 #' @export
 safe_as_date <- function(x) {
   x <- as.character(x)
   x <- stringi::stri_extract_first_regex(x, "[0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}")
   x <- appusage_text_str_replace_all(x, "/", "-")
-  suppressWarnings(as.Date(x))
+  suppressWarnings(as.Date(x, format = "%Y-%m-%d"))
 }
 
 #' Add weekday labels

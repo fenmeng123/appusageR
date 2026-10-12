@@ -12,7 +12,9 @@ Two per-source cache levels connect these modules: faithful parsed data
 
 ```mermaid
 flowchart TB
+    B["Project collection · serial projects / file workers"]
     W["Workflow: configure → plan → execute / resume"]
+    B --> W
     W --> P
     subgraph Sources["Per-source processing"]
         P["Text input and parsing<br/>proc-1 cache"]
@@ -30,8 +32,11 @@ flowchart TB
     A --> O
     M --> O
     P -. "Source diagnostics" .-> O
+    O --> V["Project delivery inspection"]
 ```
 
+`run_appusage_projects()` sequences independently resumable projects;
+`validate_appusage_project()` checks their delivery.
 The computational modules operate on R objects.
 The workflow adds file access, content-based cache validation, stage records,
 and project outputs.
@@ -67,6 +72,18 @@ result <- run_appusage_workflow(plan = plan)
 result <- run_appusage_workflow(project_dir = "outputs/study")
 summary(result)
 ```
+
+## Project collections and delivery
+
+The collection runner processes registered projects in sequence, with parallel file workers inside each project.
+It checks existing delivery and resumes unfinished stages while keeping project checkpoints separate.
+Delivery inspection reports source identities, cache integrity, scientific table types, QC, and questionnaire exports.
+
+- `run_appusage_projects(projects, batch_dir, workers = 8)` accepts one registry
+  row per project with `project_id`, `project_name`, `project_dir`, and `output_dir`;
+  optional questionnaire columns configure matching.
+- `validate_appusage_project(project_dir, verify = "content")` checks current
+  content; `verify = "metadata"` previews saved evidence.
 
 ## Text input and parsing
 

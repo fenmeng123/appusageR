@@ -12,7 +12,43 @@ vignette: >
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
 ```
 
-## Configuration, plans and independent stages (0.3.7)
+## Project collections and delivery
+
+Register explicit input and output folders, then run projects in table order.
+Each project uses the shared workflow and its own source caches. The collection
+checkpoint retains pending, completed, reused and failed project outcomes.
+
+```{r}
+projects <- data.frame(
+  project_id = c("001", "002"),
+  project_name = c("Pilot", "Followup"),
+  project_dir = c("raw/pilot", "raw/followup"),
+  output_dir = c("outputs/pilot", "outputs/followup")
+)
+result <- run_appusage_projects(projects, "outputs/collection", workers = 8)
+summary(result)$projects
+delivery <- validate_appusage_project("outputs/pilot", verify = "content")
+summary(delivery)
+```
+
+Optional registry fields `self_report_file`, `sheet`, `sequence_col`,
+`upload_col` and `submit_time_col` adapt explicit questionnaire workbooks.
+The `config` list column supplies per-project configurations. Normal collection
+file batches select the requested workers using the existing worker cap override;
+tail batches and fault retries retain the existing scheduler's behavior.
+Standalone workflows retain their existing adaptive worker limits.
+Set the optional registry field `read_only = TRUE` to protect an accepted
+project: complete outputs are reused, and missing delivery is reported as blocked.
+
+Content delivery checks verify inventories, signatures, scientific R types,
+source links and actual Excel cells while loading one source at a time.
+Metadata previews leave raw, RDA and questionnaire cells unopened. Printing and
+summarizing a saved report use its stored results. Diagnosed upstream failures
+remain in the delivery denominator; QC and grain eligibility are reported
+separately. Existing scientific caches with insufficient identity or compatibility
+evidence are blocked until the caller explicitly approves a rebuild.
+
+## Configuration, plans and independent stages
 
 Start with a file manifest and an exact output project directory. Questionnaire
 discovery and matching are optional adapters, so ordinary APP Usage files do
