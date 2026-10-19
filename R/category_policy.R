@@ -7,6 +7,12 @@
 #' @param auto_other Assign the operational residual pair to measured low-priority unknowns.
 #' @param other_l1,other_l2 Labels used only for operational residual classification.
 #' @return A versioned `appusage_category_policy` list.
+#' @examples
+#' policy <- appusage_category_policy()
+#' policy$share_threshold
+#' policy$prevalence_threshold
+#' # Keep unknown applications pending rather than assigning residual labels.
+#' appusage_category_policy(auto_other = FALSE)
 #' @export
 appusage_category_policy <- function(share_threshold = 0.05,
                                      prevalence_threshold = 0.01,

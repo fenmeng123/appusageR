@@ -1,9 +1,16 @@
 Bundled manual app category dictionary
 
 The app_category_dictionary dataset, version v2.0.0 (formerly v261019; approved 2026-10-19), is
-distributed under the GNU General Public License, version 3, as specified
-by the appusageR package LICENSE. The maintainer has confirmed authority
+distributed under the GNU General Public License, version 3 (GPL-3), as specified
+in the package DESCRIPTION. The maintainer has confirmed authority
 to license this dictionary for public redistribution under GPL-3.
+
+Dictionary copyright holder: Kunru Song.
+Principal compiler: Dr. Kunru Song (Lead).
+Contributing compilers: Miss. Xin Jin (Assist); Mr. Changshu Zhang (Assist).
+These roles were confirmed by the copyright holder on 2026-10-19. The associated
+manuscript authors listed below are a citation, not an additional copyright claim.
+The GPL-3 terms are unchanged; no additional licensing restrictions apply.
 
 Original source: apptyp_dictionary_v261013.xlsx, Sheet1 (approved 2026-10-12).
 SHA-256: 8c31b300bcff529bdb40935056167f7f6b1a1b68f1b3b9356306d65f80529d21.

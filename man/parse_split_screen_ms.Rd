@@ -14,5 +14,5 @@ Numeric milliseconds.
 }
 \description{
 Extracts millisecond values from APP Usage split-screen labels such as
-\code{"38541（分屏时长）"}.
+a millisecond count followed by the export's split-screen annotation.
 }

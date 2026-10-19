@@ -154,7 +154,7 @@ parse_ms_value <- function(x) {
 #' Parse split-screen duration
 #'
 #' Extracts millisecond values from APP Usage split-screen labels such as
-#' `"38541（分屏时长）"`.
+#' a millisecond count followed by the export's split-screen annotation.
 #'
 #' @param x Values to parse.
 #'

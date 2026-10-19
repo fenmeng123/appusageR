@@ -191,12 +191,12 @@ test_that("DataBox prefixed files publish to their explicit sibling JSON", {
   json <- sub("[.]rda$", ".json", flat)
   file.copy(original, flat); file.copy(second_level_metadata_path(original), json)
   before <- load_appusage_data_object(original)
-  expect_identical(update_app_categories_cache(flat, progress = FALSE)$action, "run")
+  expect_identical(update_app_categories_cache(flat, category039_dictionary(), progress = FALSE)$action, "run")
   expect_identical(appusage_without_categories(load_appusage_data_object(flat)), before)
   metadata <- jsonlite::read_json(json, simplifyVector = FALSE)
   expect_identical(metadata$outputs$metadata_json, normalized_summary_path(json))
   expect_identical(metadata$outputs$second_level_rda, normalized_summary_path(flat))
-  expect_identical(update_app_categories_cache(flat, progress = FALSE)$action, "reuse")
+  expect_identical(update_app_categories_cache(flat, category039_dictionary(), progress = FALSE)$action, "reuse")
 })
 
 test_that("category publication rollback preserves the prior RDA/JSON pair", {
@@ -237,7 +237,8 @@ test_that("fresh primary manifests resolve through the existing first-level link
   manifest <- data.frame(source_id = "s", person_id = "p", observation_id = "o",
     selected_primary = TRUE, source_file = source)
   result <- run_appusage_workflow(source, project_dir = parent,
-    config = appusage_config(category = list(enabled = TRUE, manifest = manifest),
+    config = appusage_config(category = list(enabled = TRUE, manifest = manifest,
+                                           dictionary = category039_dictionary()),
       execution = list(progress = FALSE)))
   profile <- readRDS(file.path(parent, "appusage_category_profile.rds"))$profile
   expect_identical(profile$manifest$source_id, "s")
@@ -269,33 +270,46 @@ test_that("category transactions recover without scanning flat directories", {
   expect_identical(tools::md5sum(names(old)), old)
   expect_false(any(file.exists(unlist(paths))))
   local_mocked_bindings(appusage_second_level_owned_artifacts = function(...) stop("Unexpected directory scan"))
-  expect_identical(update_app_categories_cache(rda, progress = FALSE)$action, "run")
-  expect_identical(update_app_categories_cache(rda, progress = FALSE)$action, "reuse")
+  expect_identical(update_app_categories_cache(rda, category039_dictionary(), progress = FALSE)$action, "run")
+  expect_identical(update_app_categories_cache(rda, category039_dictionary(), progress = FALSE)$action, "reuse")
 })
 
-test_that("eight category workers produce the serial result and reuse unchanged pairs", {
-  skip_if(parallel::detectCores() < 8L)
+category039_check_workers <- function(workers, copies) {
   parent <- tempfile("category039-workers-"); dir.create(parent)
+  on.exit(unlink(parent, recursive = TRUE), add = TRUE)
   first <- read_appusage_batch(test_path("fixtures", "line_sample.txt"), ids = "1",
     output_dir = parent, project_name = "Workers", project_id = "039", progress = FALSE)
   second <- write_second_level_batch(first, progress = FALSE)
   path <- second$second_level_data_file[[1]]; json <- second_level_metadata_path(path)
-  dirs <- file.path(parent, paste0("copy", seq_len(64)))
+  dirs <- file.path(parent, paste0("copy", seq_len(copies)))
   for (dir in dirs) {
     dir.create(dir); file.copy(c(path, json), dir)
   }
   paths <- file.path(dirs, basename(path))
+  original <- load_appusage_data_object(path)
   receipt <- update_app_categories_cache(paths, category039_dictionary(), parallel = TRUE,
-    workers = 8L, checkpoint_every = 64L, progress = FALSE)
-  expect_equal(length(unique(receipt$worker_pid)), 8L)
+    workers = workers, checkpoint_every = copies, progress = FALSE)
+  expect_equal(length(unique(receipt$worker_pid)), workers)
   expect_true(all(receipt$worker_arch == R.version$arch))
   serial <- update_app_categories_cache(path, category039_dictionary(), progress = FALSE)
   expected <- load_appusage_data_object(path)
+  expect_identical(appusage_without_categories(expected), appusage_without_categories(original))
   expect_true(all(vapply(paths, function(p) identical(load_appusage_data_object(p), expected), logical(1))))
   before <- tools::md5sum(paths)
   reused <- update_app_categories_cache(paths, category039_dictionary(), progress = FALSE)
   expect_true(all(reused$action == "reuse"))
   expect_identical(tools::md5sum(paths), before)
+}
+
+test_that("two category workers preserve Unicode science and match serial categories", {
+  category039_check_workers(2L, 4L)
+})
+
+test_that("eight category workers produce the serial result and reuse unchanged pairs", {
+  skip_on_cran()
+  cores <- parallel::detectCores()
+  skip_if(is.na(cores) || cores < 8L)
+  category039_check_workers(8L, 64L)
 })
 
 test_that("category JSON compaction preserves parsed values and array/object shapes", {

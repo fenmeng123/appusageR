@@ -10,6 +10,15 @@
 #' @param export_type_priority Existing export-type preference for duplicates.
 #' @return An `appusage_link_result` containing questionnaire rows, source
 #'   matches, and diagnostics.
+#' @usage match_appusage_self_report(
+#'   self_report,
+#'   manifest,
+#'   project_dir,
+#'   sequence_col = "\u5e8f\u53f7",
+#'   upload_col,
+#'   submit_time_col = NULL,
+#'   export_type_priority = c("line", "meta", "day", "app")
+#' )
 #' @export
 match_appusage_self_report <- function(self_report, manifest, project_dir,
                                         sequence_col = "\u5e8f\u53f7", upload_col,

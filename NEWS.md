@@ -1,5 +1,14 @@
 # appusageR 0.3.9
 
+- Prepare CRAN checks with a short two-worker category equivalence test; retain
+  the full eight-worker/64-file acceptance test for local runs. Category workers
+  inherit the caller's locale instead of imposing a Windows-only locale name.
+  Clarify GPL-3 and author-confirmed dictionary copyright/contributor roles,
+  declare R >= 4.1.0 and the test helper requirements, and add runnable synthetic
+  category examples. Dictionary v2.0.0 bytes and scientific rules are unchanged.
+  Encoding regression tests use the frozen Windows R 4.5.3 reference values on
+  all platforms, rather than assuming each host's iconv has the same mappings.
+
 - Adopt independent dictionary semantic versions: v261013 is v1.0.0 and
   v261019 is v2.0.0. Only provenance version metadata changes; all dictionary
   cells are preserved. See installed DICTIONARY_VERSIONING.md for increment rules.

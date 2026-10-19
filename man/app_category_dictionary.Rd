@@ -58,6 +58,8 @@ version, source basename, SHA-256, approval scope and conversion contract.
 Original workbooks and participant-level validation data are not included.
 
 This bundled snapshot is redistributed under GPL-3, the package's license.
+Copyright holder and lead compiler: Kunru Song. Xin Jin and Changshu Zhang
+assisted compilation. These roles do not change the dataset or its version.
 See the installed \file{COPYRIGHTS} file for dictionary attribution.
 }
 \examples{

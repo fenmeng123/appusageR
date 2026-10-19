@@ -28,3 +28,10 @@ A versioned \code{appusage_category_policy} list.
 These thresholds prioritize dictionary maintenance; they never exclude users
 or change scientific QC. Residual labels are operational, not manual codes.
 }
+\examples{
+policy <- appusage_category_policy()
+policy$share_threshold
+policy$prevalence_threshold
+# Keep unknown applications pending rather than assigning residual labels.
+appusage_category_policy(auto_other = FALSE)
+}

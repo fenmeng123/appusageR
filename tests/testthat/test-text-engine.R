@@ -42,11 +42,15 @@ test_that("explicit invalid-sequence skipping preserves genuine U+FFFD", {
 test_that("GB18030 preserves frozen mappings and legacy reserved-range behavior", {
   sequences <- list(c(0xa3,0xa0),c(0xa6,0xd9),c(0xa8,0xbc),c(0xfe,0xa0),
     c(0x81,0x35,0xf4,0x37),c(0x84,0x31,0xa5,0x30),c(0xfe,0x39,0xfe,0x39),0x80)
-  for (seq in sequences) {
-    bytes <- as.raw(seq)
-    expect_identical(appusage_text_encode_strict(list(bytes), "GB18030"), iconv(rawToChar(bytes), from = "GB18030", to = "UTF-8"))
+  # The scientific decoder freezes Windows R 4.5.3 mappings. Host iconv may
+  # implement a newer GB18030 edition; it is not the oracle on every platform.
+  expected <- c("\ue5e5", "\ue78d", "\ue7c7", "\ue864", "\u1e3f", "?", "?", NA_character_)
+  for (i in seq_along(sequences)) {
+    bytes <- as.raw(sequences[[i]])
+    expect_identical(appusage_text_encode_strict(list(bytes), "GB18030"), expected[[i]])
     combined <- c(charToRaw("before"), bytes, charToRaw("after"))
-    expect_identical(appusage_text_encode_strict(list(combined), "GB18030"), iconv(rawToChar(combined), from = "GB18030", to = "UTF-8"))
+    surrounded <- if (is.na(expected[[i]])) NA_character_ else paste0("before", expected[[i]], "after")
+    expect_identical(appusage_text_encode_strict(list(combined), "GB18030"), surrounded)
   }
 })
 
@@ -62,10 +66,14 @@ test_that("auto detector legacy encodings reject undefined bytes and preserve va
     list('windows-1253', c(0x9f)), list('Shift_JIS',c(0x1a,0x1c,0x7f,0x80)),
     list('Big5',0xff),list('EUC-JP',c(0xa2,0xaf)),list('EUC-JP',c(0x8f,0xa1,0xa1)),
     list('EUC-KR',c(0x81,0x41)))
-  for (case in cases) {
+  # Independently recorded base iconv results on Windows R 4.5.3, matching
+  # the existing compatibility contract rather than the host converter.
+  expected <- c("\u009f", "\u001a\u001c\u007f\u0080", NA_character_, "\u30fb", NA_character_, "\uac02")
+  for (i in seq_along(cases)) {
+    case <- cases[[i]]
     bytes <- as.raw(case[[2L]])
     expect_identical(appusage_text_encode_strict(list(bytes),case[[1L]]),
-      iconv(rawToChar(bytes),from=case[[1L]],to='UTF-8'))
+      expected[[i]])
   }
 })
 

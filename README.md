@@ -215,4 +215,4 @@ Version history and development records are in [NEWS.md](NEWS.md).
 
 Author: Kunru Song · <Kunrusong97@gmail.com>
 
-License: [GPL-3](LICENSE)
+License: [GPL-3](https://www.gnu.org/licenses/gpl-3.0.html)

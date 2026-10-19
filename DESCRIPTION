@@ -1,16 +1,30 @@
 Package: appusageR
-Title: Parse and Validate APP Usage Android Smartphone-Use Logs
+Title: Parse and Validate Android Smartphone-Use Logs
 Version: 0.3.9
 Authors@R: 
-    person("Kunru", "Song", email = "Kunrusong97@gmail.com", role = c("aut", "cre"))
-Description: Tools for parsing, validating, standardizing, and summarizing exported APP Usage / Screen Time Android smartphone-use logs, with resumable per-file caches, memory-aware parallel batch workflows, and project-level self-report matching.
-License: GPL-3 + file LICENSE
+    c(person("Kunru", "Song", email = "Kunrusong97@gmail.com",
+             role = c("aut", "cre", "cph"),
+             comment = "Lead compiler and copyright holder of the bundled dictionary"),
+      person("Xin", "Jin", role = "ctb",
+             comment = "Assisted compilation of the bundled dictionary"),
+      person("Changshu", "Zhang", role = "ctb",
+             comment = "Assisted compilation of the bundled dictionary"))
+Description: Parse, validate, standardize, and summarize exported 'APP Usage' and
+    'Screen Time' Android smartphone-use logs. Provides resumable per-file caches,
+    memory-aware parallel workflows, quality-control summaries, and project-level
+    self-report matching. Optional application classification uses an independently
+    versioned manual dictionary, retains ambiguous matches for review, and updates
+    category annotations without recomputing upstream scientific data.
+License: GPL-3
+Copyright: Bundled app category dictionary: Kunru Song. See inst/COPYRIGHTS.
+URL: https://github.com/fenmeng123/appusageR
+BugReports: https://github.com/fenmeng123/appusageR/issues
 Encoding: UTF-8
 LazyData: true
 LazyDataCompression: xz
 Roxygen: list(markdown = TRUE)
 Depends:
-    R (>= 2.10)
+    R (>= 4.1.0)
 Imports:
     cli,
     jsonlite,
@@ -23,8 +37,8 @@ Suggests:
     knitr,
     pkgload,
     rmarkdown,
-    testthat (>= 3.0.0),
-    withr
+    testthat (>= 3.2.0),
+    withr (>= 2.5.0)
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0
 VignetteBuilder: knitr

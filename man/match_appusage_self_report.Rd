@@ -8,7 +8,7 @@ match_appusage_self_report(
   self_report,
   manifest,
   project_dir,
-  sequence_col = "序号",
+  sequence_col = "\u5e8f\u53f7",
   upload_col,
   submit_time_col = NULL,
   export_type_priority = c("line", "meta", "day", "app")

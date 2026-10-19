@@ -12,6 +12,43 @@ vignette: >
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
 ```
 
+## A runnable category example
+
+This small synthetic example runs when the vignette is built. It uses an explicit
+dictionary and primary-source identity; it does not read research files. The
+larger project recipes below are intentionally not executed during package checks.
+
+```{r category-example, eval = TRUE}
+library(appusageR)
+dictionary <- data.frame(
+  App_UUID = "org.example.known", App_Name = "Known",
+  Level_1_Category = "Utilities and Tools", Level_2_Category = "System Utilities"
+)
+daily <- data.frame(
+  date = as.Date("2024-01-01"),
+  package_name = c("org.example.known", "org.example.new"),
+  app_name = c("Known", "New"), activity_type = "foreground",
+  duration_ms = c(90000, 10000)
+)
+sources <- data.frame(source_id = "s1", person_id = "p1", observation_id = "o1",
+                      selected_primary = TRUE)
+policy <- appusage_category_policy()
+profile <- profile_uncoded_apps(sources, dictionary, policy, data = list(s1 = daily))
+classified <- add_app_categories(daily, dictionary, policy = policy, profile = profile)
+classified[, c("app_name", "Level_1_Category", "app_category_disposition")]
+stopifnot(identical(classified$duration_ms, daily$duration_ms))
+```
+
+The known application receives a dictionary label; the unknown application remains
+in the review queue. Execution success does not mean every application has been
+manually classified. Package and dictionary versions are independent:
+
+```{r version-example, eval = TRUE}
+packageVersion("appusageR")
+data("app_category_dictionary", package = "appusageR")
+attr(app_category_dictionary, "dictionary_provenance")$dictionary_version
+```
+
 ## Project collections and delivery
 
 Register explicit input and output folders, then run projects in table order.

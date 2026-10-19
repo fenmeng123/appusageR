@@ -15,6 +15,28 @@
 #' @param checkpoint_file Optional RDS receipt file, separate from scientific caches.
 #' @param progress Report bounded checkpoint progress.
 #' @return A data frame of actions, worker identities and category counts.
+#' @examples
+#' local({
+#'   folder <- tempfile("category-example-")
+#'   dir.create(folder)
+#'   on.exit(unlink(folder, recursive = TRUE))
+#'   input <- file.path(folder, "synthetic.txt")
+#'   header <- c("2024-10-08", "\u5f00\u59cb\u65f6\u95f4\uff08ms\uff09",
+#'     "\u5f00\u59cb\u65f6\u95f4", "\u5e94\u7528\u540d\u79f0",
+#'     "\u5e94\u7528\u6807\u8bc6", "\u4f7f\u7528\u65f6\u957f",
+#'     "\u7ed3\u675f\u65f6\u95f4\uff08ms\uff09", "\u7ed3\u675f\u65f6\u95f4")
+#'   row <- c("", "T:1728316800000", "00:00:00", "Example", "org.example.app",
+#'     "\u5c11\u4e8e\u4e00\u5206\u949f", "T:1728316812000", "00:00:12")
+#'   writeLines(c(paste(header, collapse = ","), paste(row, collapse = ",")), input)
+#'   first <- read_appusage_batch(input, ids = "1", output_dir = folder,
+#'     project_name = "Example", project_id = "001", progress = FALSE)
+#'   second <- write_second_level_batch(first, progress = FALSE)
+#'   dictionary <- data.frame(App_UUID = "org.example.app", App_Name = "Example",
+#'     Level_1_Category = "Utilities and Tools", Level_2_Category = "System Utilities")
+#'   paths <- second$second_level_data_file
+#'   update_app_categories_cache(paths, dictionary, progress = FALSE)$action
+#'   update_app_categories_cache(paths, dictionary, progress = FALSE)$action
+#' })
 #' @export
 update_app_categories_cache <- function(manifest, dictionary = NULL,
                                         policy = appusage_category_policy(), profile = NULL,
@@ -55,7 +77,7 @@ update_app_categories_cache <- function(manifest, dictionary = NULL,
     on.exit(if (!ok) appusage_stop_cluster_safely(cl), add = TRUE)
     package_root <- getNamespaceInfo(asNamespace("appusageR"), "path")
     startup <- function(root, libs) {
-      Sys.setenv(LANG = "Chinese_China.utf8", LC_ALL = "Chinese_China.utf8")
+      # PSOCK workers inherit the caller's environment; locale names are OS-specific.
       .libPaths(libs)
       if (file.exists(file.path(root, "Meta", "package.rds"))) {
         loadNamespace("appusageR", lib.loc = dirname(root))

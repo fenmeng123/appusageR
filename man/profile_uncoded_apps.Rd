@@ -38,3 +38,15 @@ Only saved canonical foreground measurements are used. Repeated observations
 use maximum within-person primary-file share; prevalence requires positive
 foreground time. Missing measurements are never imputed to zero.
 }
+\examples{
+dictionary <- data.frame(App_UUID = "org.example.known", App_Name = "Known",
+  Level_1_Category = "Utilities and Tools", Level_2_Category = "System Utilities")
+sources <- data.frame(source_id = "s1", person_id = "p1", observation_id = "o1",
+  selected_primary = TRUE)
+daily <- data.frame(date = as.Date("2024-01-01"),
+  package_name = c("org.example.known", "org.example.new"),
+  app_name = c("Known", "New"), activity_type = "foreground",
+  duration_ms = c(90000, 10000))
+profile <- profile_uncoded_apps(sources, dictionary, data = list(s1 = daily))
+profile$apps[, c("app_key", "disposition")]
+}

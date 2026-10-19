@@ -11,7 +11,7 @@ run_appusage_project_workflow(
   project_id = NULL,
   project_name = NULL,
   self_report_file = NULL,
-  sequence_col = "序号",
+  sequence_col = "\u5e8f\u53f7",
   upload_col = NULL,
   submit_time_col = NULL,
   max_files = Inf,
