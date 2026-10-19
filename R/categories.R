@@ -4,14 +4,16 @@
 #' The dictionary must contain `App_UUID`, `App_Name`, `Level_1_Category`, and
 #' `Level_2_Category`. `App_UUID` is matched against APP Usage `package_name`.
 #'
-#' @param path Path to an Excel dictionary file.
+#' @param path Path to an Excel dictionary file; NULL uses the bundled dictionary.
 #' @param sheet Sheet passed to [readxl::read_excel()].
 #' @param ... Additional arguments passed to [readxl::read_excel()].
 #'
 #' @return A tibble with dictionary columns and matching diagnostics as
 #'   attributes.
 #' @export
-read_app_category_dictionary <- function(path, sheet = 1, ...) {
+read_app_category_dictionary <- function(path = NULL, sheet = 1, ...) {
+  if (is.null(path)) return(standardize_category_dict(appusage_default_dictionary(),
+    dictionary_source = "bundled:app_category_dictionary", dictionary_sheet = "Sheet1"))
   if (!requireNamespace("readxl", quietly = TRUE)) {
     cli::cli_abort(c(
       "Package {.pkg readxl} is required to read app category dictionaries."
@@ -36,18 +38,27 @@ read_app_category_dictionary <- function(path, sheet = 1, ...) {
 #' `App_Name_Repaired` and `App_Name`.
 #'
 #' @param data A data frame or second-level APP Usage `data` list.
-#' @param dictionary A dictionary data frame, a standardized dictionary returned
+#' @param dictionary NULL uses the bundled dictionary; otherwise a dictionary data frame, a standardized dictionary returned
 #'   by `read_app_category_dictionary()`, or a dictionary file path.
 #' @param overwrite Whether to overwrite existing non-missing category values.
+#' @param policy Priority policy from [appusage_category_policy()].
+#' @param profile Frozen result from [profile_uncoded_apps()], or NULL for dictionary-only matching.
 #'
 #' @return `data` with category columns added. Matching summaries are attached
 #'   as the `app_category_summary` attribute.
 #' @export
-add_app_categories <- function(data, dictionary, overwrite = TRUE) {
+add_app_categories <- function(data, dictionary = NULL, overwrite = TRUE,
+                               policy = appusage_category_policy(), profile = NULL) {
+  policy <- appusage_validate_category_policy(policy)
   dictionary <- as_app_category_dictionary(dictionary)
+  if (!is.null(profile)) appusage_validate_category_profile(profile, dictionary, policy)
+  appusage_add_categories_prepared(data, dictionary, overwrite, policy, profile)
+}
+
+appusage_add_categories_prepared <- function(data, dictionary, overwrite, policy, profile) {
 
   if (is.data.frame(data)) {
-    return(add_app_categories_frame(data, dictionary, overwrite = overwrite))
+    return(add_app_categories_frame(data, dictionary, overwrite = overwrite, policy = policy, profile = profile))
   }
   if (!is.list(data)) {
     cli::cli_abort(c(
@@ -63,14 +74,30 @@ add_app_categories <- function(data, dictionary, overwrite = TRUE) {
       out[[nm]] <- add_app_categories_frame(
         out[[nm]],
         dictionary,
-        overwrite = overwrite
+        overwrite = overwrite, policy = policy, profile = profile
       )
       summary <- attr(out[[nm]], "app_category_summary", exact = TRUE)
       summary$grain <- nm
       summaries[[length(summaries) + 1L]] <- summary
     }
   }
-  attr(out, "app_category_summary") <- combine_category_summaries(summaries)
+  combined <- combine_category_summaries(summaries)
+  keys <- lapply(out[intersect(c("event", "episode", "daily"), names(out))], function(frame) {
+    if (!is.data.frame(frame) || !all(c("package_name", "app_name", "app_category_match_status") %in% names(frame))) return(NULL)
+    key <- appusage_category_key(frame$package_name, frame$app_name)
+    key[frame$app_category_disposition == "not_app"] <- NA_character_
+    data.frame(key = key, matched = frame$app_category_match_status == "matched")
+  })
+  keys <- Filter(Negate(is.null), keys)
+  if (length(keys)) {
+    identities <- do.call(rbind, keys)
+    combined$n_category_grain_app_appearances <- combined$n_category_unique_apps
+    combined$n_category_unique_apps <- length(unique(stats::na.omit(identities$key)))
+    combined$n_category_matched_apps <- length(unique(stats::na.omit(identities$key[identities$matched])))
+    combined$n_category_unmatched_apps <- combined$n_category_unique_apps - combined$n_category_matched_apps
+    combined$category_match_rate <- safe_rate(combined$n_category_matched_apps, combined$n_category_unique_apps)
+  }
+  attr(out, "app_category_summary") <- combined
   out
 }
 
@@ -82,64 +109,38 @@ add_app_categories <- function(data, dictionary, overwrite = TRUE) {
 #'
 #' @param project_dir Project folder produced by [read_appusage_batch()] and
 #'   [write_second_level_batch()].
-#' @param dictionary Dictionary data frame, standardized dictionary, or file
+#' @param dictionary NULL uses the bundled dictionary; otherwise a data frame or file
 #'   path readable by `read_app_category_dictionary()`.
 #' @param overwrite Whether to overwrite existing non-missing category values.
 #' @param progress Whether to print simple progress messages.
+#' @param policy,profile Priority policy and optional frozen profile.
+#' @param resume Reuse intact matching category contracts.
+#' @param parallel,workers File-worker execution controls.
 #'
 #' @return Invisibly returns a tibble summary of category matching.
 #' @export
-write_app_categories_batch <- function(project_dir, dictionary,
-                                       overwrite = TRUE,
-                                       progress = TRUE) {
-  if (
-    length(project_dir) != 1 ||
-      is.na(project_dir) ||
-      !dir.exists(project_dir)
-  ) {
-    cli::cli_abort("`project_dir` must be an existing project directory.")
-  }
-  project_dir <- normalizePath(project_dir, winslash = "/", mustWork = TRUE)
-  proclevel_2 <- file.path(project_dir, "proclevel-2")
-  if (!dir.exists(proclevel_2)) {
-    cli::cli_abort("Project is missing {.path proclevel-2}.")
-  }
-  dictionary <- as_app_category_dictionary(dictionary)
-  second_level_files <- sort(list.files(
-    proclevel_2,
-    pattern = "_proc-2[.]rda$",
-    full.names = TRUE
-  ))
-  if (length(second_level_files) == 0) {
-    cli::cli_abort(c(
-      "No second-level RDA files were found in {.path {proclevel_2}}."
-    ))
-  }
-
-  rows <- vector("list", length(second_level_files))
-  for (i in seq_along(second_level_files)) {
-    if (isTRUE(progress) && (i == 1 || i == length(second_level_files))) {
-      message(sprintf(
-        "Adding app categories to second-level file %d/%d",
-        i,
-        length(second_level_files)
-      ))
-    }
-    rows[[i]] <- write_app_categories_one(
-      second_level_rda = second_level_files[[i]],
-      project_dir = project_dir,
-      dictionary = dictionary,
-      overwrite = overwrite
-    )
-  }
-  summary <- tibble::as_tibble(do.call(rbind, rows))
-  update_category_qc_summary(project_dir)
-  invisible(summary)
+write_app_categories_batch <- function(project_dir, dictionary = NULL,
+                                       overwrite = TRUE, progress = TRUE,
+                                       policy = appusage_category_policy(), profile = NULL,
+                                       resume = TRUE, parallel = FALSE, workers = 8L) {
+  if (length(project_dir) != 1L || is.na(project_dir) || !dir.exists(project_dir))
+    cli::cli_abort("project_dir must be an existing project directory.")
+  directory <- file.path(project_dir, "proclevel-2")
+  if (!dir.exists(directory)) cli::cli_abort("Project is missing proclevel-2.")
+  paths <- sort(list.files(directory, pattern = "_proc-2[.]rda$", full.names = TRUE))
+  manifest <- data.frame(rda_path = paths, stringsAsFactors = FALSE)
+  if (!is.null(profile)) manifest$source_id <- profile$manifest$source_id[match(
+    normalized_summary_path(paths), normalized_summary_path(profile$manifest$rda_path))]
+  result <- update_app_categories_cache(manifest, dictionary, policy, profile,
+    overwrite = overwrite, resume = resume, parallel = parallel, workers = workers, progress = progress)
+  if (any(result$action == "run")) update_category_qc_summary(project_dir)
+  invisible(tibble::as_tibble(result))
 }
 
 standardize_category_dict <- function(dictionary,
                                       dictionary_source = NA_character_,
                                       dictionary_sheet = NA_character_) {
+  provenance <- attr(dictionary, "dictionary_provenance", exact = TRUE)
   dictionary <- tibble::as_tibble(dictionary)
   required <- c("App_UUID", "App_Name", "Level_1_Category", "Level_2_Category")
   missing <- setdiff(required, names(dictionary))
@@ -167,10 +168,23 @@ standardize_category_dict <- function(dictionary,
     dictionary$App_Name_Repaired
   )
 
-  diagnostics <- dictionary_diagnostics(dictionary)
+  if (anyNA(dictionary$Level_1_Category) || anyNA(dictionary$Level_2_Category))
+    cli::cli_abort("Dictionary labels must be complete; unknown apps are not dictionary rows.")
+  parents <- split(dictionary$Level_1_Category, dictionary$Level_2_Category)
+  if (any(vapply(parents, function(x) length(unique(x)) > 1L, logical(1))))
+    cli::cli_abort("Dictionary Level 2 categories must have a single Level 1 parent.")
+  lookups <- build_category_lookups(dictionary)
+  diagnostics <- dictionary_diagnostics(dictionary, lookups)
+  attr(dictionary, "dictionary_provenance") <- provenance
+  attr(dictionary, "dictionary_content_hash") <- appusage_object_fingerprint(as.data.frame(dictionary))
+  conflict_rows <- dictionary$.app_uuid_key %in% lookups$app_uuid$conflicts$key
+  attr(dictionary, "app_category_candidates") <- split(dictionary[conflict_rows, ],
+    dictionary$.app_uuid_key[conflict_rows])
   attr(dictionary, "dictionary_source") <- dictionary_source
   attr(dictionary, "dictionary_sheet") <- dictionary_sheet
-  attr(dictionary, "app_category_lookups") <- build_category_lookups(dictionary)
+  attr(dictionary, "app_category_lookups") <- lookups
+  attr(dictionary, "dictionary_index_hash") <- appusage_object_fingerprint(list(lookups = lookups,
+    candidates = attr(dictionary, "app_category_candidates", exact = TRUE)))
   attr(dictionary, "app_category_diagnostics") <- diagnostics
   class(dictionary) <- unique(c(
     "appusage_category_dictionary",
@@ -180,7 +194,17 @@ standardize_category_dict <- function(dictionary,
 }
 
 as_app_category_dictionary <- function(dictionary) {
+  if (is.null(dictionary)) dictionary <- appusage_default_dictionary()
   if (inherits(dictionary, "appusage_category_dictionary")) {
+    if (is.null(attr(dictionary, "dictionary_index_hash", exact = TRUE)))
+      return(standardize_category_dict(dictionary,
+        attr(dictionary, "dictionary_source", exact = TRUE), attr(dictionary, "dictionary_sheet", exact = TRUE)))
+    if (!identical(attr(dictionary, "dictionary_content_hash", exact = TRUE),
+        appusage_object_fingerprint(as.data.frame(dictionary))) ||
+        !identical(attr(dictionary, "dictionary_index_hash", exact = TRUE),
+          appusage_object_fingerprint(list(lookups = attr(dictionary, "app_category_lookups", exact = TRUE),
+            candidates = attr(dictionary, "app_category_candidates", exact = TRUE)))))
+      cli::cli_abort("Standardized dictionary was modified; recompile an explicit dictionary data frame.")
     return(dictionary)
   }
   if (is.character(dictionary) && length(dictionary) == 1) {
@@ -192,8 +216,14 @@ as_app_category_dictionary <- function(dictionary) {
   cli::cli_abort("`dictionary` must be a file path or data frame.")
 }
 
+.appusage_category_index_cache <- new.env(parent = emptyenv())
+
 build_category_lookups <- function(dictionary) {
-  list(
+  key <- appusage_category_fingerprint(lapply(dictionary[c(".app_uuid_key", ".app_name_key",
+    ".app_name_repaired_key", "Level_1_Category", "Level_2_Category")], unname))
+  if (exists(key, envir = .appusage_category_index_cache, inherits = FALSE))
+    return(get(key, envir = .appusage_category_index_cache, inherits = FALSE))
+  out <- list(
     app_uuid = build_category_lookup(dictionary, ".app_uuid_key"),
     app_name_repaired = build_category_lookup(
       dictionary,
@@ -201,122 +231,64 @@ build_category_lookups <- function(dictionary) {
     ),
     app_name = build_category_lookup(dictionary, ".app_name_key")
   )
+  if (length(ls(.appusage_category_index_cache, all.names = TRUE)) >= 8L)
+    rm(list = ls(.appusage_category_index_cache, all.names = TRUE)[[1L]], envir = .appusage_category_index_cache)
+  assign(key, out, envir = .appusage_category_index_cache)
+  out
 }
 
 build_category_lookup <- function(dictionary, key_col) {
-  key <- dictionary[[key_col]]
-  keep <- !is.na(key) &
-    !is.na(dictionary$Level_1_Category) &
+  keep <- !is.na(dictionary[[key_col]]) & !is.na(dictionary$Level_1_Category) &
     !is.na(dictionary$Level_2_Category)
-  if (!any(keep)) {
-    return(list(
-      matches = empty_category_lookup(),
-      conflicts = empty_category_conflicts()
-    ))
-  }
-  working <- dictionary[
-    keep,
-    c(key_col, "Level_1_Category", "Level_2_Category"),
-    drop = FALSE
-  ]
+  working <- unique(as.data.frame(dictionary[keep,
+    c(key_col, "Level_1_Category", "Level_2_Category"), drop = FALSE]))
   names(working)[[1]] <- "key"
-  groups <- split(working, working$key)
-  matched <- list()
-  conflicts <- list()
-  for (key_value in names(groups)) {
-    values <- unique(groups[[key_value]][
-      ,
-      c("Level_1_Category", "Level_2_Category"),
-      drop = FALSE
-    ])
-    if (nrow(values) == 1) {
-      matched[[length(matched) + 1L]] <- data.frame(
-        key = key_value,
-        Level_1_Category = values$Level_1_Category[[1]],
-        Level_2_Category = values$Level_2_Category[[1]],
-        stringsAsFactors = FALSE
-      )
-    } else {
-      conflicts[[length(conflicts) + 1L]] <- data.frame(
-        key = key_value,
-        n_category_pairs = nrow(values),
-        categories = appusage_text_paste(
-          appusage_text_paste(values$Level_1_Category, values$Level_2_Category, sep = " / "),
-          collapse = " | "
-        ),
-        stringsAsFactors = FALSE
-      )
-    }
-  }
-  list(
-    matches = bind_data_frames(matched, empty_category_lookup()),
-    conflicts = bind_data_frames(conflicts, empty_category_conflicts())
-  )
+  if (!nrow(working)) return(list(matches = empty_category_lookup(), conflicts = empty_category_conflicts()))
+  counts <- table(working$key)
+  multi <- names(counts)[counts > 1L]
+  matches <- working[!working$key %in% multi, , drop = FALSE]
+  rownames(matches) <- NULL
+  conflicts <- lapply(multi, function(key) {
+    values <- working[working$key == key, , drop = FALSE]
+    data.frame(key = key, n_category_pairs = nrow(values),
+      categories = paste(paste(values$Level_1_Category, values$Level_2_Category, sep = " / "), collapse = " | "),
+      stringsAsFactors = FALSE)
+  })
+  list(matches = matches, conflicts = bind_data_frames(conflicts, empty_category_conflicts()))
 }
 
-add_app_categories_frame <- function(data, dictionary, overwrite) {
-  lookups <- attr(dictionary, "app_category_lookups", exact = TRUE)
+add_app_categories_frame <- function(data, dictionary, overwrite,
+                                     policy = appusage_category_policy(), profile = NULL) {
   out <- data
   n <- nrow(out)
-  if (!"Level_1_Category" %in% names(out)) out$Level_1_Category <- NA_character_
-  if (!"Level_2_Category" %in% names(out)) out$Level_2_Category <- NA_character_
-  out$app_category_match_method <- NA_character_
-  out$app_category_match_key <- NA_character_
-  out$app_category_match_status <- "unmatched"
-
-  needs <- rep(TRUE, n)
-  if (!isTRUE(overwrite)) {
-    needs <- is.na(category_trim(out$Level_1_Category)) |
-      is.na(category_trim(out$Level_2_Category))
-    out$app_category_match_status[!needs] <- "preexisting"
-  } else {
-    out$Level_1_Category <- NA_character_
-    out$Level_2_Category <- NA_character_
+  package <- if ("package_name" %in% names(out)) out$package_name else rep(NA_character_, n)
+  name <- if ("app_name" %in% names(out)) out$app_name else rep(NA_character_, n)
+  total <- if ("is_all_apps" %in% names(out)) out$is_all_apps else NULL
+  annotations <- appusage_resolve_category_keys(package, name, dictionary, total)
+  if (!is.null(profile)) {
+    appusage_validate_category_profile(profile, dictionary, policy, verify = FALSE)
+    idx <- match(appusage_category_key(package, name), profile$apps$app_key)
+    eligible <- annotations$app_category_match_status == "unmatched" & !is.na(idx) &
+      annotations$app_category_disposition != "missing_identity" &
+      profile$apps$disposition[idx] != "dictionary_matched"
+    annotations$app_category_disposition[eligible] <- profile$apps$disposition[idx[eligible]]
+    other <- eligible & annotations$app_category_disposition == "auto_other" & isTRUE(policy$auto_other)
+    annotations$Level_1_Category[other] <- policy$other_l1
+    annotations$Level_2_Category[other] <- policy$other_l2
+    annotations$app_category_match_method[other] <- "priority_threshold"
+    annotations$app_category_match_key[other] <- appusage_category_key(package, name)[other]
   }
-
-  package_key <- if ("package_name" %in% names(out)) {
-    standardize_package_name(out$package_name)
-  } else {
-    rep(NA_character_, n)
+  if (!overwrite && all(c("Level_1_Category", "Level_2_Category") %in% names(out))) {
+    preserved <- !is.na(category_trim(out$Level_1_Category)) & !is.na(category_trim(out$Level_2_Category)) &
+      annotations$app_category_disposition != "not_app"
+    annotations$Level_1_Category[preserved] <- as.character(out$Level_1_Category[preserved])
+    annotations$Level_2_Category[preserved] <- as.character(out$Level_2_Category[preserved])
+    annotations$app_category_match_status[preserved] <- "preexisting"
+    annotations$app_category_disposition[preserved] <- "preexisting"
   }
-  app_name_key <- if ("app_name" %in% names(out)) {
-    category_name_key(out$app_name)
-  } else {
-    rep(NA_character_, n)
-  }
-
-  out <- apply_category_match(
-    out,
-    row_key = package_key,
-    lookup = lookups$app_uuid,
-    method = "app_uuid",
-    eligible = needs
-  )
-  no_uuid_conflict <- out$app_category_match_status != "conflict"
-  out <- apply_category_match(
-    out,
-    row_key = app_name_key,
-    lookup = lookups$app_name_repaired,
-    method = "app_name_repaired",
-    eligible = needs &
-      no_uuid_conflict &
-      out$app_category_match_status == "unmatched"
-  )
-  no_name_repaired_conflict <- out$app_category_match_status != "conflict"
-  out <- apply_category_match(
-    out,
-    row_key = app_name_key,
-    lookup = lookups$app_name,
-    method = "app_name",
-    eligible = needs & no_uuid_conflict & no_name_repaired_conflict &
-      out$app_category_match_status == "unmatched"
-  )
-
-  attr(out, "app_category_summary") <- summarize_category_frame(
-    out,
-    package_key,
-    app_name_key
-  )
+  for (nm in names(annotations)) out[[nm]] <- annotations[[nm]]
+  attr(out, "app_category_summary") <- summarize_category_frame(out,
+    standardize_package_name(package), category_name_key(name))
   out
 }
 
@@ -347,15 +319,21 @@ summarize_category_frame <- function(data, package_key, app_name_key) {
     appusage_text_paste0("name:", app_name_key)
   )
   app_key[is.na(package_key) & is.na(app_name_key)] <- NA_character_
+  app_key[data$app_category_disposition == "not_app"] <- NA_character_
   matched <- data$app_category_match_status == "matched"
   conflict <- data$app_category_match_status == "conflict"
   unique_apps <- unique(stats::na.omit(app_key))
   matched_apps <- unique(stats::na.omit(app_key[matched]))
   method_counts <- table(factor(
     data$app_category_match_method[matched],
-    levels = c("app_uuid", "app_name_repaired", "app_name")
+    levels = c("app_uuid", "app_name_repaired", "app_name", "app_uuid_name", "app_uuid_name_repaired")
   ))
   list(
+    n_category_auto_other_rows = sum(data$app_category_disposition == "auto_other"),
+    n_category_pending_rows = sum(data$app_category_disposition %in%
+      c("needs_profile", "needs_review", "needs_review_conflict", "insufficient_metrics", "missing_identity")),
+    n_category_not_app_rows = sum(data$app_category_disposition == "not_app"),
+    n_category_name_disagreement_rows = sum(data$app_category_name_disagreement),
     n_category_rows = nrow(data),
     n_category_matched_rows = sum(matched, na.rm = TRUE),
     n_category_unmatched_rows = sum(
@@ -371,7 +349,7 @@ summarize_category_frame <- function(data, package_key, app_name_key) {
       0L
     ),
     category_match_rate = safe_rate(length(matched_apps), length(unique_apps)),
-    n_category_app_uuid_rows = unname(method_counts[["app_uuid"]]),
+    n_category_app_uuid_rows = sum(method_counts[c("app_uuid", "app_uuid_name", "app_uuid_name_repaired")]),
     n_category_app_name_repaired_rows =
       unname(method_counts[["app_name_repaired"]]),
     n_category_app_name_rows = unname(method_counts[["app_name"]])
@@ -393,6 +371,10 @@ combine_category_summaries <- function(summaries) {
     "n_category_app_name_rows"
   )
   list(
+    n_category_auto_other_rows = sum(frame$n_category_auto_other_rows, na.rm = TRUE),
+    n_category_pending_rows = sum(frame$n_category_pending_rows, na.rm = TRUE),
+    n_category_not_app_rows = sum(frame$n_category_not_app_rows, na.rm = TRUE),
+    n_category_name_disagreement_rows = sum(frame$n_category_name_disagreement_rows, na.rm = TRUE),
     by_grain = frame,
     n_category_rows = sum(frame$n_category_rows, na.rm = TRUE),
     n_category_matched_rows = sum(frame$n_category_matched_rows, na.rm = TRUE),
@@ -464,19 +446,20 @@ write_app_categories_one <- function(second_level_rda, project_dir,
 
 write_app_category_second_level_pair <- function(data, project_dir,
                                                  second_level_rda, summary,
-                                                 dictionary, overwrite = TRUE) {
-  metadata_file <- second_level_metadata_path(second_level_rda)
+                                                 dictionary, overwrite = TRUE,
+                                                 policy = appusage_category_policy(), profile = NULL,
+                                                 expected = NULL, metadata = NULL,
+                                                 metadata_file = NULL) {
+  metadata_file <- metadata_file %||% sub("[.]rda$", ".json", second_level_rda)
   if (!file.exists(metadata_file)) {
     metadata_file <- create_missing_second_level_metadata(second_level_rda, project_dir)
   }
-  metadata <- appusage_read_json(metadata_file, simplifyVector = TRUE)
+  if (is.null(metadata)) metadata <- appusage_read_json(metadata_file, simplifyVector = FALSE)
   metadata <- update_category_metadata(
-    metadata, summary, dictionary, second_level_rda
+    metadata, summary, dictionary, second_level_rda, metadata_file
   )
-  appusage_cleanup_second_level_transaction_artifacts(
-    second_level_rda, metadata_file
-  )
-  transaction <- appusage_second_level_transaction_paths(
+  appusage_category_recover_pair(second_level_rda, metadata_file)
+  transaction <- appusage_category_transaction_paths(
     second_level_rda, metadata_file
   )
   on.exit(
@@ -485,19 +468,26 @@ write_app_category_second_level_pair <- function(data, project_dir,
   )
   appusage_save_second_level_data(data, transaction$temp_rda)
   metadata$module_state$artifact <- appusage_artifact_signature(transaction$temp_rda)
-  metadata$module_state$category <- appusage_category_contract(dictionary, overwrite)
+  metadata$module_state$category <- expected %||% appusage_category_contract(dictionary, overwrite, policy, profile)
   appusage_validate_nonempty_file(
     transaction$temp_rda, "Category-enriched second-level RDA temporary artifact"
   )
-  write_metadata_json(metadata, transaction$temp_json)
+  jsonlite::write_json(appusage_category_json_ready(metadata), transaction$temp_json, auto_unbox = TRUE,
+    pretty = TRUE, na = "null", null = "null", digits = NA)
   appusage_validate_second_level_success_metadata(
     transaction$temp_json, second_level_rda, metadata_file
   )
+  saveRDS(list(rda = second_level_rda, json = metadata_file,
+    old_artifact = appusage_artifact_signature(second_level_rda),
+    old_json_md5 = unname(appusage_file_md5(metadata_file)),
+    new_artifact = metadata$module_state$artifact, new_contract = metadata$module_state$category),
+    transaction$journal)
   appusage_publish_second_level_pair(
     transaction = transaction,
     output_file = second_level_rda,
     metadata_file = metadata_file
   )
+  unlink(transaction$journal)
   invisible(metadata_file)
 }
 
@@ -519,7 +509,8 @@ update_matching_second_level_metadata <- function(project_dir, second_level_rda,
 }
 
 update_category_metadata <- function(metadata, summary, dictionary,
-                                     second_level_rda) {
+                                     second_level_rda,
+                                     metadata_file = sub("[.]rda$", ".json", second_level_rda)) {
   if (is.null(metadata$processing) || !is.list(metadata$processing)) {
     metadata$processing <- list()
   }
@@ -538,15 +529,23 @@ update_category_metadata <- function(metadata, summary, dictionary,
     mustWork = FALSE
   )
   metadata$outputs$metadata_json <- normalizePath(
-    second_level_metadata_path(second_level_rda),
+    metadata_file,
     winslash = "/",
     mustWork = FALSE
   )
+  if (!is.null(metadata$outputs$second_level_metadata_json))
+    metadata$outputs$second_level_metadata_json <- metadata$outputs$metadata_json
   metadata$counts$n_category_matched_apps <- summary$n_category_matched_apps
   metadata$counts$category_match_rate <- summary$category_match_rate
+  metadata$counts$n_category_auto_other_rows <- summary$n_category_auto_other_rows
+  metadata$counts$n_category_pending_rows <- summary$n_category_pending_rows
   metadata$category_dictionary <- c(
     dictionary_metadata(dictionary),
     list(
+      n_category_auto_other_rows = summary$n_category_auto_other_rows,
+      n_category_pending_rows = summary$n_category_pending_rows,
+      n_category_not_app_rows = summary$n_category_not_app_rows,
+      n_category_name_disagreement_rows = summary$n_category_name_disagreement_rows,
       n_category_rows = summary$n_category_rows,
       n_category_matched_rows = summary$n_category_matched_rows,
       n_category_unmatched_rows = summary$n_category_unmatched_rows,
@@ -638,6 +637,10 @@ category_summary_row <- function(entities, second_level_rda, status, summary,
 dictionary_metadata <- function(dictionary) {
   diagnostics <- attr(dictionary, "app_category_diagnostics", exact = TRUE)
   list(
+    classifier_version = as.character(utils::packageVersion("appusageR")),
+    dictionary_provenance = attr(dictionary, "dictionary_provenance", exact = TRUE),
+    dictionary_version = attr(dictionary, "dictionary_provenance", exact = TRUE)$dictionary_version %||% NA_character_,
+    dictionary_content_hash = attr(dictionary, "dictionary_content_hash", exact = TRUE),
     dictionary_source =
       attr(dictionary, "dictionary_source", exact = TRUE) %||% NA_character_,
     dictionary_sheet =
@@ -650,8 +653,7 @@ dictionary_metadata <- function(dictionary) {
   )
 }
 
-dictionary_diagnostics <- function(dictionary) {
-  lookups <- build_category_lookups(dictionary)
+dictionary_diagnostics <- function(dictionary, lookups = build_category_lookups(dictionary)) {
   list(
     n_rows = nrow(dictionary),
     n_unique_app_uuid = length(
@@ -670,7 +672,8 @@ dictionary_diagnostics <- function(dictionary) {
 }
 
 empty_category_summary <- function() {
-  list(
+  list(n_category_auto_other_rows = NA_integer_, n_category_pending_rows = NA_integer_,
+    n_category_not_app_rows = NA_integer_, n_category_name_disagreement_rows = NA_integer_,
     n_category_rows = NA_integer_,
     n_category_matched_rows = NA_integer_,
     n_category_unmatched_rows = NA_integer_,

@@ -4,10 +4,10 @@
 \alias{read_app_category_dictionary}
 \title{Read a manual app category dictionary}
 \usage{
-read_app_category_dictionary(path, sheet = 1, ...)
+read_app_category_dictionary(path = NULL, sheet = 1, ...)
 }
 \arguments{
-\item{path}{Path to an Excel dictionary file.}
+\item{path}{Path to an Excel dictionary file; NULL uses the bundled dictionary.}
 
 \item{sheet}{Sheet passed to \code{\link[readxl:read_excel]{readxl::read_excel()}}.}
 

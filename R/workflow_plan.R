@@ -50,8 +50,11 @@ appusage_prepare_workflow_plan <- function(x = NULL, project_dir, config = NULL,
   options <- appusage_config_second_options(config)
   research_contract <- appusage_research_contract(options, provenance)
   qc_contract <- appusage_qc_contract(options, provenance)
+  category_profile <- if (config$category$enabled)
+    appusage_workflow_category_profile(project_dir, config$category) else NULL
   category_contract <- if (config$category$enabled)
-    appusage_category_contract(config$category$dictionary, config$category$overwrite) else NULL
+    appusage_category_contract(config$category$dictionary, config$category$overwrite,
+      config$category$policy, category_profile) else NULL
   index <- match(normalized_summary_path(manifest$source_file), normalized_summary_path(first[["source_file"]]))
   tasks <- vector("list", nrow(manifest))
   summary_rows <- vector("list", nrow(manifest))
@@ -233,7 +236,9 @@ run_appusage_stage <- function(stage, project_dir, config = NULL, x = NULL) {
           strict = config$execution$strict, progress = config$execution$progress,
           resume = config$execution$resume && !config$execution$overwrite),
         category = appusage_refresh_category_stage(project_dir, second,
-          config$category$dictionary, config$category$overwrite, config$execution$resume),
+          config$category$dictionary, config$category$overwrite, config$execution$resume,
+          config$category$policy, config$category$profile, config$category$manifest,
+          config$execution$parallel, config$execution$workers),
         matching = appusage_run_matching_stage(project_dir, config,
           appusage_read_summary_csv(file.path(project_dir, "analytic_summary_table_proclevel-1.csv")),
           second, publish = FALSE),

@@ -59,9 +59,9 @@ test_that("add_app_categories uses all keys and handles conflicts", {
   expect_equal(out$Level_1_Category[[3]], "Information_Seeking")
   expect_equal(out$app_category_match_method[[3]], "app_name")
 
-  expect_true(is.na(out$Level_1_Category[[4]]))
-  expect_equal(out$app_category_match_status[[4]], "conflict")
-  expect_equal(out$app_category_match_method[[4]], "app_uuid_conflict")
+  expect_equal(out$Level_1_Category[[4]], "Music_and_Audio")
+  expect_equal(out$app_category_match_status[[4]], "matched")
+  expect_equal(out$app_category_match_method[[4]], "app_uuid_name")
 
   expect_equal(out$Level_1_Category[[5]], "Shopping_and_Lifestyle")
   expect_equal(out$app_category_match_method[[5]], "app_uuid")
@@ -159,7 +159,7 @@ test_that("write_app_categories_batch overwrites proc-2 only", {
     simplifyVector = TRUE
   )
   expect_equal(proc2_metadata$processing$app_category_status, "success")
-  expect_equal(proc2_metadata$category_dictionary$n_category_matched_apps, 2)
+  expect_equal(proc2_metadata$category_dictionary$n_category_matched_apps, 1)
   expect_identical(
     proc2_metadata$implementation_provenance$workflow_run_id,
     creator_provenance$workflow_run_id

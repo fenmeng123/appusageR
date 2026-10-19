@@ -6,7 +6,8 @@ test_that("configuration distinguishes scientific rules and execution controls",
   expect_error(appusage_config(execution = list(workers = 0)), "positive integers")
   expect_error(appusage_config(reconstruction = list(reconstruct_meta = FALSE),
     daily = list(meta_daily_source = "episodes")), "require meta reconstruction")
-  expect_error(appusage_config(category = list(enabled = TRUE)), "dictionary")
+  expect_true(appusage_config(category = list(enabled = TRUE))$category$enabled)
+  expect_null(appusage_config(category = list(enabled = TRUE))$category$dictionary)
 })
 
 test_that("independent scientific modules reproduce the composed line and meta output", {

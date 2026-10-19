@@ -134,7 +134,9 @@ appusage_execute_pipeline <- function(x, output_root, config, ids = NULL,
     categories <- execute("category", function() {
       appusage_refresh_category_stage(project_dir, qc %||% second,
         config$category$dictionary, overwrite = config$category$overwrite,
-        resume = execution$resume && !execution$overwrite)
+        resume = execution$resume && !execution$overwrite, policy = config$category$policy,
+        profile = config$category$profile, manifest = config$category$manifest,
+        parallel = execution$parallel, workers = execution$workers)
     })
   }
   matching <- if (config$matching$enabled) execute("matching", function() {
@@ -166,36 +168,43 @@ appusage_execute_pipeline <- function(x, output_root, config, ids = NULL,
     effective_config = config, implementation_provenance = provenance)
 }
 
-appusage_category_contract <- function(dictionary, overwrite = TRUE) {
+appusage_category_contract <- function(dictionary, overwrite = TRUE,
+                                       policy = appusage_category_policy(), profile = NULL) {
   dictionary <- as_app_category_dictionary(dictionary)
-  list(dictionary = appusage_object_fingerprint(as.data.frame(dictionary)), overwrite = overwrite,
+  list(dictionary = attr(dictionary, "dictionary_content_hash"),
+    dictionary_provenance = appusage_object_fingerprint(attr(dictionary, "dictionary_provenance", exact = TRUE)), overwrite = overwrite,
+    policy = unclass(policy), profile = if (is.null(profile)) NULL else profile$fingerprint,
     implementation = appusage_function_fingerprint(c("add_app_categories",
       "add_app_categories_frame", "build_category_lookups", "apply_category_match",
-      "standardize_category_dict", "category_name_key", "standardize_package_name")))
+      "standardize_category_dict", "category_name_key", "standardize_package_name",
+      "appusage_resolve_category_keys", "appusage_add_categories_prepared",
+      "appusage_category_key", "appusage_validate_category_profile",
+      "profile_uncoded_apps", "appusage_category_measure_source", "appusage_category_usage_table")))
 }
 
 appusage_refresh_category_stage <- function(project_dir, summary, dictionary,
-                                             overwrite = TRUE, resume = TRUE) {
+                                             overwrite = TRUE, resume = TRUE,
+                                             policy = appusage_category_policy(), profile = NULL,
+                                             manifest = NULL, parallel = FALSE, workers = 8L) {
   dictionary <- as_app_category_dictionary(dictionary)
-  expected <- appusage_category_contract(dictionary, overwrite)
   paths <- appusage_summary_proc2_paths(summary)
-  actions <- rep("blocked", length(paths))
-  for (i in seq_along(paths)) {
-    path <- paths[[i]]
-    if (!is_present_string(path) || !file.exists(path)) next
-    metadata <- tryCatch(appusage_read_validation_json(second_level_metadata_path(path)),
-      error = function(e) NULL)
-    if (resume && appusage_contract_equal(metadata$module_state$category, expected)) {
-      actions[[i]] <- "reuse"
-      next
-    }
-    actions[[i]] <- "run"
-    result <- write_app_categories_one(path, project_dir, dictionary, overwrite)
-    if (identical(result$status[[1]], "error")) cli::cli_abort("Category update failed: {result$error_message[[1]]}")
+  if (is.null(profile) && !is.null(manifest)) {
+    profile <- appusage_workflow_category_profile(project_dir,
+      list(dictionary = dictionary, policy = policy, manifest = manifest, profile = NULL), summary, build = TRUE)
   }
+  actions <- rep("blocked", length(paths))
+  valid <- is_present_string(paths) & file.exists(paths)
+  cache_manifest <- data.frame(rda_path = paths[valid], stringsAsFactors = FALSE)
+  if (!is.null(profile)) cache_manifest$source_id <- profile$manifest$source_id[match(
+    normalized_summary_path(paths[valid]), normalized_summary_path(profile$manifest$rda_path))]
+  receipts <- update_app_categories_cache(cache_manifest, dictionary, policy, profile,
+    overwrite = overwrite, resume = resume, parallel = parallel, workers = workers, progress = FALSE)
+  actions[valid] <- receipts$action
+  if (!is.null(manifest)) appusage_finish_workflow_category_profile(project_dir)
   result <- if (!any(actions == "run")) summary else appusage_project_summary(project_dir, write = FALSE)
   attr(result, "execution_actions") <- actions
   attr(result, "stage_reused") <- !any(actions == "run")
+  attr(result, "category_worker_receipts") <- receipts
   result
 }
 

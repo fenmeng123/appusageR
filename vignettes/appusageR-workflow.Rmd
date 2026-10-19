@@ -263,9 +263,7 @@ only and do not delete rows by default.
 ## Manual App Category Enrichment
 
 ```{r}
-dict <- read_app_category_dictionary(
-  "apptypedict/apptyp_dictionary_v251016.xlsx"
-)
+dict <- read_app_category_dictionary() # bundled dictionary v2.0.0; independent of package version
 
 category_summary <- write_app_categories_batch(
   project_root,
@@ -280,8 +278,15 @@ second-level `proc-2.rda` files and records match diagnostics in `proc-2.json`.
 It first matches `package_name` to dictionary `App_UUID`, then falls back to
 exact unambiguous app-name matches.
 
-No category is inferred from app text automatically. Unmatched or conflicting
-dictionary keys remain uncoded for user review.
+Conflicting package candidates can be narrowed by exact names within that APK.
+Package decisions take priority over different name labels. No app function is
+guessed from its text. Unknown apps remain pending unless an explicit frozen
+`profile_uncoded_apps()` result supports operational `Others / Unclassified`.
+The profile uses primary sources, positive recorded foreground time, explicit
+people, and maximum per-person primary-file share. A 5% share OR 1% prevalence
+triggers review; these are dictionary-maintenance priorities, not scientific QC.
+Flat copied caches can use `update_app_categories_cache()` without invoking
+parsing, QC, reconstruction, questionnaire matching or project publication.
 
 ## Day-Level QC
 

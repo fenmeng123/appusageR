@@ -6,21 +6,32 @@
 \usage{
 write_app_categories_batch(
   project_dir,
-  dictionary,
+  dictionary = NULL,
   overwrite = TRUE,
-  progress = TRUE
+  progress = TRUE,
+  policy = appusage_category_policy(),
+  profile = NULL,
+  resume = TRUE,
+  parallel = FALSE,
+  workers = 8L
 )
 }
 \arguments{
 \item{project_dir}{Project folder produced by \code{\link[=read_appusage_batch]{read_appusage_batch()}} and
 \code{\link[=write_second_level_batch]{write_second_level_batch()}}.}
 
-\item{dictionary}{Dictionary data frame, standardized dictionary, or file
+\item{dictionary}{NULL uses the bundled dictionary; otherwise a data frame or file
 path readable by \code{read_app_category_dictionary()}.}
 
 \item{overwrite}{Whether to overwrite existing non-missing category values.}
 
 \item{progress}{Whether to print simple progress messages.}
+
+\item{policy, profile}{Priority policy and optional frozen profile.}
+
+\item{resume}{Reuse intact matching category contracts.}
+
+\item{parallel, workers}{File-worker execution controls.}
 }
 \value{
 Invisibly returns a tibble summary of category matching.

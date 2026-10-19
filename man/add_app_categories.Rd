@@ -4,15 +4,25 @@
 \alias{add_app_categories}
 \title{Add manual app categories to APP Usage data}
 \usage{
-add_app_categories(data, dictionary, overwrite = TRUE)
+add_app_categories(
+  data,
+  dictionary = NULL,
+  overwrite = TRUE,
+  policy = appusage_category_policy(),
+  profile = NULL
+)
 }
 \arguments{
 \item{data}{A data frame or second-level APP Usage \code{data} list.}
 
-\item{dictionary}{A dictionary data frame, a standardized dictionary returned
+\item{dictionary}{NULL uses the bundled dictionary; otherwise a dictionary data frame, a standardized dictionary returned
 by \code{read_app_category_dictionary()}, or a dictionary file path.}
 
 \item{overwrite}{Whether to overwrite existing non-missing category values.}
+
+\item{policy}{Priority policy from \code{\link[=appusage_category_policy]{appusage_category_policy()}}.}
+
+\item{profile}{Frozen result from \code{\link[=profile_uncoded_apps]{profile_uncoded_apps()}}, or NULL for dictionary-only matching.}
 }
 \value{
 \code{data} with category columns added. Matching summaries are attached

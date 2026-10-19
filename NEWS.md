@@ -1,3 +1,31 @@
+# appusageR 0.3.9
+
+- Adopt independent dictionary semantic versions: v261013 is v1.0.0 and
+  v261019 is v2.0.0. Only provenance version metadata changes; all dictionary
+  cells are preserved. See installed DICTIONARY_VERSIONING.md for increment rules.
+
+- Update the independently versioned dictionary to v261019 (2026-10-19), keeping
+  the package version at 0.3.9. Preserve all 11,849 corrected v261013 rows;
+  append 16,239 alias rows for 14,118 identities, with 1,925 user-approved
+  high/medium functional labels and 12,193 provisional Others / Unclassified
+  identities. Keep the original five public columns and GPL-3 attribution.
+- Complete optional categories with bundled v261013 data, APK-first matching and
+  exact name disambiguation restricted to conflicting APK candidates. Preserve
+  unresolved conflicts and record package/name disagreement without overriding APK.
+- Add explicit-person unknown-app profiles: maximum primary-file foreground share
+  and positive-foreground person prevalence; 5% OR 1% triggers manual review.
+  Measured low-priority unknowns can receive operational Others / Unclassified;
+  these are not additions to the manual 14/31 functional taxonomy.
+- Add transactional category-only updates for project caches and flat copied
+  RDA/JSON pairs, integrity-checked reuse, bounded checkpoints and worker fallback.
+- Distinguish matched, residual, pending, missing-metric and non-app dispositions.
+  Extract unknown identities across grains while measuring one canonical table;
+  event, episode and daily durations are never summed together.
+- Count distinct source apps once across all grains; per-grain appearances remain
+  in the grain summary and are not presented as distinct applications.
+- Keep scientific schema 0.3.4, source/QC/relationship rules and non-category
+  scientific data unchanged. DataBox V4 delivery preserves V3 and root files.
+
 # appusageR 0.3.8 (2026-10-12)
 
 - Apply the existing file-reader NUL cleanup during preflight after the binary

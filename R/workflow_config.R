@@ -24,7 +24,8 @@ appusage_config <- function(parse = list(), time = list(), reconstruction = list
       all_row_tolerance = 0.10, max_episode_ms = 86400000,
       max_daily_app_ms = 86400000, max_daily_total_ms = 86400000,
       max_export_lookback_days = 31, meta_diff_abs_ms = 60000, meta_diff_ratio = 0.20),
-    category = list(enabled = FALSE, dictionary = NULL, overwrite = TRUE),
+    category = list(enabled = FALSE, dictionary = NULL, overwrite = TRUE,
+      policy = appusage_category_policy(), profile = NULL, manifest = NULL),
     matching = list(enabled = FALSE, self_report = NULL, self_report_file = NULL,
       sequence_col = "\u5e8f\u53f7", upload_col = NULL, submit_time_col = NULL,
       export_type_priority = c("line", "meta", "day", "app")),
@@ -75,9 +76,7 @@ appusage_config <- function(parse = list(), time = list(), reconstruction = list
   if (!out$reconstruction$reconstruct_meta && out$daily$meta_daily_source != "summary") {
     cli::cli_abort("Episode-derived meta daily data require meta reconstruction.")
   }
-  if (out$category$enabled && is.null(out$category$dictionary)) {
-    cli::cli_abort("Enabled category enrichment requires a dictionary.")
-  }
+  out$category$policy <- appusage_validate_category_policy(out$category$policy)
   if (out$matching$enabled && is.null(out$matching$upload_col)) {
     cli::cli_abort("Enabled matching requires an upload column.")
   }

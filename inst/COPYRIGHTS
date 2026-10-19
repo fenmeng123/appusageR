@@ -1,0 +1,27 @@
+Bundled manual app category dictionary
+
+The app_category_dictionary dataset, version v2.0.0 (formerly v261019; approved 2026-10-19), is
+distributed under the GNU General Public License, version 3, as specified
+by the appusageR package LICENSE. The maintainer has confirmed authority
+to license this dictionary for public redistribution under GPL-3.
+
+Original source: apptyp_dictionary_v261013.xlsx, Sheet1 (approved 2026-10-12).
+SHA-256: 8c31b300bcff529bdb40935056167f7f6b1a1b68f1b3b9356306d65f80529d21.
+This author-approved update resolves 61 package-key conflicts from v261012.
+The original v261013 is now v1.0.0; its historical suffix is retained in source provenance.
+All 11,849 original rows remain unchanged. The v2.0.0 extension appends saved
+name/alias records for 14,118 app identities. The maintainer's user approved
+726 independently reviewed high-confidence and 1,199 medium-confidence labels;
+the other 12,193 identities receive provisional Others / Unclassified.
+These residuals are not functional findings or new validation evidence.
+The added mappings share GPL-3 redistribution. Dictionary versions are
+independent of the appusageR software version; see DICTIONARY_VERSIONING.md. Evidence and usage statistics
+are kept outside the public five-column dataset.
+
+Associated working manuscript:
+Zi-liang Wang; Xin Jin; Changshu Zhang; Jin-tao Zhang; Hui Zheng; Qiang Hu;
+Kunru Song (2026). Development and initial validation of a smartphone app
+taxonomy informed by uses and gratifications theory. Working manuscript.
+
+The dataset contains app identities and functional category mappings. It
+does not contain participant responses, usage logs or participant IDs.

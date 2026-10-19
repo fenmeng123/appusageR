@@ -310,48 +310,38 @@ run_qc_appusage <- function(x = NULL, project_dir = NULL,
 #' @return A tibble of de-duplicated uncoded app rows.
 #' @export
 extract_uncoded_apps <- function(x) {
-  frames <- normalize_uncoded_app_frames(x)
-  if (length(frames) == 0) {
-    return(empty_uncoded_apps_tibble())
-  }
-  data <- tibble::as_tibble(do.call(rbind, frames))
-  if (!all(c("app_name", "package_name") %in% names(data))) {
-    return(empty_uncoded_apps_tibble())
-  }
-  if (!"Level_1_Category" %in% names(data)) {
-    data$Level_1_Category <- NA_character_
-  }
-  if (!"Level_2_Category" %in% names(data)) {
-    data$Level_2_Category <- NA_character_
-  }
-  if (!"source_export_type" %in% names(data)) {
-    data$source_export_type <- NA_character_
-  }
-  missing_category <- is.na(data$Level_1_Category) | is.na(data$Level_2_Category) |
-    !appusage_text_nzchar(as.character(data$Level_1_Category)) |
-    !appusage_text_nzchar(as.character(data$Level_2_Category))
-  data <- data[missing_category, , drop = FALSE]
-  if (nrow(data) == 0) {
-    return(empty_uncoded_apps_tibble())
-  }
-  key <- appusage_text_paste(data$package_name, data$app_name, data$source_export_type, sep = "\r")
-  groups <- split(seq_len(nrow(data)), key)
-  rows <- lapply(groups, function(idx) {
-    duration <- if ("duration_ms" %in% names(data)) {
-      sum(data$duration_ms[idx], na.rm = TRUE)
-    } else {
-      NA_real_
-    }
-    data.frame(
-      package_name = data$package_name[idx[[1]]],
-      app_name = data$app_name[idx[[1]]],
-      source_export_type = data$source_export_type[idx[[1]]],
-      n_rows = length(idx),
-      total_duration_ms = duration,
-      stringsAsFactors = FALSE
-    )
+  frames <- if (is.data.frame(x)) list(x) else if (is.list(x))
+    x[intersect(c("event", "episode", "daily"), names(x))] else
+      cli::cli_abort("x must be a data frame or saved second-level data list.")
+  identities <- lapply(frames, function(f) {
+    if (!is.data.frame(f) || !nrow(f) || !all(c("package_name", "app_name") %in% names(f))) return(NULL)
+    missing <- if (all(c("Level_1_Category", "Level_2_Category") %in% names(f)))
+      is.na(category_trim(f$Level_1_Category)) | is.na(category_trim(f$Level_2_Category)) else rep(TRUE, nrow(f))
+    total <- standardize_package_name(f$package_name) %in% "ALL"
+    if ("is_all_apps" %in% names(f)) total <- total | f$is_all_apps %in% TRUE
+    keep <- missing & !total
+    data.frame(package_name = as.character(f$package_name[keep]), app_name = as.character(f$app_name[keep]),
+      source_export_type = if ("source_export_type" %in% names(f)) as.character(f$source_export_type[keep]) else rep(NA_character_, sum(keep)),
+      stringsAsFactors = FALSE)
   })
-  tibble::as_tibble(do.call(rbind, rows))
+  identities <- Filter(Negate(is.null), identities)
+  if (!length(identities)) return(empty_uncoded_apps_tibble())
+  data <- unique(do.call(rbind, identities))
+  if (!nrow(data)) return(empty_uncoded_apps_tibble())
+  table <- appusage_category_usage_table(x)
+  keys <- paste(data$package_name, data$app_name, sep = "\r")
+  if (nrow(table) && all(c("package_name", "app_name") %in% names(table))) {
+    tk <- paste(table$package_name, table$app_name, sep = "\r")
+    groups <- split(seq_len(nrow(table)), tk)
+  } else groups <- list()
+  data$n_rows <- vapply(keys, function(k) length(groups[[k]]), integer(1))
+  data$total_duration_ms <- vapply(keys, function(k) {
+    rows <- groups[[k]]
+    if (!length(rows) || !"duration_ms" %in% names(table)) return(NA_real_)
+    values <- table$duration_ms[rows]
+    if (any(!is.finite(values) | values < 0)) NA_real_ else sum(values)
+  }, double(1))
+  tibble::as_tibble(data)
 }
 
 #' Run the standard APP Usage preprocessing workflow

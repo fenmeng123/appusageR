@@ -139,6 +139,53 @@ It adds category fields and reports unmatched apps for manual review.
   updates project caches.
 - `extract_uncoded_apps()` collects apps requiring dictionary entries.
 
+The bundled `app_category_dictionary` uses dictionary version **v2.0.0** (formerly v261019),
+independent of appusageR's software version. Its five character columns contain
+28,088 records: all 11,849 corrected v1.0.0 (formerly v261013) rows, followed by 16,239 name/alias
+rows for 14,118 added identities. The user approved 726 high-confidence and
+1,199 medium-confidence functional labels. The other 12,193 identities receive
+provisional `Others / Unclassified`, including evidence-insufficient and
+unreviewed apps. These residuals do not establish low usage or a fifteenth
+validated functional category; the functional taxonomy remains 14 Level 1 and
+31 Level 2 terms. Audit fields and usage statistics are not public dictionary
+columns. Names can still be ambiguous, and matching retains conflict abstention.
+
+```r
+data("app_category_dictionary", package = "appusageR")
+categorized <- add_app_categories(research_data, app_category_dictionary)
+```
+
+Dictionary versions use independent `vMAJOR.MINOR.PATCH`: existing-identity fixes
+change PATCH, new app identities change MINOR, and taxonomy changes change MAJOR.
+See the [dictionary version policy](inst/DICTIONARY_VERSIONING.md) for reset rules,
+legacy aliases and release boundaries. The package version remains 0.3.9.
+
+`attr(app_category_dictionary, "dictionary_provenance")` records its source
+version and hash. Categories describe app functions, not individual motives.
+The bundled dictionary is distributed under GPL-3; attribution is in the
+installed `COPYRIGHTS` file and the dataset help.
+
+Version 0.3.9 supports dictionary enrichment during a fresh workflow with
+`appusage_config(category = list(enabled = TRUE))`, or a category-only refresh
+using `update_app_categories_cache(rda_paths)`. Both use the bundled dictionary
+by default. Conflicting package candidates can be narrowed only by exact names
+within that package; unresolved conflicts remain pending.
+
+For dictionary maintenance, `profile_uncoded_apps(manifest)` requires explicit
+`source_id`, `person_id`, `observation_id`, `selected_primary` and `rda_path`.
+It uses saved foreground measurements, not event/episode/daily totals stacked
+together. Maximum primary-file share of 5% or positive-foreground prevalence of
+1% triggers review. Measured low-priority unknowns receive the operational pair
+`Others / Unclassified` when that frozen profile is supplied to the update.
+Missing metrics, alternative-only apps and conflicts remain pending. These
+priorities do not modify scientific QC or participant eligibility.
+
+The returned profile and `appusage_category_policy()` belong to the independent
+category contract. Changing a dictionary/profile updates categories while
+preserving research data and source linkage. `overwrite = FALSE` explicitly
+preserves complete pre-existing labels. Integrity-checked unchanged updates
+reuse the RDA/JSON pair without rewriting it.
+
 ## Self-report matching
 
 This optional module links questionnaire rows to available APP Usage sources.
