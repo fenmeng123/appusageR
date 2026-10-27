@@ -3475,7 +3475,7 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
   metadata_file <- if (is.null(result$error) && is_present_string(result$output)) {
     second_level_metadata_path(result$output)
   } else {
-    write_second_level_status_metadata(
+    tryCatch(write_second_level_status_metadata(
       batch_summary = batch_summary,
       index = index,
       output_dir = output_dir,
@@ -3484,7 +3484,14 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
       started_at = started_at,
       finished_at = finished_at,
       provenance = second_level_args$provenance %||% NULL
-    )
+    ), error = function(metadata_error) {
+      stop(structure(list(
+        message = paste0("Second-level processing failed: ", conditionMessage(result$error),
+          "; writing its status metadata also failed: ", conditionMessage(metadata_error)),
+        call = NULL, parent = result$error, metadata_error = metadata_error,
+        metadata_file = cache$json_file
+      ), class = c("appusage_second_level_status_write_error", "error", "condition")))
+    })
   }
   appusage_attach_daily_self_check_summary(data.frame(
     index = batch_summary$index[[index]],

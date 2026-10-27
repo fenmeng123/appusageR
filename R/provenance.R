@@ -23,17 +23,54 @@ appusage_canonical_object <- function(x) {
 }
 
 appusage_object_fingerprint <- function(x) {
-  text <- appusage_text_paste(utils::capture.output(dput(appusage_canonical_object(x))), collapse = "\n")
+  # A text connection repeatedly grows its buffer for large dictionaries. Keep
+  # the same dput representation, but collect it through a temporary file.
+  path <- tempfile("appusage-fingerprint-")
+  on.exit(unlink(path), add = TRUE)
+  dput(appusage_canonical_object(x), file = path)
+  text <- appusage_text_paste(readLines(path, warn = FALSE), collapse = "\n")
   appusage_stable_text_md5(text)
+}
+
+.appusage_function_text_cache <- new.env(parent = emptyenv())
+.appusage_function_digest_cache <- new.env(parent = emptyenv())
+
+appusage_function_definitions <- function(names, namespace) {
+  stats::setNames(lapply(names, function(name) {
+    fun <- get0(name, envir = namespace, inherits = FALSE)
+    if (is.function(fun)) list(formals = formals(fun), body = body(fun)) else NULL
+  }), names)
+}
+
+appusage_function_text <- function(name, fun) {
+  cached <- .appusage_function_text_cache[[name]]
+  definition <- list(formals = formals(fun), body = body(fun))
+  if (!is.null(cached) && identical(cached$definition, definition)) return(cached)
+  entry <- list(definition = definition,
+    symbols = all.names(body(fun), functions = TRUE, unique = TRUE),
+    text = c(appusage_text_paste0("function=", name),
+      appusage_text_paste(utils::capture.output(dput(formals(fun))), collapse = "\n"),
+      appusage_text_paste(deparse(body(fun), width.cutoff = 500L), collapse = "\n")))
+  .appusage_function_text_cache[[name]] <- entry
+  entry
 }
 
 appusage_function_fingerprint <- function(function_names) {
   namespace <- asNamespace("appusageR")
+  roots <- sort(unique(function_names))
+  entries <- .appusage_function_digest_cache$entries %||% list()
+  for (entry in entries) {
+    if (identical(entry$roots, roots) &&
+        identical(entry$definitions,
+          appusage_function_definitions(names(entry$definitions), namespace)))
+      return(entry$fingerprint)
+  }
   # Include private helpers reachable from the entry functions, so an internal
   # scientific fix cannot leave a stage incorrectly reusable. Base/imported
   # functions are covered by recorded dependency versions, not package bodies.
   pending <- unique(function_names)
   expanded <- character()
+  observed <- roots
   while (length(pending)) {
     name <- pending[[1L]]
     pending <- pending[-1L]
@@ -41,7 +78,10 @@ appusage_function_fingerprint <- function(function_names) {
     expanded <- c(expanded, name)
     fun <- get0(name, envir = namespace, inherits = FALSE)
     if (!is.function(fun)) next
-    symbols <- all.names(body(fun), functions = TRUE, unique = TRUE)
+    symbols <- appusage_function_text(name, fun)$symbols
+    # Track non-function symbols too: a previously unavailable helper becoming
+    # a namespace function must invalidate a cached dependency graph.
+    observed <- unique(c(observed, symbols))
     local <- symbols[vapply(symbols, function(symbol)
       is.function(get0(symbol, envir = namespace, inherits = FALSE)), logical(1))]
     pending <- unique(c(pending, setdiff(local, expanded)))
@@ -50,13 +90,14 @@ appusage_function_fingerprint <- function(function_names) {
   text <- unlist(lapply(sort(unique(function_names)), function(name) {
     fun <- get0(name, envir = namespace, inherits = FALSE)
     if (!is.function(fun)) return(c(name, "<unavailable>"))
-    c(
-      appusage_text_paste0("function=", name),
-      appusage_text_paste(utils::capture.output(dput(formals(fun))), collapse = "\n"),
-      appusage_text_paste(deparse(body(fun), width.cutoff = 500L), collapse = "\n")
-    )
+    appusage_function_text(name, fun)$text
   }), use.names = FALSE)
-  appusage_stable_text_md5(text)
+  fingerprint <- appusage_stable_text_md5(text)
+  entry <- list(roots = roots, definitions = appusage_function_definitions(observed, namespace),
+    fingerprint = fingerprint)
+  entries <- Filter(function(x) !identical(x$roots, roots), entries)
+  .appusage_function_digest_cache$entries <- utils::head(c(list(entry), entries), 16L)
+  fingerprint
 }
 
 appusage_parser_implementation_fingerprint <- function() {

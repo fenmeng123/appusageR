@@ -1,3 +1,23 @@
+# appusageR 0.3.10 (2026-10-27)
+
+- Rewrite DESCRIPTION and the package README around processing capabilities,
+  workflow examples and dictionary use. Keep dictionary version v2.0.0 and
+  scientific output schema 0.3.4.
+
+- Shorten temporary and backup names for paired cache transactions on Windows,
+  while retaining final cache names, rollback and legacy recovery discovery.
+  Preserve the original processing error if writing its status metadata also
+  fails. Regression tests exercise long paths and both failure conditions.
+- Reduce repeated fingerprint serialization without changing fingerprint values:
+  use file-backed object serialization and reuse function text only after checking
+  its current definition. Keep dependency traversal and invalidation checks active.
+  Reuse a resolved dependency digest only after rechecking every observed namespace
+  binding, including symbols that were previously not functions.
+  Clarify the cache description for CRAN's incoming spelling check.
+- Give synthetic CRAN tests a deterministic memory fixture instead of repeatedly
+  launching system probes. Retain a real detector test, low/unknown-memory and
+  recovery tests, and unchanged real-memory local eight-worker acceptance.
+
 # appusageR 0.3.9
 
 - Prepare CRAN checks with a short two-worker category equivalence test; retain

@@ -1,47 +1,20 @@
 # appusageR <img src="man/figures/logo.png" align="right" width="150" alt="appusageR logo" />
 
-appusageR converts APP Usage / Screen Time Android text exports into structured
-data for behavioral and mobile-sensing research.
-Its architecture separates callable data-processing modules from a workflow
-that configures, sequences, and resumes their execution.
-Two per-source cache levels connect these modules: faithful parsed data
-(`proc-1`) and research data containing events, episodes, and daily summaries
-(`proc-2`).
+appusageR turns Android text exports from APP Usage / Screen Time into structured
+data for behavioral and mobile-sensing research. It parses logs, reconstructs
+usage episodes, summarizes daily app use, evaluates data quality, adds app
+categories, and links sources to self-report records.
+
+Use individual functions with R objects or run a project workflow with parallel
+file processing, validated caches, checkpoints, and recovery from interruptions.
+
+**Package:** 0.3.10 · **App dictionary:** v2.0.0 · **Scientific schema:** 0.3.4
 
 <br clear="right" />
 
-```mermaid
-flowchart TB
-    B["Project collection · serial projects / file workers"]
-    W["Workflow: configure → plan → execute / resume"]
-    B --> W
-    W --> P
-    subgraph Sources["Per-source processing"]
-        P["Text input and parsing<br/>proc-1 cache"]
-        S["Standardization and episode reconstruction"]
-        D["Daily aggregation"]
-        C["Research data<br/>proc-2 cache"]
-        Q["Quality control"]
-        A["App categories · optional"]
-        P --> S --> D --> C
-        C --> Q
-        C --> A
-    end
-    C --> M["Self-report matching · optional"]
-    Q --> O["Project summaries and exports"]
-    A --> O
-    M --> O
-    P -. "Source diagnostics" .-> O
-    O --> V["Project delivery inspection"]
-```
-
-`run_appusage_projects()` sequences independently resumable projects;
-`validate_appusage_project()` checks their delivery.
-The computational modules operate on R objects.
-The workflow adds file access, content-based cache validation, stage records,
-and project outputs.
-
 ## Installation
+
+Requires R 4.1.0 or later. Install from GitHub:
 
 ```r
 install.packages("remotes")
@@ -49,169 +22,167 @@ remotes::install_github("fenmeng123/appusageR")
 library(appusageR)
 ```
 
-## Workflow and recovery
+## Run a project
 
-The workflow combines module settings with execution controls in one configuration.
-Its plan explains which source and project stages will run, reuse results, or remain blocked.
-Execution validates current inputs and caches, then resumes the affected stages.
-
-- `appusage_config()` sets parsing, timezone, reconstruction, daily, QC,
-  category, matching, and execution options.
-- `plan_appusage_workflow()` previews source tasks and project tasks.
-- `run_appusage_workflow()` executes a plan or resumes a saved project.
-- `run_appusage_stage()` runs `parse`, `research_data`, `qc`, `category`,
-  `matching`, or `summary` independently.
+Set the input paths, output directory, and study timezone, then inspect and run
+the workflow plan:
 
 ```r
-config <- appusage_config(time = list(tz = "Asia/Shanghai"))
-plan <- plan_appusage_workflow(
-  c("raw/a.txt", "raw/b.txt"), "outputs/study", config
+sources <- data.frame(
+  source_file = c("raw/a.txt", "raw/b.txt"),
+  participant_id = c("p001", "p002")
 )
+config <- appusage_config(time = list(tz = "Asia/Shanghai"))
+plan <- plan_appusage_workflow(sources, "outputs/study", config)
 print(plan)
 result <- run_appusage_workflow(plan = plan)
-result <- run_appusage_workflow(project_dir = "outputs/study")
 summary(result)
+
+# Resume using the saved manifest and configuration.
+result <- run_appusage_workflow(project_dir = "outputs/study")
 ```
 
-## Project collections and delivery
+The plan lists source and project stages, planned actions, and their reasons.
+Execution checks inputs and cache contents before reusing completed stages.
+`run_appusage_stage()` runs `parse`, `research_data`, `qc`, `category`, `matching`,
+or `summary` independently.
 
-The collection runner processes registered projects in sequence, with parallel file workers inside each project.
-It checks existing delivery and resumes unfinished stages while keeping project checkpoints separate.
-Delivery inspection reports source identities, cache integrity, scientific table types, QC, and questionnaire exports.
+```mermaid
+flowchart TB
+    W["Configure → plan → execute / resume"] --> P["Read and parse logs · proc-1"]
+    P --> S["Standardize → reconstruct episodes → aggregate daily use"]
+    S --> R["Research data · proc-2"]
+    R --> Q["Quality control"]
+    R --> C["App categories · optional"]
+    R --> M["Self-report matching · optional"]
+    Q --> O["Project summaries and exports"]
+    C --> O
+    M --> O
+    P -. "Source diagnostics" .-> O
+```
 
-- `run_appusage_projects(projects, batch_dir, workers = 8)` accepts one registry
-  row per project with `project_id`, `project_name`, `project_dir`, and `output_dir`;
-  optional questionnaire columns configure matching.
-- `validate_appusage_project(project_dir, verify = "content")` checks current
-  content; `verify = "metadata"` previews saved evidence.
+## Processing modules
 
-## Text input and parsing
+| Module | Output | Main functions |
+|---|---|---|
+| Text input | Decoded text and detected export format | `read_appusage_text()`, `detect_appusage_type()` |
+| Parsing | Native line, meta, day, or app records and source diagnostics | `parse_line()`, `parse_meta()`, `parse_day()`, `parse_app()` |
+| Standardization | Common columns, app identities, and millisecond durations | `standardize_appusage()` |
+| Episode reconstruction | Paired meta events and a foreground timeline with duration audit fields | `reconstruct_meta_episodes()` |
+| Daily aggregation | App use by local calendar date | `build_appusage_daily()` |
+| Quality control | Coverage, anomaly flags, and eligibility by data grain | `assess_appusage_qc()`, `qc_appusage_anomalies()` |
+| App categories | Level 1/Level 2 labels and matching diagnostics | `add_app_categories()`, `update_app_categories_cache()` |
+| Self-report matching | Questionnaire rows linked to source records | `match_appusage_self_report()` |
 
-This module decodes text and detects the line, meta, day, and app export formats.
-The parsers retain the native records and source diagnostics.
-The first-level runner combines these steps and can save a parsed `proc-1` cache.
+`run_first_level_appusage()` combines text input and parsing;
+`run_second_level_appusage()` combines standardization, reconstruction, and daily
+aggregation. `read_appusage_batch()` processes a collection of source files.
 
-- `read_appusage_text()` reads and decodes input; `detect_appusage_type()`
-  identifies its content.
-- `parse_line()`, `parse_meta()`, `parse_day()`, and `parse_app()` parse
-  individual exports; `parse_meta()` returns separate summary and event tables.
-- `run_first_level_appusage()` processes one source; `read_appusage_batch()`
-  processes a file collection.
-
-## Standardization and episodes
-
-Standardization gives native records consistent columns, app identities, and numeric millisecond values.
-Episode reconstruction pairs meta start and end events and merges contiguous use of the same app.
-The resulting foreground timeline resolves overlapping episodes and retains their original durations in audit fields.
-
-- `standardize_appusage()` prepares common event, episode, and daily inputs.
-- `reconstruct_meta_episodes()` builds episodes from parsed meta events.
-- `run_second_level_appusage()` composes standardization, reconstruction,
-  and daily aggregation into research data.
-
-## Daily aggregation
-
-This module summarizes app use by local calendar date.
-It splits episodes at local midnight using the configured timezone.
-For meta exports, daily values come from the native summary by default, with options to retain episode-derived estimates or both sources as labeled rows.
-
-- `build_appusage_daily()` aggregates standardized data and optional meta
-  episodes; `meta_daily_source` selects `"summary"`, `"episodes"`, or `"both"`.
-
-## Quality control
-
-QC evaluates daily coverage, duration anomalies, and source-level inconsistencies.
-It records flags and analysis eligibility for each available data grain.
-Workflow reports present execution status, QC findings, and eligibility separately.
-
-- `assess_appusage_qc()` evaluates research data in memory.
-- `qc_appusage_anomalies()` inspects event, episode, and daily anomalies.
-- `write_qc_metadata_batch()` refreshes QC metadata and project summaries.
+Episodes are split at local midnight in the configured timezone. Meta daily
+values use the native summary by default; `meta_daily_source = "episodes"` selects
+episode-derived values, and `"both"` retains the two sources as labeled rows.
+QC reports distinguish execution status, quality findings, and eligibility for
+each event, episode, or daily table.
 
 ## App categories
 
-This optional module attaches categories from a user-supplied dictionary.
-It matches package names first, followed by exact, unambiguous app-name matches.
-It adds category fields and reports unmatched apps for manual review.
+The optional category module uses the bundled dictionary by default and accepts
+a custom dictionary. Package names take precedence. Exact app names resolve
+conflicting candidates within a package and provide a fallback when a package
+name is absent from the dictionary. Unresolved candidates retain a pending
+review status.
 
-- `read_app_category_dictionary()` loads a dictionary.
-- `add_app_categories()` annotates an R object; `write_app_categories_batch()`
-  updates project caches.
-- `extract_uncoded_apps()` collects apps requiring dictionary entries.
+Enable categories in a project configuration, or update existing proc-2 caches:
 
-The bundled `app_category_dictionary` uses dictionary version **v2.0.0** (formerly v261019),
-independent of appusageR's software version. Its five character columns contain
-28,088 records: all 11,849 corrected v1.0.0 (formerly v261013) rows, followed by 16,239 name/alias
-rows for 14,118 added identities. The user approved 726 high-confidence and
-1,199 medium-confidence functional labels. The other 12,193 identities receive
-provisional `Others / Unclassified`, including evidence-insufficient and
-unreviewed apps. These residuals do not establish low usage or a fifteenth
-validated functional category; the functional taxonomy remains 14 Level 1 and
-31 Level 2 terms. Audit fields and usage statistics are not public dictionary
-columns. Names can still be ambiguous, and matching retains conflict abstention.
+```r
+config <- appusage_config(category = list(enabled = TRUE))
+
+# Annotate research data held in memory.
+categorized <- add_app_categories(research_data)
+
+# Refresh paired RDA/JSON caches in a project or a flat export directory.
+updated <- update_app_categories_cache(rda_paths)
+```
+
+Here, `research_data` is a processed R object and `rda_paths` lists its saved
+proc-2 files. Category updates preserve scientific tables and source relationships.
+`overwrite = FALSE` preserves complete existing labels. Unchanged, integrity-checked
+RDA/JSON pairs are reused.
+
+### Bundled dictionary
+
+`app_category_dictionary` v2.0.0 contains **28,088 rows** and five character columns:
+`App_Name`, `App_Name_Repaired`, `App_UUID`, `Level_1_Category`, and
+`Level_2_Category`. Categories describe application functions. The vocabulary
+includes 14 functional Level 1 categories, 31 functional Level 2 categories, and
+the provisional pair `Others / Unclassified` for identities awaiting classification.
+
+The dataset combines 11,849 original dictionary rows with 16,239 app-name and
+alias rows covering 14,118 additional identities. Of these additional identities,
+1,925 have author-approved functional labels and 12,193 carry provisional
+`Others / Unclassified` labels. Version and source hashes are stored in the
+`dictionary_provenance` attribute.
 
 ```r
 data("app_category_dictionary", package = "appusageR")
-categorized <- add_app_categories(research_data, app_category_dictionary)
+head(app_category_dictionary)
+attr(app_category_dictionary, "dictionary_provenance")$dictionary_version
 ```
 
-Dictionary versions use independent `vMAJOR.MINOR.PATCH`: existing-identity fixes
-change PATCH, new app identities change MINOR, and taxonomy changes change MAJOR.
-See the [dictionary version policy](inst/DICTIONARY_VERSIONING.md) for reset rules,
-legacy aliases and release boundaries. The package version remains 0.3.9.
+Dictionary versions follow independent `vMAJOR.MINOR.PATCH` rules: PATCH corrects
+existing identities, MINOR adds new identities, and MAJOR changes the taxonomy.
+See the [dictionary version policy](inst/DICTIONARY_VERSIONING.md) and
+[copyright and contributor record](inst/COPYRIGHTS).
 
-`attr(app_category_dictionary, "dictionary_provenance")` records its source
-version and hash. Categories describe app functions, not individual motives.
-The bundled dictionary is distributed under GPL-3; attribution is in the
-installed `COPYRIGHTS` file and the dataset help.
+### Prioritize dictionary additions
 
-Version 0.3.9 supports dictionary enrichment during a fresh workflow with
-`appusage_config(category = list(enabled = TRUE))`, or a category-only refresh
-using `update_app_categories_cache(rda_paths)`. Both use the bundled dictionary
-by default. Conflicting package candidates can be narrowed only by exact names
-within that package; unresolved conflicts remain pending.
+`profile_uncoded_apps(manifest)` profiles unknown apps using explicit `source_id`,
+`person_id`, `observation_id`, `selected_primary`, and `rda_path` fields. It measures
+foreground use from one canonical table per primary file, takes each person's
+maximum share across observations, and counts distinct people with positive use.
 
-For dictionary maintenance, `profile_uncoded_apps(manifest)` requires explicit
-`source_id`, `person_id`, `observation_id`, `selected_primary` and `rda_path`.
-It uses saved foreground measurements, not event/episode/daily totals stacked
-together. Maximum primary-file share of 5% or positive-foreground prevalence of
-1% triggers review. Measured low-priority unknowns receive the operational pair
-`Others / Unclassified` when that frozen profile is supplied to the update.
-Missing metrics, alternative-only apps and conflicts remain pending. These
-priorities do not modify scientific QC or participant eligibility.
+The default policy prioritizes an app when **any person's maximum share is at least
+5%**, or **its prevalence among people with measurable positive foreground use is
+at least 1%**. Measured unknown apps below both thresholds receive
+`Others / Unclassified` when the profile is supplied to the category update.
+Missing measurements, apps found exclusively in alternative files, and conflicting
+matches retain explicit pending statuses. These are dictionary-maintenance
+priorities; QC and eligibility follow their own configured rules.
 
-The returned profile and `appusage_category_policy()` belong to the independent
-category contract. Changing a dictionary/profile updates categories while
-preserving research data and source linkage. `overwrite = FALSE` explicitly
-preserves complete pre-existing labels. Integrity-checked unchanged updates
-reuse the RDA/JSON pair without rewriting it.
+Use `appusage_category_policy()` to configure the policy and
+`extract_uncoded_apps()` to collect identities for dictionary maintenance.
 
-## Self-report matching
+## Project collections and self-report matching
 
-This optional module links questionnaire rows to available APP Usage sources.
-It matches sequence IDs and uploaded filenames, then resolves multiple candidates by export type and timestamp.
-It retains unmatched questionnaire rows alongside the resolved source relationships.
+`run_appusage_projects(projects, batch_dir, workers = 8)` processes projects in
+registry order with parallel file workers inside each project. Each registry row
+provides `project_id`, `project_name`, `project_dir`, and `output_dir`; optional
+questionnaire columns configure matching. Project checkpoints retain outcomes
+and support recovery of unfinished stages.
 
-- `match_appusage_self_report()` matches a questionnaire data frame against
-  a source manifest.
-- `run_appusage_project_workflow()` adapts Wenjuanxing project folders and
-  workbooks to the shared workflow and writes matched Excel output.
+`match_appusage_self_report()` links questionnaire rows through sequence IDs and
+uploaded filenames, resolving multiple candidates by export type and timestamp.
+Matched and unmatched questionnaire rows are retained.
+`run_appusage_project_workflow()` adapts Wenjuanxing project folders and workbooks
+to this workflow and writes matched Excel output.
 
-## Cache summaries and exports
+## Caches, summaries, and delivery checks
 
-Each source has paired RDA and JSON caches for parsed and research data.
-Project summaries combine source identities, stage outcomes, QC, categories, and matching information.
-The summary stage rebuilds these projections from valid caches, while object inspection provides a compact overview.
+Each source has paired RDA/JSON files at two cache levels: parsed records in
+`proc-1`, and typed event, episode, and daily tables in `proc-2`. Metadata records
+source identity, processing stages, QC, and categories.
 
-- `run_appusage_stage("summary", project_dir)` refreshes project summaries
-  and enabled matching exports.
-- `rebuild_first_level_summary_from_cache()` rebuilds the first-level source
-  summary.
-- `print()` and `summary()` inspect plan and workflow results.
+- `validate_appusage_project(project_dir, verify = "content")` checks source
+  identities, signatures, table types, links, and questionnaire exports.
+- `verify = "metadata"` previews saved validation evidence.
+- `run_appusage_stage("summary", project_dir)` refreshes project summaries and
+  enabled matching exports from valid caches.
+- `rebuild_first_level_summary_from_cache()` rebuilds the first-level summary.
+- `print()` and `summary()` provide compact views of plans and workflow results.
 
-For configuration details and examples, see the
-[workflow guide](vignettes/appusageR-workflow.Rmd).
-Version history and development records are in [NEWS.md](NEWS.md).
+See the [workflow guide](vignettes/appusageR-workflow.Rmd) for configuration and
+examples, [NEWS](NEWS.md) for changes, and
+[GitHub Issues](https://github.com/fenmeng123/appusageR/issues) for bug reports.
 
 Author: Kunru Song · <Kunrusong97@gmail.com>
 

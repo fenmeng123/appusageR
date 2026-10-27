@@ -495,23 +495,27 @@ appusage_second_level_transaction_id <- function() {
 appusage_second_level_transaction_paths <- function(output_file, metadata_file,
                                                     token = NULL) {
   token <- token %||% appusage_second_level_transaction_id()
+  rda <- appusage_compact_transaction_paths(output_file, token)
+  json <- appusage_compact_transaction_paths(metadata_file, token)
   list(
-    temp_rda = file.path(
-      dirname(output_file),
-      appusage_text_paste0(".", basename(output_file), ".appusage-tmp-", token)
-    ),
-    temp_json = file.path(
-      dirname(metadata_file),
-      appusage_text_paste0(".", basename(metadata_file), ".appusage-tmp-", token)
-    ),
-    backup_rda = file.path(
-      dirname(output_file),
-      appusage_text_paste0(".", basename(output_file), ".appusage-backup-", token)
-    ),
-    backup_json = file.path(
-      dirname(metadata_file),
-      appusage_text_paste0(".", basename(metadata_file), ".appusage-backup-", token)
-    )
+    temp_rda = rda$temporary, temp_json = json$temporary,
+    backup_rda = rda$backup, backup_json = json$backup
+  )
+}
+
+appusage_transaction_owner_prefix <- function(path) {
+  # The directory supplies the parent identity. Hash the complete basename,
+  # including its extension, so temporary names are bounded without truncating
+  # source identity or mixing the RDA and JSON owners.
+  paste0(".au-", appusage_stable_text_md5(basename(path)), ".")
+}
+
+appusage_compact_transaction_paths <- function(path, token) {
+  prefix <- appusage_transaction_owner_prefix(path)
+  token <- substr(appusage_stable_text_md5(token), 1L, 16L)
+  list(
+    temporary = file.path(dirname(path), paste0(prefix, "tmp-", token)),
+    backup = file.path(dirname(path), paste0(prefix, "bak-", token))
   )
 }
 
@@ -525,9 +529,11 @@ appusage_second_level_breadcrumb_path <- function(output_file) {
 appusage_second_level_breadcrumb_temp_paths <- function(path) {
   directory <- dirname(path)
   if (!dir.exists(directory)) return(character())
-  prefix <- appusage_text_paste0(basename(path), ".")
+  prefixes <- c(appusage_text_paste0(basename(path), "."),
+    appusage_transaction_owner_prefix(path))
   candidates <- list.files(directory, full.names = TRUE, all.files = TRUE)
-  candidates[appusage_text_starts(basename(candidates), prefix)]
+  candidates[vapply(basename(candidates), function(name)
+    any(appusage_text_starts(name, prefixes)), logical(1))]
 }
 
 appusage_cleanup_second_level_breadcrumb_temps <- function(path) {
@@ -595,8 +601,9 @@ appusage_update_second_level_breadcrumb <- function(breadcrumb, path, stage,
 
 appusage_write_second_level_breadcrumb <- function(breadcrumb, path) {
   token <- appusage_second_level_transaction_id()
-  temporary <- appusage_text_paste0(path, ".tmp-", token)
-  backup <- appusage_text_paste0(path, ".backup-", token)
+  transaction <- appusage_compact_transaction_paths(path, token)
+  temporary <- transaction$temporary
+  backup <- transaction$backup
   old_backed <- FALSE
   committed <- FALSE
   on.exit({
@@ -654,7 +661,9 @@ appusage_second_level_owned_artifacts <- function(output_file, metadata_file) {
   candidates <- list.files(directory, full.names = TRUE, all.files = TRUE)
   prefixes <- c(
     appusage_text_paste0(".", basename(output_file), ".appusage-"),
-    appusage_text_paste0(".", basename(metadata_file), ".appusage-")
+    appusage_text_paste0(".", basename(metadata_file), ".appusage-"),
+    appusage_transaction_owner_prefix(output_file),
+    appusage_transaction_owner_prefix(metadata_file)
   )
   candidates[vapply(
     basename(candidates),
@@ -820,12 +829,6 @@ appusage_atomic_write_metadata_json <- function(metadata, metadata_file) {
   transaction <- appusage_second_level_transaction_paths(output_file, metadata_file)
   old_backed <- FALSE
   committed <- FALSE
-  write_metadata_json(metadata, transaction$temp_json)
-  appusage_validate_nonempty_file(
-    transaction$temp_json,
-    "Second-level status JSON temporary artifact"
-  )
-  appusage_read_json(transaction$temp_json, simplifyVector = TRUE)
   on.exit({
     if (!committed && old_backed && file.exists(transaction$backup_json) &&
       !file.exists(metadata_file)) {
@@ -839,6 +842,12 @@ appusage_atomic_write_metadata_json <- function(metadata, metadata_file) {
       if (committed) transaction$backup_json else character()
     ))
   }, add = TRUE)
+  write_metadata_json(metadata, transaction$temp_json)
+  appusage_validate_nonempty_file(
+    transaction$temp_json,
+    "Second-level status JSON temporary artifact"
+  )
+  appusage_read_json(transaction$temp_json, simplifyVector = TRUE)
   if (file.exists(metadata_file)) {
     if (!appusage_promote_file(metadata_file, transaction$backup_json)) {
       stop("Could not back up the existing second-level status JSON.")
