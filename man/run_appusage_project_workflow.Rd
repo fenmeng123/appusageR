@@ -135,3 +135,21 @@ processing by default. Starting in 0.3.0, this wrapper can also discover a
 project folder and paired Wenjuanxing Excel file from a raw-data root and
 write a matched self-report Excel file.
 }
+\examples{
+# Process the bundled synthetic project, including daily aggregation and QC.
+demo_dir <- system.file("extdata", "ProjectName-Demo_ProjectID-001",
+                        package = "appusageR", mustWork = TRUE)
+output <- tempfile("project-")
+result <- run_appusage_project_workflow(
+  project_dir = demo_dir, output_root = output,
+  parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE
+)
+# This one-day log falls below the default QC minimum of seven non-empty days.
+result$qc[, c("participant_id", "qc_status", "pass_qc")]
+
+# The 1-minute and 2-minute Reader episodes form one daily total.
+processed <- new.env(parent = emptyenv())
+load(result$second_level$second_level_data_file[[1L]], envir = processed)
+processed$data$daily[, c("date", "app_name", "duration_ms")]
+unlink(output, recursive = TRUE)
+}

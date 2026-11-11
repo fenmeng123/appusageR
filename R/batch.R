@@ -47,6 +47,23 @@
 #'   separate from the batch's stop-on-error `strict` policy.
 #'
 #' @return Invisibly returns a tibble summary. It does not return parsed data.
+#' @examples
+#' # Read a synthetic line export containing two Reader episodes.
+#' demo_dir <- system.file("extdata", "ProjectName-Demo_ProjectID-001",
+#'                         package = "appusageR", mustWork = TRUE)
+#' logs <- list.files(demo_dir, pattern = "[.]txt$", full.names = TRUE)
+#' output <- tempfile("batch-")
+#' batch <- read_appusage_batch(
+#'   logs, output_dir = output, project_name = "Demo", project_id = "001",
+#'   parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE
+#' )
+#' batch[, c("participant_id", "detected_type", "status", "n_rows")]
+#'
+#' # The summary points to the saved records for each file.
+#' parsed <- new.env(parent = emptyenv())
+#' load(batch$data_file[[1L]], envir = parsed)
+#' parsed$data$line[, c("app_name", "duration_ms")]
+#' unlink(output, recursive = TRUE)
 #' @export
 read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
                                 participant_id_col = NULL,
