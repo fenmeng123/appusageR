@@ -67,6 +67,11 @@ appusage_valid_meta_header <- function(header, pos, table2) {
       "\u603b\u65f6\u95f4\uff08ms\uff09|\u603b\u65f6\u957f\uff08ms\uff09")
   }
   cells <- header[pos + seq_along(fields)]
+  # Some native exports repeat the four display labels over the millisecond
+  # columns. Require the whole quartet in the same order as the display fields.
+  if (!table2 && identical(unname(cells[7:10]), unname(cells[3:6]))) {
+    fields[7:10] <- fields[3:6]
+  }
   all(mapply(function(value, pattern)
     !is.na(value) && grepl(paste0("^(?:", pattern, ")$"), value, perl = TRUE),
     cells, fields, USE.NAMES = FALSE))

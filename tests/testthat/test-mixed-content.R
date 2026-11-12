@@ -50,6 +50,30 @@ mixed_content_lines <- function(meta_records = TRUE) {
   c(mixed_line_header(), mixed_line_record(), mixed_meta_lines(meta_records))
 }
 
+test_that("Table 1 accepts a repeated display quartet in the native millisecond positions", {
+  canonical <- mixed_meta_lines()
+  repeated <- canonical
+  repeated[1] <- gsub("\uff08ms\uff09", "", repeated[1], fixed = TRUE)
+  for (prefix in list(character(), c(mixed_line_header(), mixed_line_record()))) {
+    read <- function(meta) run_first_level_appusage(c(prefix, meta), input = "lines")
+    reference <- read(canonical)
+    result <- read(repeated)
+    expect_identical(result$status, "success")
+    for (table in names(reference$data)) {
+      expect_identical(as.list(result$data[[table]]), as.list(reference$data[[table]]))
+    }
+    expect_equal(result$data$meta_summary$total_duration_ms, 1800000)
+    expect_equal(result$data$meta_summary$start_ts_ms, 1704067200000)
+    expect_identical(run_second_level_appusage(result)$data,
+                     run_second_level_appusage(reference)$data)
+  }
+  bad <- repeated
+  cells <- strsplit(bad[1], ",", fixed = TRUE)[[1]]
+  cells[c(8L, 9L)] <- cells[c(9L, 8L)]
+  bad[1] <- paste(cells, collapse = ",")
+  expect_identical(run_first_level_appusage(bad, input = "lines")$status, "error")
+})
+
 test_that("mixed defaults survive project execution, saved configuration and resume", {
   root <- tempfile("mix")
   dir.create(root)
