@@ -218,7 +218,7 @@ run_appusage_stage <- function(stage, project_dir, config = NULL, x = NULL) {
       output_dir = file.path(project_dir, "proclevel-2"),
       overwrite = config$execution$overwrite, resume = config$execution$resume,
       progress = config$execution$progress, parallel = config$execution$parallel,
-      n_cores = config$execution$workers, provenance = provenance), options))
+      n_cores = config$execution$workers), appusage_second_call_args(options, provenance)))
     } else {
       second <- appusage_project_summary(project_dir, write = FALSE)
       if (stage %in% c("qc", "category")) {

@@ -39,7 +39,8 @@ standardize_appusage <- function(data, export_type = NULL, tz = "Asia/Shanghai",
 #' @param data An object returned by [standardize_appusage()].
 #' @param meta_episodes Optional explicitly reconstructed meta episodes. NULL
 #'   means reconstruction was disabled, rather than an empty successful result.
-#' @param meta_daily_source One of `summary`, `episodes` or `both`.
+#' @param meta_daily_source One of `summary`, `episodes` or `both` for meta
+#'   data. Omit for mixed line/meta input to use native line daily totals.
 #' @param max_daily_app_ms Existing daily row anomaly threshold.
 #' @param tz Effective timezone; defaults to the standardized input's timezone.
 #' @return An `appusage_daily_result` list with `daily`, component tables and
@@ -50,11 +51,17 @@ build_appusage_daily <- function(data, meta_episodes = NULL,
                                  max_daily_app_ms = 86400000,
                                  tz = data$effective_timezone) {
   appusage_count("daily_module", 0)
+  explicit_daily <- !missing(meta_daily_source)
   if (!inherits(data, "appusage_standardized")) {
     cli::cli_abort("`data` must come from standardize_appusage().")
   }
   tz <- appusage_resolve_timezone(tz)
   meta_daily_source <- match.arg(meta_daily_source)
+  if (data$capabilities$line && data$capabilities$meta &&
+      (!is.null(meta_episodes) || explicit_daily)) {
+    cli::cli_abort("Mixed line/meta sources use line daily totals. Parse the meta component separately for meta daily totals.",
+      class = "appusage_mixed_argument_conflict")
+  }
   if (data$capabilities$meta && is.null(meta_episodes) && meta_daily_source != "summary") {
     cli::cli_abort("Episode-derived daily data require explicit meta episodes.")
   }
@@ -72,7 +79,7 @@ build_appusage_daily <- function(data, meta_episodes = NULL,
       max_daily_app_ms = max_daily_app_ms, tz = tz)
     meta_expected <- attr(episode_daily, "daily_aggregation_expected", exact = TRUE)
   }
-  if (isTRUE(data$capabilities$meta)) {
+  if (isTRUE(data$capabilities$meta) && !data$capabilities$line) {
     summary <- compare_meta_daily_sources(summary, episode_daily)
     episode_daily <- compare_meta_daily_sources(episode_daily, summary)
     daily <- switch(meta_daily_source, summary = summary, episodes = episode_daily,

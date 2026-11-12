@@ -1,6 +1,6 @@
 Bundled manual app category dictionary
 
-The app_category_dictionary dataset, version v2.0.0 (formerly v261019; approved 2026-10-19), is
+The app_category_dictionary dataset, version 2.0.0 (formerly v261019; approved 2026-10-19), is
 distributed under the GNU General Public License, version 3 (GPL-3), as specified
 in the package DESCRIPTION. The maintainer has confirmed authority
 to license this dictionary for public redistribution under GPL-3.
@@ -16,7 +16,7 @@ Original source: apptyp_dictionary_v261013.xlsx, Sheet1 (approved 2026-10-12).
 SHA-256: 8c31b300bcff529bdb40935056167f7f6b1a1b68f1b3b9356306d65f80529d21.
 This author-approved update resolves 61 package-key conflicts from v261012.
 The original v261013 is now v1.0.0; its historical suffix is retained in source provenance.
-All 11,849 original rows remain unchanged. The v2.0.0 extension appends saved
+All 11,849 original rows remain unchanged. The 2.0.0 extension appends saved
 name/alias records for 14,118 app identities. The maintainer's user approved
 726 independently reviewed high-confidence and 1,199 medium-confidence labels;
 the other 12,193 identities receive provisional Others / Unclassified.

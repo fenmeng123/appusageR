@@ -5,7 +5,9 @@ test_that("bundled dictionary exposes its approved version and raw identity cont
   provenance <- attr(dict, "dictionary_provenance")
   expect_identical(class(dict), "data.frame")
   expect_true(all(vapply(dict, is.character, logical(1))))
-  expect_identical(provenance$dictionary_version, "v2.0.0")
+  expect_identical(provenance$dictionary_version, "2.0.0")
+  expect_identical(dictionary_metadata(read_app_category_dictionary())$dictionary_version,
+                   provenance$dictionary_version)
   expect_identical(provenance$parent_mapping_version, "v1.0.0")
   expect_identical(provenance$legacy_dictionary_version, "v261019")
   expect_identical(provenance$legacy_parent_mapping_version, "v261013")

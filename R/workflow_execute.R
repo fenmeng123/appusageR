@@ -121,7 +121,7 @@ appusage_execute_pipeline <- function(x, output_root, config, ids = NULL,
         output_dir = file.path(project_dir, "proclevel-2"),
         overwrite = execution$overwrite, resume = execution$resume,
         progress = execution$progress, parallel = execution$parallel,
-        n_cores = execution$workers, provenance = provenance), options))
+        n_cores = execution$workers), appusage_second_call_args(options, provenance)))
     })
   }
   if (config$qc$enabled && !is.null(second)) {
@@ -268,9 +268,10 @@ appusage_config_from_legacy <- function(type = "auto", input = "file", encoding 
   defaults <- appusage_config()
   qc <- options[intersect(names(options), names(defaults$qc))]
   qc$enabled <- options$inline_qc
+  settings <- appusage_forward_meta(options)
   appusage_config(parse = list(type = type, input = input, encoding = encoding),
     time = list(tz = tz),
-    reconstruction = options[intersect(names(options), names(defaults$reconstruction))],
-    daily = list(meta_daily_source = options$meta_daily_source),
+    reconstruction = settings[intersect(names(settings), names(defaults$reconstruction))],
+    daily = settings[intersect(names(settings), names(defaults$daily))],
     qc = qc, execution = execution, category = category)
 }

@@ -1094,6 +1094,7 @@ write_complete_proc2_cache_for_test <- function(batch, index, output_dir) {
     app_categories = list(app_category_status = "not_run"),
     module_state = list(
       research_data = appusage_research_contract(appusage_second_effective_options()),
+      upstream_artifact = appusage_artifact_signature(batch$data_file[[index]]),
       artifact = appusage_artifact_signature(paths$rda_file))
   )
   write_metadata_json(metadata, paths$json_file)

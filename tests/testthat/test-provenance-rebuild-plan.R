@@ -17,7 +17,7 @@ test_that("implementation provenance fingerprints are deterministic and auditabl
   expect_equal(one$effective_timezone, "Asia/Shanghai")
   expect_equal(one$git_commit_sha, sha)
   expect_equal(one$git_build_marker, "dirty")
-  expect_equal(one$output_schema_version, "0.3.4")
+  expect_equal(one$output_schema_version, "0.3.5")
 
   changed <- appusageR:::appusage_build_run_provenance(
     workflow_run_id = "run-fixed", git_sha = sha, git_dirty = FALSE,
@@ -138,6 +138,15 @@ synthetic_rebuild_project <- function(current) {
   first$data_file <- ifelse(first$status == "success",
     file.path(root, paste0(keys, "-proc1.rda")), NA_character_)
   first$metadata_file <- NA_character_
+  # Row four isolates a stale daily result with documented upstream line coverage.
+  first$metadata_file[4] <- file.path(root, "line-components.json")
+  jsonlite::write_json(list(processing = list(first_level_status = "success"),
+    export = list(detected_type = "line", component_selection_rule = "single_content_component"),
+    counts = list(n_line_rows = 1L), module_state = list(
+      parse = appusage_parse_contract("auto", "file", "auto", "Asia/Shanghai", provenance = current),
+      components = list(status = "complete",
+      selection = "single_content_component", meta_summary_present = FALSE,
+      tables = list(line = 1L)))), first$metadata_file[4], auto_unbox = TRUE)
   second_keys <- keys[c(1:5, 7:8)]
   second <- data.frame(
     source_record_key = second_keys,
@@ -210,6 +219,8 @@ test_that("metadata-only rebuild planner covers targeted actions and cardinality
   expect_match(plan$reason_codes[[1]], "package_attributed_first_level_failure")
   expect_match(plan$requested_actions[[2]], "reconcile_cache_identity")
   expect_match(plan$requested_actions[[3]], "rebuild_first_and_second_level")
+  expect_identical(plan$component_status[[3]], "component_verification_required")
+  expect_identical(plan$execution_helper[[3]], "run_appusage_workflow")
   expect_match(plan$reason_codes[[4]], "line_daily_self_check_stale")
   expect_match(plan$reason_codes[[5]], "meta_timezone_provenance_stale")
   expect_match(plan$reason_codes[[6]], "first_level_failure_not_represented_as_skip")

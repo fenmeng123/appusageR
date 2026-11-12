@@ -64,6 +64,16 @@ appusage_context_column <- function(x, position) {
   out
 }
 
+# Read a single physical header without padding it to the widest configuration.
+appusage_header_cells <- function(x, i) {
+  if (!inherits(x, "appusage_parse_context")) return(x[i, ])
+  s <- x$store
+  row <- x$rows[[i]]
+  if (s$sizes[row] <= s$leading) return(character())
+  positions <- seq.int(s$offsets[row] + s$leading + 1L, s$offsets[row + 1L])
+  s$values[positions]
+}
+
 appusage_context_row_text <- function(x) {
   if (!inherits(x, "appusage_parse_context")) {
     if (!ncol(x)) return(rep("", nrow(x)))

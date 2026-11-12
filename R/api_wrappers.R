@@ -54,7 +54,8 @@ read_appusage_text <- function(x, input = c("file", "text", "lines"),
 #' @param x File path, text, lines, or an `appusage_text` object from
 #'   `read_appusage_text()`.
 #' @param input Input mode when `x` is not an `appusage_text` object.
-#' @param type APP Usage export type, or `"auto"` for content detection.
+#' @param type `"auto"` parses bounded line and meta blocks together. A format
+#'   selects that component. `"legacy"` applies the earlier single-component selection.
 #' @param participant_id Optional participant ID for metadata and cache naming.
 #' @param tz Time zone passed to parsers.
 #' @param encoding Source encoding or `"auto"`.
@@ -68,7 +69,7 @@ read_appusage_text <- function(x, input = c("file", "text", "lines"),
 #' @return An `appusage_first_level` list with parsed data and metadata.
 #' @export
 run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
-                                     type = c("auto", "line", "meta", "day", "app"),
+                                     type = c("auto", "line", "meta", "day", "app", "legacy"),
                                      participant_id = NULL,
                                      tz = "Asia/Shanghai",
                                      encoding = "auto",
@@ -148,61 +149,45 @@ run_second_level_appusage <- function(x, export_type = NULL,
                                        meta_episode_merge_gap_ms = 30 * 1000,
                                        meta_daily_source = c("summary", "episodes", "both"),
                                        tz = "Asia/Shanghai") {
+  explicit <- list(reconstruct_meta = !missing(reconstruct_meta),
+                   meta_daily_source = !missing(meta_daily_source))
   tz <- appusage_resolve_timezone(tz)
   meta_pairing <- match.arg(meta_pairing)
   meta_daily_source <- match.arg(meta_daily_source)
   first_level_rda <- NA_character_
   first_data <- x
   if (inherits(x, "appusage_first_level")) {
+    if (!identical(x$status, "success")) {
+      cli::cli_abort("Second-level processing requires a successful first-level result.",
+        class = "appusage_first_cache_unverified")
+    }
     first_level_rda <- x$data_file
     first_data <- x$data
     export_type <- export_type %||% x$type
   } else if (is.character(x) && length(x) == 1 && file.exists(x)) {
     first_level_rda <- x
-    first_data <- load_appusage_data_object(x)
+    if (!isTRUE(write_cache)) first_data <- load_appusage_data_object(x)
     export_type <- export_type %||% parse_appusage_filename(x)$type
   }
 
   data_file <- NA_character_
   metadata_file <- NA_character_
+  args <- appusage_forward_meta(list(include_collection_app = include_collection_app,
+    max_episode_ms = max_episode_ms, max_daily_app_ms = max_daily_app_ms,
+    reconstruct_meta = reconstruct_meta, meta_pairing = meta_pairing,
+    meta_start_event_types = meta_start_event_types, meta_end_event_types = meta_end_event_types,
+    merge_meta_episodes = merge_meta_episodes, meta_episode_merge_gap_ms = meta_episode_merge_gap_ms,
+    meta_daily_source = meta_daily_source, tz = tz), explicit)
   if (isTRUE(write_cache)) {
     if (!is_present_string(first_level_rda) || !file.exists(first_level_rda)) {
       cli::cli_abort("A first-level RDA path is required when `write_cache = TRUE`.")
     }
-    data_file <- write_second_level_appusage(
-      first_level_rda = first_level_rda,
-      output_dir = output_dir,
-      overwrite = overwrite,
-      include_collection_app = include_collection_app,
-      max_episode_ms = max_episode_ms,
-      max_daily_app_ms = max_daily_app_ms,
-      reconstruct_meta = reconstruct_meta,
-      meta_pairing = meta_pairing,
-      meta_start_event_types = meta_start_event_types,
-      meta_end_event_types = meta_end_event_types,
-      merge_meta_episodes = merge_meta_episodes,
-      meta_episode_merge_gap_ms = meta_episode_merge_gap_ms,
-      meta_daily_source = meta_daily_source,
-      tz = tz
-    )
+    data_file <- do.call(write_second_level_appusage, c(list(
+      first_level_rda = first_level_rda, output_dir = output_dir, overwrite = overwrite), args))
     second_data <- load_appusage_data_object(data_file)
     metadata_file <- second_level_metadata_path(data_file)
   } else {
-    second_data <- make_second_level_appusage(
-      first_data,
-      export_type = export_type,
-      include_collection_app = include_collection_app,
-      max_episode_ms = max_episode_ms,
-      max_daily_app_ms = max_daily_app_ms,
-      reconstruct_meta = reconstruct_meta,
-      meta_pairing = meta_pairing,
-      meta_start_event_types = meta_start_event_types,
-      meta_end_event_types = meta_end_event_types,
-      merge_meta_episodes = merge_meta_episodes,
-      meta_episode_merge_gap_ms = meta_episode_merge_gap_ms,
-      meta_daily_source = meta_daily_source,
-      tz = tz
-    )
+    second_data <- do.call(make_second_level_appusage, c(list(data = quote(first_data), export_type = export_type), args))
   }
 
   out <- list(
@@ -211,6 +196,12 @@ run_second_level_appusage <- function(x, export_type = NULL,
     data_file = ifelse(is.na(data_file), NA_character_, normalizePath(data_file, winslash = "/", mustWork = FALSE)),
     metadata_file = ifelse(is.na(metadata_file), NA_character_, normalizePath(metadata_file, winslash = "/", mustWork = FALSE))
   )
+  if (!write_cache && inherits(x, "appusage_first_level"))
+    out$metadata <- x$metadata[c("day_coverage", "export")]
+  if (!write_cache && is.character(x) && is_present_string(first_level_rda)) {
+    paired <- first_level_metadata_path(first_level_rda)
+    if (file.exists(paired)) out$audit_metadata_file <- paired
+  }
   class(out) <- c("appusage_second_level", "list")
   out
 }
@@ -419,17 +410,37 @@ run_appusage_workflow <- function(x = NULL, output_dir = NULL, ids = NULL,
     path <- file.path(project_dir, "appusage_manifest.rds")
     if (file.exists(path)) x <- readRDS(path)
     path <- file.path(project_dir, "appusage_configuration.rds")
-    if (is.null(config) && file.exists(path)) config <- readRDS(path)
+    if (is.null(config) && file.exists(path)) {
+      config <- appusage_validate_config(readRDS(path))
+      if (!missing(reconstruct_meta) || !missing(meta_daily_source) || !missing(type)) {
+        explicit <- appusage_meta_explicit(config)
+        if (!missing(type) && identical(type, "auto") &&
+            any(vapply(explicit, identical, logical(1), "legacy_unknown"))) {
+          cli::cli_abort("Create a new appusage_config() to use automatic mixed parsing with this legacy project.")
+        }
+        if (!missing(reconstruct_meta)) {
+          config$reconstruction$reconstruct_meta <- reconstruct_meta
+          explicit$reconstruct_meta <- TRUE
+        }
+        if (!missing(meta_daily_source)) {
+          config$daily$meta_daily_source <- match.arg(meta_daily_source)
+          explicit$meta_daily_source <- TRUE
+        }
+        if (!missing(type)) config$parse$type <- type
+        attr(config, "meta_explicit") <- explicit
+      }
+    }
   }
   if (is.null(output_dir) && is.null(project_dir)) cli::cli_abort("Supply `output_dir` or `project_dir`.")
   output_dir <- output_dir %||% dirname(project_dir)
   tz <- appusage_resolve_timezone(tz)
   config <- config %||% appusage_config_from_legacy(type, input, encoding, tz,
-    second_options = list(reconstruct_meta = reconstruct_meta,
+    second_options = appusage_forward_meta(list(reconstruct_meta = reconstruct_meta,
       meta_pairing = match.arg(meta_pairing), meta_start_event_types = meta_start_event_types,
       meta_end_event_types = meta_end_event_types, merge_meta_episodes = merge_meta_episodes,
       meta_episode_merge_gap_ms = meta_episode_merge_gap_ms,
       meta_daily_source = match.arg(meta_daily_source), inline_qc = run_qc),
+      list(reconstruct_meta = !missing(reconstruct_meta), meta_daily_source = !missing(meta_daily_source))),
     execution = list(strict = strict, progress = progress, parallel = parallel,
       workers = n_cores, overwrite = overwrite, resume = resume),
     category = list(enabled = run_category, dictionary = dictionary))
@@ -496,6 +507,8 @@ first_level_wrapper_id_info <- function(source_file, input, participant_id) {
 parse_first_level_by_type <- function(x, input, type, participant_id,
                                       source_file, tz, encoding, strict) {
   switch(type,
+    line_meta = appusage_parse_line_meta_context(x, input, participant_id, source_file,
+                                                 tz, encoding, strict),
     line = appusage_parse_line_context(
       x,
       input = input,

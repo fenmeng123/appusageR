@@ -235,7 +235,7 @@ appusage_collection_protected_sources <- function(report, first, project_dir) {
     file.exists(first[["data_file"]]) & (is.na(first[["source_file"]]) |
       !appusage_text_nzchar(first[["source_file"]]))]
   if (length(orphaned)) return("unidentified_scientific_artifacts")
-  reasons <- c("verification_insufficient", "implementation_changed", "configuration_changed",
+  reasons <- c("verification_insufficient", "component_verification_required", "implementation_changed", "configuration_changed",
     "source_identity_changed", "identity_conflict")
   tasks <- report$tasks
   paths <- first$source_file[first$status %in% "success" & file.exists(first$data_file)]

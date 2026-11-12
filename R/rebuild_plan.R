@@ -142,6 +142,12 @@ plan_appusage_project_rebuild <- function(
       pair$reason <- "duplicate_source_record_key"
     }
     first_metadata <- appusage_plan_metadata(first_row, "metadata_file")
+    receipt <- first_metadata$module_state$components
+    component_status <- if (is.list(receipt) && identical(receipt$status, "incomplete")) {
+      "incomplete_parse"
+    } else if (!identical(appusage_plan_value(first_row, "status"), "success")) {
+      "not_applicable"
+    } else if (appusage_components_complete(first_metadata)) "documented" else "component_verification_required"
     second_metadata <- pair$metadata %||%
       appusage_plan_metadata(second_row, "second_level_metadata_file")
     first_provenance <- appusage_metadata_provenance(first_metadata)
@@ -167,7 +173,7 @@ plan_appusage_project_rebuild <- function(
         identity_count = proc2_identity_count[[i]],
         extra_count = proc2_extra_row_count
       ),
-      failure_evidence = failure_evidence
+      failure_evidence = failure_evidence, component_status = component_status
     )
     cardinality_reasons <- c(
       if (proc2_missing_row[[i]]) "proc2_summary_missing_source" else character(),
@@ -192,6 +198,7 @@ plan_appusage_project_rebuild <- function(
       ),
       current_pair_state = pair$pair_state %||% "not_applicable",
       current_pair_reason = pair$reason %||% NA_character_,
+      component_status = component_status,
       parser_provenance_status = appusage_compare_provenance(
         first_provenance, current, "parser_implementation_fingerprint"
       ),
@@ -739,7 +746,7 @@ appusage_plan_first_value <- function(base_row, summary_row, column) {
 appusage_plan_metadata <- function(row, column) {
   path <- appusage_plan_value(row, column)
   if (!is_present_string(path) || !file.exists(path)) return(list())
-  tryCatch(appusage_read_json(path, simplifyVector = TRUE), error = function(e) list())
+  tryCatch(appusage_read_cache_json(path), error = function(e) list())
 }
 
 appusage_plan_pair_state <- function(first, index, output_dir, options = NULL, provenance = NULL) {
@@ -776,7 +783,7 @@ appusage_plan_rebuild_decision <- function(first_row, second_row, pair,
                                             second_provenance,
                                             current_provenance,
                                             cardinality = list(),
-                                            failure_evidence = list()) {
+                                            failure_evidence = list(), component_status = NULL) {
   first_status <- appusage_text_lower(as.character(appusage_plan_value(first_row, "status")))
   second_status <- appusage_text_lower(as.character(appusage_plan_value(
     second_row, "second_level_status", appusage_plan_value(second_row, "status")
@@ -884,6 +891,9 @@ appusage_plan_rebuild_decision <- function(first_row, second_row, pair,
   "rebuild_first_and_second_level")
   add(line_stale, if (daily_mismatch) "line_daily_self_check_stale" else
     "line_second_level_implementation_stale", "rebuild_second_level")
+  add(length(component_status) == 1L &&
+    component_status %in% c("incomplete_parse", "component_verification_required"),
+    component_status, "rebuild_first_and_second_level")
   add(meta_stale, if (timezone_status %in% c("stale", "missing"))
     "meta_timezone_provenance_stale" else "meta_second_level_implementation_stale",
   "rebuild_second_level")
@@ -919,7 +929,11 @@ appusage_plan_rebuild_decision <- function(first_row, second_row, pair,
   } else {
     "none"
   }
-  helper <- if ("rebuild_second_level" %in% actions) {
+  helper <- if (identical(resume_stage, "first_level") && length(component_status) == 1L &&
+    component_status %in% c("incomplete_parse", "component_verification_required") &&
+    !identical(pair$status, "collision")) {
+    "run_appusage_workflow"
+  } else if ("rebuild_second_level" %in% actions) {
     "rerun_second_level_project_subset"
   } else if ("refresh_proc2_summary" %in% actions) {
     "refresh_second_level_summary_from_metadata"

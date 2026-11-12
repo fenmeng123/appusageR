@@ -47,6 +47,17 @@ appusage_second_cache_for_options <- function(cache, options, provenance = NULL,
   upstream_ok <- (is.null(cache$metadata$module_state$upstream_parse) && is.null(cache$upstream_parse)) ||
     appusage_contract_equal(cache$metadata$module_state$upstream_parse, cache$upstream_parse)
   recorded <- cache$metadata$module_state$research_data
+  if (!isTRUE(cache$legacy_name) || !is.null(cache$upstream_parse)) {
+    first <- cache$first_metadata
+    state <- cache$metadata$module_state
+    upstream_ok <- upstream_ok && appusage_components_complete(first) &&
+      appusage_contract_equal(first$module_state$components, state$upstream_components) &&
+      appusage_contract_equal(first$module_state$artifact, state$upstream_artifact) &&
+      appusage_artifact_valid(cache$first_rda, first$module_state$artifact, verify)
+  } else {
+    upstream_ok <- upstream_ok && !is.null(cache$metadata$module_state$upstream_artifact) &&
+      appusage_artifact_valid(cache$first_rda, cache$metadata$module_state$upstream_artifact, verify)
+  }
   contract_ok <- appusage_research_values_compatible(recorded, requested)
   artifact_ok <- appusage_artifact_valid(cache$rda_file, cache$metadata$module_state$artifact, verify)
   if (!contract_ok || !upstream_ok || !artifact_ok) {
@@ -55,7 +66,10 @@ appusage_second_cache_for_options <- function(cache, options, provenance = NULL,
     cache$reason <- if (!contract_ok) {
       if (is.null(recorded)) "verification_insufficient" else
         if (!identical(recorded$implementation, requested$implementation)) "implementation_changed" else "configuration_changed"
-    } else if (!upstream_ok) "upstream_changed" else "artifact_corrupt_or_unverified"
+    } else if (!upstream_ok && !is.null(cache$upstream_parse) &&
+        (is.null(cache$metadata$module_state$upstream_components) ||
+         is.null(cache$metadata$module_state$upstream_artifact))) "component_verification_required"
+    else if (!upstream_ok) "upstream_changed" else "artifact_corrupt_or_unverified"
   }
   cache
 }

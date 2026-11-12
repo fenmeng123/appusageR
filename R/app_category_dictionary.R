@@ -1,6 +1,6 @@
 #' Two-level app category dictionary with provisional residual labels
 #'
-#' Dictionary v2.0.0 (formerly v261019) combines the corrected v1.0.0
+#' Dictionary 2.0.0 (formerly v261019) combines the corrected v1.0.0
 #' (formerly v261013) manual dictionary
 #' with user-approved high- and medium-confidence app labels and provisional
 #' residual assignments. Dictionary versions are independent of package versions.

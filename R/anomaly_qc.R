@@ -197,17 +197,17 @@ appusage_infer_anomaly_grain <- function(x) {
 }
 
 appusage_add_anomaly <- function(metrics, grain, type, severity, count) {
-  count <- as.integer(count)
+  count <- appusage_exact_count(count)
   if (is.na(count) || count <= 0L) {
     return(metrics)
   }
 
   metrics$n_anomalies_by_grain[[grain]] <-
-    metrics$n_anomalies_by_grain[[grain]] + count
+    appusage_exact_count(as.double(metrics$n_anomalies_by_grain[[grain]]) + count)
   metrics$n_anomalies_by_type[[type]] <-
-    appusage_null_int(metrics$n_anomalies_by_type[[type]]) + count
+    appusage_exact_count(as.double(appusage_null_int(metrics$n_anomalies_by_type[[type]])) + count)
   metrics$n_anomalies_by_severity[[severity]] <-
-    metrics$n_anomalies_by_severity[[severity]] + count
+    appusage_exact_count(as.double(metrics$n_anomalies_by_severity[[severity]]) + count)
   metrics
 }
 
@@ -215,7 +215,7 @@ appusage_null_int <- function(x) {
   if (is.null(x) || length(x) == 0L || is.na(x)) {
     return(0L)
   }
-  as.integer(x)
+  appusage_exact_count(x)
 }
 
 appusage_has_col <- function(x, col) {

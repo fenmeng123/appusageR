@@ -220,7 +220,11 @@ appusage_proc1_row_from_json <- function(json_path,
                                          strict = FALSE) {
   json_norm <- normalizePath(json_path, winslash = "/", mustWork = FALSE)
   metadata <- tryCatch(
-    appusage_read_json(json_norm, simplifyVector = FALSE),
+    {
+      record <- appusage_read_json(json_norm, simplifyVector = FALSE)
+      if (!appusage_cache_metadata_shape(record)) stop("Invalid first-level JSON structure.")
+      record
+    },
     error = function(e) e
   )
 
@@ -278,6 +282,9 @@ appusage_proc1_row_from_json <- function(json_path,
     rebuilt_status <- "incomplete"
     cache_status <- "success_json_missing_rda"
     cache_issue <- "First-level JSON records success but paired RDA is missing."
+  } else if (identical(status, "success") && !appusage_components_complete(metadata)) {
+    cache_status <- "component_verification_required"
+    cache_issue <- "Saved parse succeeded; verify component coverage from the source before reuse."
   } else if (!identical(status, "success")) {
     cache_status <- "recorded_error"
   }

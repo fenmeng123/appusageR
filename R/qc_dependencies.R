@@ -19,6 +19,12 @@ appusage_sync_qc_labels <- function(metadata, metadata_file, max_episode_ms,
   options$tz <- options$tz %||% recorded$timezone %||% metadata$processing$effective_timezone %||% "Asia/Shanghai"
   options$max_episode_ms <- max_episode_ms
   options$max_daily_app_ms <- max_daily_app_ms
+  explicit <- metadata$module_state$research_data$meta_explicit %||% appusage_meta_explicit(options)
+  options <- appusage_forward_meta(options, explicit)
+  artifact <- metadata$module_state$upstream_artifact
+  if (!is.null(artifact) && !appusage_artifact_valid(first_path, artifact)) {
+    cli::cli_abort("First-level RDA changed before refreshing QC labels.")
+  }
   fresh <- do.call(make_second_level_appusage,
     c(list(data = load_appusage_data_object(first_path)), options))
   data <- load_appusage_data_object(path)
@@ -69,6 +75,7 @@ appusage_sync_qc_labels <- function(metadata, metadata_file, max_episode_ms,
   }
   metadata$second_level$parameters$max_episode_ms <- max_episode_ms
   metadata$second_level$parameters$max_daily_app_ms <- max_daily_app_ms
+  attr(options, "meta_explicit") <- explicit
   metadata$module_state$research_data <- appusage_research_contract(
     appusage_second_effective_options(options), provenance)
   transaction <- appusage_second_level_transaction_paths(path, metadata_file)

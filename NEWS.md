@@ -1,3 +1,19 @@
+# appusageR 0.3.11
+
+- Scientific output schema 0.3.5 retains meta table 2 events alongside native
+  line episodes and daily totals in mixed exports. New proc-1 and proc-2 stage
+  contracts record their schema version. Older files retain their creator metadata.
+
+- The bundled dictionary now records its version as `2.0.0`. Its five columns,
+  all labels and the historical source identifiers are identical to the previous snapshot.
+
+- `audit_appusage_days()` reports native date-block evidence and recorded
+  duration using explicit day denominators. `audit_appusage_overlap()`
+  reports five half-open interval relations, local-day coverage, and optional
+  app allocations. See the vignette *Day coverage and overlapping intervals*.
+- Daily overlap QC and its report projections preserve exact pair counts
+  above the 32-bit integer limit.
+
 # appusageR 0.3.10 (2026-10-27)
 
 - Rewrite DESCRIPTION and the package README around processing capabilities,

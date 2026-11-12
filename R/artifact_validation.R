@@ -18,6 +18,37 @@ appusage_source_stat <- function(path, input = "file") {
   list(size = unname(info$size[[1]]), mtime = as.numeric(info$mtime[[1]]))
 }
 
+# The JSON receipt distinguishes an absent table from a present, empty table.
+appusage_components_complete <- function(metadata) {
+  if (!appusage_cache_metadata_shape(metadata)) return(FALSE)
+  receipt <- metadata$module_state$components
+  parse <- metadata$module_state$parse
+  if (!is.list(parse) || !is.list(parse$configuration) ||
+      !isTRUE(parse$configuration$component_contract == 1L) ||
+      !is_present_string(parse$implementation) || !is_present_string(parse$configuration$type))
+    return(FALSE)
+  if (!is.list(receipt) || !is.list(receipt$tables) ||
+      !identical(metadata$processing$first_level_status, "success") ||
+      !identical(receipt$status, "complete") ||
+      !is.logical(receipt$meta_summary_present) || length(receipt$meta_summary_present) != 1L ||
+      is.na(receipt$meta_summary_present) ||
+      !is_present_string(receipt$selection) ||
+      !identical(receipt$selection, metadata$export$component_selection_rule)) return(FALSE)
+  expected <- if (identical(receipt$selection, "bounded_line_meta")) {
+    c("line", if (isTRUE(receipt$meta_summary_present)) "meta_summary", "meta_events")
+  } else if (identical(metadata$export$detected_type, "meta")) {
+    c("meta_summary", "meta_events")
+  } else metadata$export$detected_type
+  if (!length(expected) || !setequal(names(receipt$tables), expected) ||
+      (identical(receipt$selection, "bounded_line_meta") && !isTRUE(receipt$event_source_lines)))
+    return(FALSE)
+  all(vapply(expected, function(key) {
+    n <- receipt$tables[[key]]
+    is.numeric(n) && length(n) == 1L && is.finite(n) && n >= 0 &&
+      isTRUE(n == metadata$counts[[paste0("n_", key, "_rows")]])
+  }, logical(1)))
+}
+
 appusage_first_contract_valid <- function(row, metadata, requested, x = NULL,
                                           input = "file", verify = "content") {
   appusage_parse_evidence(row, metadata, requested, x, input, verify)$valid
@@ -28,10 +59,21 @@ appusage_parse_evidence <- function(row, metadata, requested, x = NULL,
   source_verified <- FALSE
   result <- function(valid, reason) list(valid = valid, reason = reason, source_verified = source_verified)
   if (is.null(row)) return(result(FALSE, "parse_artifact_missing"))
-  if (is.null(metadata)) return(result(FALSE, if (file.exists(row$metadata_file[[1]]))
+  if (!appusage_cache_metadata_shape(metadata)) return(result(FALSE, if (file.exists(row$metadata_file[[1]]))
     "parse_metadata_corrupt" else "parse_metadata_missing"))
   recorded <- metadata$module_state$parse
+  components <- metadata$module_state$components
+  if ((is.list(components) && identical(components$status, "incomplete")) ||
+      !identical(metadata$processing$first_level_status, row$status[[1]]))
+    return(result(FALSE, "incomplete_parse"))
   if (is.null(recorded)) return(result(FALSE, "verification_insufficient"))
+  if (identical(row$status[[1]], "success") && !appusage_components_complete(metadata))
+    return(result(FALSE, "component_verification_required"))
+  identity <- appusage_metadata_source_identity(metadata)
+  if (any(vapply(c("source_fingerprint", "source_record_key"), function(key) {
+    expected <- appusage_get_col_value(row, key, NA_character_)
+    is_present_string(expected) && !identical(expected, identity[[key]])
+  }, logical(1)))) return(result(FALSE, "source_identity_changed"))
   if (!appusage_contract_equal(recorded, requested)) return(result(FALSE,
     if (!identical(recorded$implementation, requested$implementation)) "implementation_changed" else "configuration_changed"))
   if (verify == "content") {
@@ -55,6 +97,18 @@ appusage_parse_evidence <- function(row, metadata, requested, x = NULL,
   }
   valid <- appusage_first_level_seed_row_complete(row)
   result(valid, if (valid) "up_to_date" else "incomplete_parse")
+}
+
+appusage_cache_metadata_shape <- function(metadata) {
+  is.list(metadata) && !is.null(names(metadata)) &&
+    all(vapply(metadata[intersect(c("processing", "export", "counts", "module_state", "source",
+      "identity", "outputs"), names(metadata))], is.list, logical(1)))
+}
+
+appusage_read_cache_json <- function(path) {
+  metadata <- appusage_read_json(path, simplifyVector = TRUE)
+  if (!appusage_cache_metadata_shape(metadata)) stop("Invalid cache JSON structure.")
+  metadata
 }
 
 appusage_read_json_safely <- function(path) {

@@ -157,11 +157,14 @@ appusage_line_overlap_qc <- function(episode, config, context = NULL) {
     appusage_interval_overlap_day(segments[idx, , drop = FALSE], config)
   })
   empty$daily <- unname(daily)
-  empty$overlap_count <- sum(vapply(daily, `[[`, integer(1), "overlap_count"))
+  if (any(end[foreground] > start[foreground]))
+    empty$positive_span_hint <- if (any(vapply(daily, function(day) day$overlap_ms > 0, logical(1))))
+      "detected" else "none_detected"
+  empty$overlap_count <- appusage_exact_count(sum(vapply(daily, `[[`, numeric(1), "overlap_count")))
   empty$overlap_ms <- sum(vapply(daily, `[[`, numeric(1), "overlap_ms"))
-  empty$cross_package_overlap_count <- sum(vapply(
-    daily, `[[`, integer(1), "cross_package_overlap_count"
-  ))
+  empty$cross_package_overlap_count <- appusage_exact_count(sum(vapply(
+    daily, `[[`, numeric(1), "cross_package_overlap_count"
+  )))
   empty$contained_interval_count <- sum(vapply(
     daily, `[[`, integer(1), "contained_interval_count"
   ))
@@ -274,14 +277,23 @@ appusage_interval_overlap_day <- function(x, config) {
   }
   list(
     date = as.character(x$date[[1L]]),
-    overlap_count = as.integer(overlap_count),
+    overlap_count = appusage_exact_count(overlap_count),
     overlap_ms = as.numeric(overlap_ms),
-    cross_package_overlap_count = as.integer(cross_package),
+    cross_package_overlap_count = appusage_exact_count(cross_package),
     contained_interval_count = as.integer(contained),
     max_concurrent_intervals = as.integer(max_concurrent),
     foreground_duration_ms = sum(x$duration_ms),
     foreground_over_24h = sum(x$duration_ms) > config$max_line_daily_foreground_ms
   )
+}
+
+# Keep historical scalar types through INT_MAX and promote larger exact counts.
+appusage_exact_count <- function(x) {
+  x <- as.double(x)
+  if (is.na(x)) return(NA_integer_)
+  if (!is.finite(x) || x < 0 || x >= 2^53 || x != floor(x))
+    stop("Count exceeds the supported exact non-negative integer range.")
+  if (x <= .Machine$integer.max) as.integer(x) else x
 }
 
 appusage_overlap_pair_count <- function(start, end) {
@@ -453,7 +465,7 @@ appusage_meta_reconstruction_qc <- function(episode, daily, config, context = NU
     checks <- lapply(days, function(idx) {
       appusage_interval_overlap_day(segments[idx, , drop = FALSE], config)
     })
-    out$eligible_global_overlap_count <- sum(vapply(checks, `[[`, integer(1), "overlap_count"))
+    out$eligible_global_overlap_count <- appusage_exact_count(sum(vapply(checks, `[[`, numeric(1), "overlap_count")))
     out$eligible_global_overlap_ms <- sum(vapply(checks, `[[`, numeric(1), "overlap_ms"))
   }
   out$diagnostic <- any(unlist(out[c(
@@ -476,7 +488,7 @@ appusage_source_qc_anomaly_checks <- function(source_qc) {
     checks$line_foreground_overlap <- list(
       grain = "episode",
       severity = if (isTRUE(line_overlap$critical)) "critical" else "warning",
-      count = as.integer(line_overlap$overlap_count)
+      count = appusage_exact_count(line_overlap$overlap_count)
     )
   }
   if (line_overlap$exact_duplicate_count > 0L) {
@@ -505,7 +517,7 @@ appusage_source_qc_anomaly_checks <- function(source_qc) {
   )
   checks$meta_eligible_global_overlap <- list(
     grain = "episode", severity = "critical",
-    count = as.integer(meta_reconstruction$eligible_global_overlap_count)
+    count = appusage_exact_count(meta_reconstruction$eligible_global_overlap_count)
   )
   appusage_drop_zero_checks(checks)
 }
@@ -571,12 +583,14 @@ appusage_source_qc_summary_from_metadata <- function(metadata) {
     value[[1L]]
   }
   list(
+    day_blank_hint = metadata$day_coverage$hint %||% "not_evaluated",
+    positive_overlap_hint = get(c("line_foreground_overlap", "positive_span_hint"), "not_evaluated"),
     source_qc_status = get(c("status"), NA_character_),
     source_qc_rule_version = get(c("rule_version"), NA_character_),
     source_qc_severity = get(c("severity"), NA_character_),
-    line_overlap_count = as.integer(get(c("line_foreground_overlap", "overlap_count"), NA_integer_)),
+    line_overlap_count = appusage_exact_count(get(c("line_foreground_overlap", "overlap_count"), NA_integer_)),
     line_overlap_ms = as.numeric(get(c("line_foreground_overlap", "overlap_ms"), NA_real_)),
-    line_cross_package_overlap_count = as.integer(get(c("line_foreground_overlap", "cross_package_overlap_count"), NA_integer_)),
+    line_cross_package_overlap_count = appusage_exact_count(get(c("line_foreground_overlap", "cross_package_overlap_count"), NA_integer_)),
     line_contained_interval_count = as.integer(get(c("line_foreground_overlap", "contained_interval_count"), NA_integer_)),
     line_exact_duplicate_count = as.integer(get(c("line_foreground_overlap", "exact_duplicate_count"), NA_integer_)),
     line_exact_duplicate_ratio = as.numeric(get(c("line_foreground_overlap", "exact_duplicate_ratio"), NA_real_)),
@@ -595,7 +609,7 @@ appusage_source_qc_summary_from_metadata <- function(metadata) {
     meta_duration_inferred_episodes = as.integer(get(c("meta_reconstruction", "n_duration_inferred"), NA_integer_)),
     meta_merged_episode_rows = as.integer(get(c("meta_reconstruction", "n_merged_episode_rows"), NA_integer_)),
     meta_total_merged_gap_ms = as.numeric(get(c("meta_reconstruction", "total_merged_gap_ms"), NA_real_)),
-    meta_eligible_global_overlap_count = as.integer(get(c("meta_reconstruction", "eligible_global_overlap_count"), NA_integer_)),
+    meta_eligible_global_overlap_count = appusage_exact_count(get(c("meta_reconstruction", "eligible_global_overlap_count"), NA_integer_)),
     source_qc_episode_ineligible = as.logical(get(c("eligibility", "episode_ineligible"), NA)),
     source_qc_daily_ineligible = as.logical(get(c("eligibility", "daily_ineligible"), NA)),
     source_qc_episode_reasons = get(c("eligibility", "episode_reasons"), NA_character_),

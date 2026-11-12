@@ -46,7 +46,8 @@ Wenjuanxing sequence-to-study-ID matching; currently errors if supplied.}
 
 \item{wenjuanxing_sequence_col}{Reserved Wenjuanxing sequence column name.}
 
-\item{type}{Export type or \code{"auto"}.}
+\item{type}{Export component, \code{"auto"} for content-based mixed parsing, or
+\code{"legacy"} for the earlier single-component selection.}
 
 \item{input}{One of \code{"file"}, \code{"text"}, or \code{"lines"}.}
 

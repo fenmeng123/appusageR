@@ -4,7 +4,7 @@
 # QC details and scientific payloads are released immediately.
 appusage_read_validation_json <- function(path) {
   context <- getOption("appusageR.runtime_context")
-  if (is.null(context)) return(appusage_read_json(path, simplifyVector = TRUE))
+  if (is.null(context)) return(appusage_read_cache_json(path))
   key <- normalizePath(path, winslash = "/", mustWork = FALSE)
   signature <- appusage_artifact_signature(key)
   cached <- context$validation_json[[key]]
@@ -12,7 +12,7 @@ appusage_read_validation_json <- function(path) {
     appusage_count("validation_json_reuse")
     return(cached$value)
   }
-  metadata <- appusage_read_json(key, simplifyVector = TRUE)
+  metadata <- appusage_read_cache_json(key)
   if (!identical(signature, appusage_artifact_signature(key))) {
     cli::cli_abort("Metadata changed during content verification: {.path {key}}")
   }
@@ -23,12 +23,13 @@ appusage_read_validation_json <- function(path) {
 
 appusage_compact_validation_metadata <- function(metadata, path) {
   keep <- c("participant_id", "participant_id_source", "identity", "processing",
-    "outputs", "module_state", "source_record_key", "source_fingerprint",
+    "outputs", "module_state", "counts", "source_record_key", "source_fingerprint",
     "implementation_provenance", "provenance")
   value <- metadata[intersect(keep, names(metadata))]
+  value$day_coverage <- metadata$day_coverage["hint"]
   value$source <- metadata$source[intersect(c("source_fingerprint", "source_cache_key"),
     names(metadata$source))]
-  value$export <- metadata$export[intersect(c("detected_type", "timezone"), names(metadata$export))]
+  value$export <- metadata$export[intersect(c("detected_type", "component_selection_rule", "timezone"), names(metadata$export))]
   check <- metadata$daily_aggregation_self_check
   value$daily_aggregation_self_check <- check[intersect(c("status", "n_missing_or_unmatched_source_keys",
     "n_missing_daily_duration", "n_nonmissing_numeric_mismatch", "n_episode_count_mismatch",
@@ -135,6 +136,10 @@ appusage_reuse_second_batch <- function(first, output_dir, arguments) {
   at <- match(first_level_summary_key(first), second_level_summary_key(old))
   if (anyNA(at) || anyDuplicated(at)) return(NULL)
   result <- old[at, , drop = FALSE]
+  if (any(actions == "reuse" & !result$second_level_status %in% "success")) return(NULL)
+  blocked <- actions == "blocked"
+  if (any(blocked) && !all(result$skip_reason[blocked] %in% "upstream_first_level_error"))
+    return(NULL)
   attr(result, "execution_actions") <- actions
   attr(result, "stage_reused") <- TRUE
   result

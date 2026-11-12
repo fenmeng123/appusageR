@@ -87,7 +87,7 @@ validate_appusage_project <- function(project_dir, x = NULL, config = NULL,
       if (verify != "content") next
       failure <- tryCatch({
         raw <- load_appusage_data_object(row$data_file[[1]])
-        appusage_delivery_raw_contract(raw, row$detected_type[[1]])
+        appusage_delivery_raw_contract(raw, row$detected_type[[1]], meta$module_state$components)
         rm(raw)
         j <- match(row$source_record_key[[1]], second[["source_record_key"]])
         if (is.na(j)) stop("Missing second-level identity.")
@@ -119,7 +119,7 @@ validate_appusage_project <- function(project_dir, x = NULL, config = NULL,
   }
   checks <- if (length(checks)) tibble::as_tibble(do.call(rbind, checks)) else tibble::tibble()
   complete <- verify == "content" && nrow(checks) > 0L && all(checks$status == "passed")
-  legacy <- nrow(tasks) > 0L && any(tasks$reason_code == "verification_insufficient")
+  legacy <- any(tasks$reason_code %in% c("verification_insufficient", "component_verification_required"))
   status <- if (complete) {
     if (any(first$status == "error")) "completed_with_source_issues" else "completed"
   } else if (verify == "metadata") "unverified" else if (legacy) "legacy_unverified" else "incomplete"
@@ -137,10 +137,17 @@ appusage_delivery_config <- function(project_dir, config = NULL) {
   appusage_validate_config(config)
 }
 
-appusage_delivery_raw_contract <- function(data, type) {
+appusage_delivery_raw_contract <- function(data, type, components = NULL) {
   prototypes <- switch(type, line = list(line = empty_line_tibble()),
     meta = list(meta_summary = empty_meta_summary_tibble(), meta_events = empty_meta_events_tibble()),
     day = list(day = empty_day_tibble()), app = list(app = empty_day_tibble()))
+  if (identical(components$selection, "bounded_line_meta")) {
+    if (isTRUE(components$meta_summary_present)) prototypes$meta_summary <- empty_meta_summary_tibble()
+    prototypes$meta_events <- empty_meta_events_tibble()
+  }
+  if (isTRUE(components$event_source_lines)) {
+    prototypes$meta_events <- finalize_meta_events_tibble(NULL, NULL, NULL, NULL, keep_source = TRUE)
+  }
   if (is.null(prototypes) || !is.list(data) || !identical(names(data), names(prototypes)))
     stop("Raw data table structure differs from its export type.")
   for (name in names(prototypes)) appusage_delivery_frame_contract(data[[name]],

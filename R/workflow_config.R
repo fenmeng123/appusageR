@@ -3,6 +3,12 @@
 #' Scientific settings are separate from execution controls. Omitted fields
 #' retain package defaults; unknown fields are rejected. Configurations contain
 #' no run state and can be saved with [saveRDS()].
+#' Mixed line/meta sources use native line intervals and daily totals, with
+#' events from meta Table 2. Leave the meta daily source unspecified and omit
+#' `reconstruct_meta` or set it to `FALSE`. To reconstruct meta episodes,
+#' select `parse = list(type = "meta")`. Old saved configurations with expanded
+#' defaults use legacy single-component selection. Create a new configuration
+#' to opt into automatic mixed parsing.
 #' @param parse,time,reconstruction,daily,qc,category,matching,execution Named
 #'   lists overriding settings in the respective module. See the workflow
 #'   vignette for the supported fields.
@@ -44,7 +50,7 @@ appusage_config <- function(parse = list(), time = list(), reconstruction = list
       is.na(out$parse$encoding) || !appusage_text_nzchar(out$parse$encoding)) {
     cli::cli_abort("`parse$encoding` must be one nonempty character value.")
   }
-  out$parse$type <- match.arg(out$parse$type, c("auto", "line", "meta", "day", "app"))
+  out$parse$type <- match.arg(out$parse$type, c("auto", "line", "meta", "day", "app", "legacy"))
   out$parse$input <- match.arg(out$parse$input, c("file", "text", "lines"))
   out$reconstruction$meta_pairing <- match.arg(out$reconstruction$meta_pairing,
     c("package", "package_class"))
@@ -85,7 +91,31 @@ appusage_config <- function(parse = list(), time = list(), reconstruction = list
       anyDuplicated(priority) || any(!priority %in% c("line", "meta", "day", "app"))) {
     cli::cli_abort("Matching export-type priority must contain unique supported export types.")
   }
-  structure(out, class = c("appusage_config", "list"))
+  structure(out, class = c("appusage_config", "list"),
+    meta_explicit = appusage_meta_explicit(c(reconstruction, daily)))
+}
+
+# Expanded options keep both requested values and their origin. At function
+# boundaries omit inherited arguments so missing() retains its public meaning.
+appusage_meta_explicit <- function(options) {
+  flags <- attr(options, "meta_explicit", exact = TRUE) %||% list(
+    reconstruct_meta = "reconstruct_meta" %in% names(options),
+    meta_daily_source = "meta_daily_source" %in% names(options))
+  legacy <- options$provenance$legacy_meta_arguments
+  flags[intersect(legacy, names(flags))] <- list("legacy_unknown")
+  flags
+}
+
+appusage_forward_meta <- function(options, explicit = appusage_meta_explicit(options)) {
+  inherited <- names(explicit)[vapply(explicit, identical, logical(1), FALSE)]
+  options[setdiff(names(options), inherited)]
+}
+
+appusage_second_call_args <- function(options, provenance) {
+  flags <- appusage_meta_explicit(options)
+  legacy <- names(flags)[vapply(flags, identical, logical(1), "legacy_unknown")]
+  if (length(legacy)) provenance$legacy_meta_arguments <- legacy
+  c(appusage_forward_meta(options, flags), list(provenance = provenance))
 }
 
 appusage_config_merge <- function(defaults, values, section) {
@@ -107,13 +137,30 @@ appusage_validate_config <- function(config) {
   }
   unknown <- setdiff(names(config), names(formals(appusage_config)))
   if (length(unknown)) cli::cli_abort("Unknown configuration section(s): {paste(unknown, collapse = ', ')}")
-  do.call(appusage_config, unclass(config))
+  legacy <- character()
+  if (inherits(config, "appusage_config")) {
+    explicit <- attr(config, "meta_explicit", exact = TRUE)
+    if (is.null(explicit)) {
+      # Pre-component saved configurations expanded both defaults.
+      if (identical(config$parse$type, "auto")) config$parse$type <- "legacy"
+      legacy <- c("reconstruct_meta", "meta_daily_source")
+    } else {
+      legacy <- names(explicit)[vapply(explicit, identical, logical(1), "legacy_unknown")]
+      if (identical(explicit$reconstruct_meta, FALSE) && identical(config$reconstruction$reconstruct_meta, TRUE))
+        config$reconstruction$reconstruct_meta <- NULL
+      if (identical(explicit$meta_daily_source, FALSE) && identical(config$daily$meta_daily_source, "summary"))
+        config$daily$meta_daily_source <- NULL
+    }
+  }
+  config <- do.call(appusage_config, as.list(config))
+  if (length(legacy)) attr(config, "meta_explicit")[legacy] <- list("legacy_unknown")
+  config
 }
 
 appusage_config_second_options <- function(config) {
   qc <- config$qc[setdiff(names(config$qc), "enabled")]
-  c(config$reconstruction, config$daily, config$time,
-    list(inline_qc = config$qc$enabled), qc)
+  structure(c(config$reconstruction, config$daily, config$time,
+    list(inline_qc = config$qc$enabled), qc), meta_explicit = appusage_meta_explicit(config))
 }
 
 appusage_second_effective_options <- function(args = list(), tz = NULL, run_qc = NULL) {
@@ -129,20 +176,22 @@ appusage_second_effective_options <- function(args = list(), tz = NULL, run_qc =
   out$meta_pairing <- match.arg(out$meta_pairing, c("package", "package_class"))
   out$meta_daily_source <- match.arg(out$meta_daily_source, c("summary", "episodes", "both"))
   if (!is.null(run_qc)) out$inline_qc <- isTRUE(run_qc)
-  out
+  structure(out, meta_explicit = appusage_meta_explicit(args))
 }
 
 appusage_parse_contract <- function(type, input, encoding, tz, parser_strict = TRUE,
                                     provenance = NULL) {
-  list(configuration = list(type = type, input = input, encoding = encoding,
-      tz = tz, parser_strict = parser_strict),
+  list(output_schema_version = appusage_output_schema_version(),
+    configuration = list(type = type, input = input, encoding = encoding,
+      tz = tz, parser_strict = parser_strict, component_contract = 1L),
     implementation = provenance$parser_implementation_fingerprint %||%
       appusage_parser_implementation_fingerprint())
 }
 
 appusage_research_contract <- function(options, provenance = NULL) {
   fields <- setdiff(names(formals(make_second_level_appusage)), c("data", "export_type"))
-  list(configuration = options[fields],
+  list(output_schema_version = appusage_output_schema_version(),
+    configuration = options[fields], meta_explicit = appusage_meta_explicit(options),
     implementation = provenance$research_implementation_fingerprint %||%
       appusage_research_implementation_fingerprint())
 }
@@ -157,6 +206,7 @@ appusage_qc_contract <- function(options, provenance = NULL) {
 appusage_research_implementation_fingerprint <- function() {
   appusage_function_fingerprint(c(appusage_text_implementation_functions(),
     "make_second_level_appusage", "standardize_appusage", "build_appusage_daily",
+    "appusage_forward_meta", "appusage_meta_explicit",
     "appusage_frame_timezone", "second_level_events", "second_level_episodes",
     "second_level_daily", "second_level_meta_summary", "conform_second_episode",
     "coerce_episode_column", "conform_second_daily", "daily_from_episodes",

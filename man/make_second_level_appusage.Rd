@@ -38,7 +38,8 @@ anomaly.}
 
 \item{reconstruct_meta}{Whether to explicitly reconstruct meta Table 2 events
 into episode records. Defaults to \code{TRUE} for research-ready second-level
-meta output; \code{parse_meta()} itself remains a faithful raw parser.}
+meta output. On mixed line/meta data omit the argument or supply \code{FALSE};
+for explicit \code{TRUE}, first select the meta component.}
 
 \item{meta_pairing}{Pairing strategy for meta event reconstruction.}
 

@@ -298,10 +298,19 @@ test_that("existing legacy evidence is blocked rather than silently rebuilding s
   out <- f$registry$output_dir
   first <- read.csv(file.path(out, "analytic_summary_table_proclevel-1.csv"))
   metadata <- appusage_read_json_safely(first$metadata_file)
+  saved_parse <- metadata$module_state$parse
   metadata$module_state$parse <- NULL
   appusage_atomic_write_metadata_json(metadata, first$metadata_file)
   before <- tools::md5sum(first$data_file)
   local_mocked_bindings(read_appusage_batch = function(...) stop("unexpected legacy rebuild"))
+  result <- run_appusage_projects(f$registry, f$batch, f$config, workers = 1)
+  expect_identical(result$projects$status, "blocked")
+  expect_identical(tools::md5sum(first$data_file), before)
+  report <- readRDS(file.path(f$batch, "delivery-001.rds"))
+  expect_identical(report$status, "legacy_unverified")
+  metadata$module_state$parse <- saved_parse
+  metadata$module_state$components <- NULL
+  appusage_atomic_write_metadata_json(metadata, first$metadata_file)
   result <- run_appusage_projects(f$registry, f$batch, f$config, workers = 1)
   expect_identical(result$projects$status, "blocked")
   expect_identical(tools::md5sum(first$data_file), before)

@@ -30,10 +30,8 @@ appusage_parse_line_context <- function(x, input = c("file", "text", "lines"),
   mat <- appusage_context_input(x, input, encoding)
   lines <- mat$store$lines
   required_fields <- line_required_fields()
-  header_rows <- find_header_rows(
-    mat,
-    unname(required_fields)
-  )
+  boundaries <- appusage_structural_boundaries(mat)
+  header_rows <- boundaries$row[boundaries$boundary_type == "line_header"]
   diagnostics <- make_parser_diagnostics(
     export_type = "line",
     lines = lines,
@@ -51,16 +49,15 @@ appusage_parse_line_context <- function(x, input = c("file", "text", "lines"),
   }
 
   source_file <- source_file %||% source_file_label(x, input)
-  blocks <- collect_line_blocks(mat, header_rows)
+  blocks <- appusage_table_blocks(mat, header_rows)
   candidate_row_count <- line_block_candidate_count(mat, blocks)
-  raw <- do.call(rbind, lapply(blocks, parse_line_block, mat = mat))
+  raw <- appusage_parse_blocks(blocks, mat, "line", parse_line_block)
   out <- finalize_line_tibble(raw, participant_id, source_file, tz = tz)
   structural_quality <- line_structural_quality(
     out,
     candidate_row_count = candidate_row_count,
     tz = tz
   )
-  boundaries <- appusage_structural_boundaries(mat)
   diagnostics <- finalize_parser_diagnostics(
     diagnostics,
     raw,
@@ -125,7 +122,9 @@ appusage_parse_meta_context <- function(x, input = c("file", "text", "lines"),
     )
   )
 
-  if (length(table1_rows) == 0 || length(table2_rows) == 0) {
+  mixed <- "line_header" %in% boundaries$boundary_type
+  if ((!mixed && length(table1_rows) == 0L) || length(table2_rows) == 0L ||
+      "invalid_meta_header" %in% boundaries$boundary_type) {
     msg <- "No meta-format APP Usage table markers were found."
     if (strict) {
       stop(parser_error(msg, diagnostics, "appusage_missing_required_header"))
@@ -137,11 +136,18 @@ appusage_parse_meta_context <- function(x, input = c("file", "text", "lines"),
   }
 
   source_file <- source_file %||% source_file_label(x, input)
-  pairs <- meta_table_pairs(table1_rows, table2_rows, nrow(mat))
-  raw_summary <- do.call(rbind, lapply(pairs, parse_meta_summary_pair, mat = mat))
-  raw_events <- do.call(rbind, lapply(pairs, parse_meta_events_pair, mat = mat))
+  summaries <- appusage_table_blocks(mat, table1_rows)
+  event_blocks <- appusage_table_blocks(mat, table2_rows)
+  raw_summary <- appusage_parse_blocks(summaries, mat, "meta_summary", parse_meta_summary_block)
+  raw_events <- appusage_parse_blocks(event_blocks, mat, "meta_events", parse_meta_events_block, keep_source = mixed)
+  if (is.null(raw_summary)) raw_summary <- empty_meta_summary_data_frame()
+  if (is.null(raw_events)) raw_events <- empty_meta_events_data_frame()
   summary <- finalize_meta_summary_tibble(raw_summary, participant_id, source_file, tz = tz)
-  events <- finalize_meta_events_tibble(raw_events, participant_id, source_file, tz = tz)
+  events <- finalize_meta_events_tibble(raw_events, participant_id, source_file, tz = tz,
+                                        keep_source = mixed)
+  block_types <- boundaries$boundary_type
+  n_pairs <- sum(utils::head(block_types, -1L) == "meta_table1" &
+                 utils::tail(block_types, -1L) == "meta_table2")
   out <- list(
     summary = summary,
     events = events
@@ -150,11 +156,33 @@ appusage_parse_meta_context <- function(x, input = c("file", "text", "lines"),
     diagnostics,
     list(summary = raw_summary, events = raw_events),
     out,
-    extras = meta_format_diagnostics(pairs, summary, events)
+    extras = meta_format_diagnostics(n_pairs, summary, events)
   )
   out$summary <- attach_parser_diagnostics(out$summary, diagnostics)
   out$events <- attach_parser_diagnostics(out$events, diagnostics)
 
+  attach_parser_diagnostics(out, diagnostics)
+}
+
+appusage_parse_line_meta_context <- function(x, input, participant_id, source_file,
+                                            tz, encoding, strict) {
+  line <- tryCatch(appusage_parse_line_context(x, input, participant_id, source_file, tz, encoding, strict),
+    error = function(e) { e$component_states <- list(line = "failed", meta = "not_run"); stop(e) })
+  meta <- tryCatch(appusage_parse_meta_context(x, input, participant_id, source_file, tz, encoding, strict),
+    error = function(e) { e$component_states <- list(line = "parsed", meta = "failed"); stop(e) })
+  boundaries <- appusage_structural_boundaries(x)
+  out <- list(line = line)
+  if ("meta_table1" %in% boundaries$boundary_type) out$meta_summary <- meta$summary
+  out$meta_events <- meta$events
+  diagnostics <- parser_diagnostics(line)
+  diagnostics$header_profile$header_rows <- boundaries$row[boundaries$component %in% c("line", "meta")]
+  diagnostics$header_profile$n_header_rows <- length(diagnostics$header_profile$header_rows)
+  diagnostics <- finalize_parser_diagnostics(diagnostics, NULL, out, list(
+    meta = parser_diagnostics(meta)$format_specific,
+    meta_summary_present = !is.null(out$meta_summary),
+    n_invalid_event_type = sum(is.na(meta$events$event_type)),
+    n_configuration_extra_fields = sum(meta$events$configuration_extra_fields, na.rm = TRUE)
+  ))
   attach_parser_diagnostics(out, diagnostics)
 }
 
@@ -205,14 +233,12 @@ line_format_diagnostics <- function(raw, out, tz = "Asia/Shanghai") {
   )
 }
 
-collect_line_blocks <- function(mat, header_rows) {
+appusage_table_blocks <- function(mat, header_rows) {
   boundaries <- appusage_structural_boundaries(mat)
-  boundary_rows <- sort(unique(boundaries$row))
-  lapply(header_rows, function(header_row) {
-    next_boundary <- boundary_rows[boundary_rows > header_row]
-    end <- if (length(next_boundary) == 0L) nrow(mat) else next_boundary[[1]] - 1L
-    list(header_row = header_row, start = header_row + 1L, end = end)
-  })
+  starts <- unique(boundaries$row)
+  ends <- c(starts[-1L], nrow(mat) + 1L) - 1L
+  end <- ends[match(header_rows, starts)]
+  Map(function(i, j) list(header_row = i, start = i + 1L, end = j), header_rows, end)
 }
 
 line_block_candidate_count <- function(mat, blocks) {
@@ -380,7 +406,7 @@ appusage_structural_quality_summary_fields <- function(quality) {
   )
 }
 
-meta_format_diagnostics <- function(pairs, summary, events) {
+meta_format_diagnostics <- function(n_pairs, summary, events) {
   event_types <- if (is.data.frame(events) && nrow(events) > 0) {
     table(events$event_type, useNA = "no")
   } else {
@@ -394,7 +420,7 @@ meta_format_diagnostics <- function(pairs, summary, events) {
     numeric()
   }
   list(
-    n_table_pairs = length(pairs),
+    n_table_pairs = n_pairs,
     n_meta_summary_rows = if (is.data.frame(summary)) nrow(summary) else 0L,
     n_meta_event_rows = if (is.data.frame(events)) nrow(events) else 0L,
     table1_empty = !is.data.frame(summary) || nrow(summary) == 0,
@@ -415,7 +441,7 @@ meta_format_diagnostics <- function(pairs, summary, events) {
 }
 
 parse_line_block <- function(block, mat) {
-  header <- mat[block$header_row, ]
+  header <- appusage_header_cells(mat, block$header_row)
   pos <- list(
     start_ts_ms = header_position(header, "^\\u5f00\\u59cb\\u65f6\\u95f4\\uff08ms\\uff09$"),
     start_time_text = header_position(header, "^\\u5f00\\u59cb\\u65f6\\u95f4$"),
@@ -425,7 +451,9 @@ parse_line_block <- function(block, mat) {
     end_ts_ms = header_position(header, "^\\u7ed3\\u675f\\u65f6\\u95f4\\uff08ms\\uff09$"),
     end_time_text = header_position(header, "^\\u7ed3\\u675f\\u65f6\\u95f4$")
   )
-  date <- extract_row_date(header, previous_date(mat, block$header_row))
+  prior <- if ("meta" %in% appusage_structural_boundaries(mat)$component) NA_character_ else
+    previous_date(mat, block$header_row)
+  date <- extract_row_date(header, prior)
   data <- rows_for_block(mat, block)
   keep <- appusage_context_valid(data) & !appusage_context_match(data, c("\\u5f00\\u673a\\u81f3\\u4eca\\u6b65\\u6570\\u4fe1\\u606f", "^STEP", "\\u5f00\\u59cb\\u65f6\\u95f4\\uff08ms\\uff09", "\\u7ed3\\u675f\\u65f6\\u95f4\\uff08ms\\uff09"), all = FALSE)
   data <- data[which(keep), , drop = FALSE]
@@ -492,76 +520,46 @@ finalize_line_tibble <- function(data, participant_id, source_file, tz) {
   out[order(out$start_ts_ms, seq_len(nrow(out))), , drop = FALSE]
 }
 
-meta_table_pairs <- function(table1_rows, table2_rows, n_rows) {
-  pairs <- vector("list", length(table1_rows))
-  for (i in seq_along(table1_rows)) {
-    t1 <- table1_rows[[i]]
-    t2_candidates <- table2_rows[table2_rows > t1]
-    t2 <- if (length(t2_candidates) == 0) NA_integer_ else t2_candidates[[1]]
-    next_t1_candidates <- table1_rows[table1_rows > t1]
-    end <- if (length(next_t1_candidates) == 0) n_rows else next_t1_candidates[[1]] - 1
-    pairs[[i]] <- list(table1 = t1, table2 = t2, end = end)
-  }
-  pairs
+parse_meta_summary_block <- function(block, mat) {
+  header <- appusage_header_cells(mat, block$header_row)
+  offset <- which(!is.na(header))[[1L]]
+  data <- rows_for_block(mat, block)
+  data <- data[which(appusage_context_valid(data)), , drop = FALSE]
+  if (!nrow(data)) return(NULL)
+  field <- function(j) appusage_context_column(data, offset + j)
+  data.frame(
+    table_date = extract_row_date(header),
+    app_name = field(1L), package_name = field(2L),
+    start_datetime = field(3L), end_datetime = field(4L), last_datetime = field(5L),
+    total_duration_text = field(6L), start_ts_ms = field(7L), end_ts_ms = field(8L),
+    last_ts_ms = field(9L), total_duration_ms = field(10L),
+    parse_warning = NA_character_, stringsAsFactors = FALSE
+  )
 }
 
-parse_meta_summary_pair <- function(pair, mat) {
-  if (is.na(pair$table2) || pair$table1 >= pair$table2) {
-    return(empty_meta_summary_data_frame())
-  }
-  header <- mat[pair$table1, ]
-  table_date <- extract_row_date(header)
-  if ((pair$table1 + 1) > (pair$table2 - 1)) {
-    data <- mat[0, , drop = FALSE]
-  } else {
-    data <- mat[(pair$table1 + 1):(pair$table2 - 1), , drop = FALSE]
-  }
-  keep <- appusage_context_valid(data) & !appusage_context_match(data, c("\\u8868\\u4e00", "\\u8868\\u4e8c"), all = FALSE)
-  data <- data[which(keep), , drop = FALSE]
+parse_meta_events_block <- function(block, mat, keep_source) {
+  header <- appusage_header_cells(mat, block$header_row)
+  offset <- which(!is.na(header))[[1L]]
+  data <- rows_for_block(mat, block)
+  data <- data[which(appusage_context_valid(data)), , drop = FALSE]
   if (!nrow(data)) return(NULL)
-  data.frame(
-      table_date = table_date,
-      app_name = appusage_context_column(data, 2),
-      package_name = appusage_context_column(data, 3),
-      start_datetime = appusage_context_column(data, 4),
-      end_datetime = appusage_context_column(data, 5),
-      last_datetime = appusage_context_column(data, 6),
-      total_duration_text = appusage_context_column(data, 7),
-      start_ts_ms = appusage_context_column(data, 8),
-      end_ts_ms = appusage_context_column(data, 9),
-      last_ts_ms = appusage_context_column(data, 10),
-      total_duration_ms = appusage_context_column(data, 11),
-      parse_warning = NA_character_,
-      stringsAsFactors = FALSE
-    )
-}
-
-parse_meta_events_pair <- function(pair, mat) {
-  if (is.na(pair$table2)) {
-    return(empty_meta_events_data_frame())
+  field <- function(j) appusage_context_column(data, offset + j)
+  out <- data.frame(
+    table_date = extract_row_date(header),
+    app_name = field(1L), package_name = field(2L), class_name = field(3L),
+    event_datetime = field(4L), event_ts_ms = field(5L), event_type = field(6L),
+    configuration = field(7L), parse_warning = NA_character_, stringsAsFactors = FALSE
+  )
+  if (keep_source) {
+    out$source_line <- data$rows
+    # Read the suffix from the decoded input, before trimming or splitting.
+    prefix <- sprintf("^(?:[^,]*,){%d}", data$store$leading + offset + 6L)
+    raw <- data$store$lines[data$rows]
+    found <- stringi::stri_detect_regex(raw, prefix)
+    out$configuration_tail <- rep(NA_character_, nrow(out))
+    out$configuration_tail[found] <- stringi::stri_replace_first_regex(raw[found], prefix, "")
   }
-  header <- mat[pair$table2, ]
-  table_date <- extract_row_date(header)
-  if ((pair$table2 + 1) > pair$end) {
-    data <- mat[0, , drop = FALSE]
-  } else {
-    data <- mat[(pair$table2 + 1):pair$end, , drop = FALSE]
-  }
-  keep <- appusage_context_valid(data) & !appusage_context_match(data, c("\\u8868\\u4e00", "\\u8868\\u4e8c"), all = FALSE)
-  data <- data[which(keep), , drop = FALSE]
-  if (!nrow(data)) return(NULL)
-  data.frame(
-      table_date = table_date,
-      app_name = appusage_context_column(data, 2),
-      package_name = appusage_context_column(data, 3),
-      class_name = appusage_context_column(data, 4),
-      event_datetime = appusage_context_column(data, 5),
-      event_ts_ms = appusage_context_column(data, 6),
-      event_type = appusage_context_column(data, 7),
-      configuration = appusage_context_column(data, 8),
-      parse_warning = NA_character_,
-      stringsAsFactors = FALSE
-    )
+  out
 }
 
 finalize_meta_summary_tibble <- function(data, participant_id, source_file, tz) {
@@ -590,11 +588,22 @@ finalize_meta_summary_tibble <- function(data, participant_id, source_file, tz) 
   out[order(out$table_date, out$last_ts_ms, seq_len(nrow(out))), , drop = FALSE]
 }
 
-finalize_meta_events_tibble <- function(data, participant_id, source_file, tz) {
+finalize_meta_events_tibble <- function(data, participant_id, source_file, tz, keep_source = FALSE) {
   if (is.null(data) || nrow(data) == 0) {
-    return(empty_meta_events_tibble())
+    out <- empty_meta_events_tibble()
+    if (keep_source) {
+      out$source_line <- integer()
+      out$event_type_raw <- character()
+      out$configuration_tail <- character()
+      out$configuration_extra_fields <- logical()
+    }
+    return(out)
   }
   event_type <- parse_count(data$event_type)
+  if (keep_source) {
+    valid <- grepl("^-?[0-9]+$", data$event_type)
+    event_type[!valid] <- NA_real_
+  }
   source_table_date <- safe_as_date(data$table_date)
   event_datetime <- safe_as_datetime(data$event_datetime, tz = tz)
   canonical_date <- appusage_date_from_datetime(event_datetime, tz = tz)
@@ -617,6 +626,13 @@ finalize_meta_events_tibble <- function(data, participant_id, source_file, tz) {
     configuration = blank_to_na(data$configuration),
     parse_warning = data$parse_warning
   )
+  if (keep_source) {
+    out$source_line <- data$source_line
+    out$event_type_raw <- data$event_type
+    out$configuration_tail <- data$configuration_tail
+    out$configuration_extra_fields <- stringi::stri_detect_fixed(data$configuration_tail, ",")
+    return(out)
+  }
   out[order(out$event_ts_ms, seq_len(nrow(out))), , drop = FALSE]
 }
 

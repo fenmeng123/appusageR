@@ -18,7 +18,8 @@ build_appusage_daily(
 \item{meta_episodes}{Optional explicitly reconstructed meta episodes. NULL
 means reconstruction was disabled, rather than an empty successful result.}
 
-\item{meta_daily_source}{One of \code{summary}, \code{episodes} or \code{both}.}
+\item{meta_daily_source}{One of \code{summary}, \code{episodes} or \code{both} for meta
+data. Omit for mixed line/meta input to use native line daily totals.}
 
 \item{max_daily_app_ms}{Existing daily row anomaly threshold.}
 

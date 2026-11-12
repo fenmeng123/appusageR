@@ -21,10 +21,12 @@ appusage_workflow_overview <- function(first = NULL, second = NULL,
       sum(completed & second$pass_qc %in% FALSE),
       n_sources - sum(completed & !is.na(second$pass_qc))),
     denominator = n_sources, stringsAsFactors = FALSE)
+  mixed_keys <- first$source_record_key[first$component_selection_rule %in% "bounded_line_meta"]
+  mixed <- (second$source_record_key %||% rep(NA_character_, nrow(second))) %in% mixed_keys[!is.na(mixed_keys)]
   grains <- lapply(c("event", "episode", "daily"), function(grain) {
     rows <- second[[appusage_text_paste0("n_", grain, "_rows")]] %||% rep(NA_real_, nrow(second))
     eligible <- second[[appusage_text_paste0("analysis_eligible_", grain)]] %||% rep(NA, nrow(second))
-    unsupported <- if (grain == "event") second$detected_type %in% c("line", "day", "app") else
+    unsupported <- if (grain == "event") second$detected_type %in% c("line", "day", "app") & !mixed else
       if (grain == "episode") second$detected_type %in% c("day", "app") else rep(FALSE, nrow(second))
     disabled <- grain == "episode" && identical(config$reconstruction$reconstruct_meta, FALSE)
     disabled <- rep(disabled, nrow(second)) & second$detected_type %in% "meta"
@@ -43,6 +45,12 @@ appusage_workflow_overview <- function(first = NULL, second = NULL,
     "analysis_eligible_event", "analysis_eligible_episode", "analysis_eligible_daily"), names(second))
   list(execution = tibble::as_tibble(execution), coverage_qc = tibble::as_tibble(qc),
     source_qc = count(second$source_qc_status, unique(c("not_run", second$source_qc_status)), "source_qc", n_sources),
+    optional_diagnostics = do.call(rbind, lapply(c(days = "day_blank_hint", overlap = "positive_overlap_hint"), function(field) {
+      values <- second[[field]] %||% character()
+      values <- c(values, rep("not_evaluated", max(0L, n_sources - length(values))))
+      values[is.na(values)] <- "not_evaluated"
+      count(values, c("detected", "none_detected", "not_evaluated"), field, n_sources)
+    })),
     eligibility_reasons = tibble::as_tibble(second[reasons]),
     grains = tibble::as_tibble(do.call(rbind, grains)))
 }
@@ -127,6 +135,10 @@ print.appusage_workflow_result <- function(x, ...) {
   print(overview$overview$coverage_qc)
   cat("Grain availability and analysis eligibility:\n")
   print(overview$overview$grains)
+  if (!is.null(overview$overview$optional_diagnostics)) {
+    cat("Optional diagnostics: audit_appusage_days(), audit_appusage_overlap()\n")
+    print(overview$overview$optional_diagnostics, row.names = FALSE)
+  }
   invisible(x)
 }
 

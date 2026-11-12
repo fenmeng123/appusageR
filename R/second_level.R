@@ -18,7 +18,8 @@
 #'   anomaly.
 #' @param reconstruct_meta Whether to explicitly reconstruct meta Table 2 events
 #'   into episode records. Defaults to `TRUE` for research-ready second-level
-#'   meta output; `parse_meta()` itself remains a faithful raw parser.
+#'   meta output. On mixed line/meta data omit the argument or supply `FALSE`;
+#'   for explicit `TRUE`, first select the meta component.
 #' @param meta_pairing Pairing strategy for meta event reconstruction.
 #' @param meta_start_event_types Event types that start meta episodes.
 #' @param meta_end_event_types Event types that end meta episodes.
@@ -47,18 +48,27 @@ make_second_level_appusage <- function(data, export_type = NULL,
                                        meta_daily_source = c("summary", "episodes", "both"),
                                        tz = "Asia/Shanghai") {
   appusage_count("research_data", 0)
+  explicit_reconstruct <- !missing(reconstruct_meta)
+  explicit_daily <- !missing(meta_daily_source)
   tz <- appusage_resolve_timezone(tz)
   meta_pairing <- match.arg(meta_pairing)
   meta_daily_source <- match.arg(meta_daily_source)
+  standardized <- standardize_appusage(data, export_type, tz,
+    max_episode_ms = max_episode_ms, max_daily_app_ms = max_daily_app_ms)
+  if (standardized$capabilities$line && standardized$capabilities$meta &&
+      ((explicit_reconstruct && isTRUE(reconstruct_meta)) || explicit_daily)) {
+    cli::cli_abort("Mixed line/meta uses native line intervals and daily totals. Read type = 'meta' for an explicit meta reconstruction or daily source.",
+      class = "appusage_mixed_argument_conflict")
+  }
+  event <- standardized$event
   if (!identical(meta_daily_source, "summary") && !isTRUE(reconstruct_meta)) {
     cli::cli_abort("`meta_daily_source = {.val {meta_daily_source}}` requires `reconstruct_meta = TRUE`.")
   }
-  standardized <- standardize_appusage(data, export_type, tz,
-    max_episode_ms = max_episode_ms, max_daily_app_ms = max_daily_app_ms)
-  event <- standardized$event
   episode <- standardized$episode
   meta_episode <- empty_second_episode_tibble()
-  if (isTRUE(reconstruct_meta) && !is.null(standardized$meta_events)) {
+  reconstruct_events <- isTRUE(reconstruct_meta) && !standardized$capabilities$line &&
+    !is.null(standardized$meta_events)
+  if (reconstruct_events) {
     meta_episode <- reconstruct_meta_episodes(
       standardized$meta_events, pairing = meta_pairing,
       start_event_types = meta_start_event_types, end_event_types = meta_end_event_types,
@@ -66,9 +76,10 @@ make_second_level_appusage <- function(data, export_type = NULL,
       merge_gap_ms = meta_episode_merge_gap_ms, tz = tz)
     episode <- conform_second_episode(rbind(episode, meta_episode))
   }
-  aggregation <- build_appusage_daily(standardized,
-    meta_episodes = if (isTRUE(reconstruct_meta) && !is.null(standardized$meta_events)) meta_episode else NULL,
-    meta_daily_source = meta_daily_source, max_daily_app_ms = max_daily_app_ms, tz = tz)
+  aggregation <- do.call(build_appusage_daily, appusage_forward_meta(list(data = quote(standardized),
+    meta_episodes = quote(if (reconstruct_events) meta_episode else NULL),
+    meta_daily_source = meta_daily_source, max_daily_app_ms = max_daily_app_ms, tz = tz),
+    list(meta_daily_source = explicit_daily)))
   daily <- aggregation$daily
   meta_episode_daily <- aggregation$meta_episode_daily
   line_segmentation_diagnostics <- aggregation$line_segmentation
@@ -183,6 +194,8 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
                                          meta_diff_abs_ms = 60 * 1000,
                                          meta_diff_ratio = 0.20,
                                          provenance = NULL) {
+  explicit <- list(reconstruct_meta = !missing(reconstruct_meta),
+                   meta_daily_source = !missing(meta_daily_source))
   if (!file.exists(first_level_rda)) {
     cli::cli_abort("First-level RDA file does not exist: {.path {first_level_rda}}")
   }
@@ -192,11 +205,16 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
   meta_daily_source <- match.arg(meta_daily_source)
   started_at <- Sys.time()
   load_started_at <- Sys.time()
+  first_metadata <- read_first_level_metadata_for_second(first_level_rda)
+  entities <- parse_appusage_filename(first_level_rda)
+  if ((!is.null(first_metadata$module_state$parse) || is_present_string(entities$src)) &&
+      (!appusage_components_complete(first_metadata) ||
+       !appusage_artifact_valid(first_level_rda, first_metadata$module_state$artifact))) {
+    cli::cli_abort("First-level cache lacks complete component or artifact evidence. Resume parsing from the source.",
+      class = "appusage_first_cache_unverified")
+  }
   first <- load_appusage_data_object(first_level_rda)
   load_finished_at <- Sys.time()
-  first_metadata <- read_first_level_metadata_for_second(first_level_rda)
-
-  entities <- parse_appusage_filename(first_level_rda)
   participant_id <- entities$sub %||% "record-000001"
   export_type <- entities$type %||% infer_first_level_type(first) %||% "unknown"
   source_cache_key <- entities$src %||%
@@ -248,8 +266,8 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
   }
   update_breadcrumb("convert", "started")
   convert_started_at <- Sys.time()
-  second <- make_second_level_appusage(
-    first,
+  second <- do.call(make_second_level_appusage, appusage_forward_meta(list(
+    data = quote(first),
     export_type = export_type,
     include_collection_app = include_collection_app,
     max_episode_ms = max_episode_ms,
@@ -262,7 +280,7 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     meta_episode_merge_gap_ms = meta_episode_merge_gap_ms,
     meta_daily_source = meta_daily_source,
     tz = tz
-  )
+  ), explicit))
   # Revalidate at the persistence boundary: callers/extensions may have changed
   # data after its computational validation. Never trust a stale attribute.
   daily_self_check <- appusage_validate_second_level_daily(second, tz = tz)
@@ -396,13 +414,21 @@ write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
     started_at = started_at,
     finished_at = finished_at
   )
+  legacy <- intersect(provenance$legacy_meta_arguments, names(explicit))
+  if (length(legacy)) explicit[legacy] <- list("legacy_unknown")
   effective_options <- appusage_second_effective_options(mget(
     setdiff(names(formals(write_second_level_appusage)),
       c("first_level_rda", "output_dir", "overwrite", "provenance")),
     envir = environment(), inherits = FALSE))
+  attr(effective_options, "meta_explicit") <- explicit
+  metadata$second_level$meta_argument_sources <- lapply(explicit, function(value)
+    if (identical(value, "legacy_unknown")) value else if (isTRUE(value)) "explicit" else "default")
   metadata$module_state$research_data <- appusage_research_contract(effective_options, provenance)
   metadata$module_state$artifact <- appusage_artifact_signature(transaction$temp_rda)
   metadata$module_state$upstream_parse <- first_metadata$module_state$parse
+  metadata$module_state$upstream_components <- first_metadata$module_state$components
+  metadata$module_state$upstream_artifact <- first_metadata$module_state$artifact %||%
+    appusage_artifact_signature(first_level_rda)
   if (isTRUE(inline_qc) && identical(inline_qc_result$qc_status, "success")) {
     metadata$module_state$qc <- appusage_qc_contract(effective_options, provenance)
   }
@@ -766,9 +792,6 @@ appusage_publish_second_level_pair <- function(transaction, output_file,
   new_rda_published <- FALSE
   committed <- FALSE
   rollback <- function() {
-    if (file.exists(metadata_file)) {
-      unlink(metadata_file, force = TRUE)
-    }
     if (new_rda_published && file.exists(output_file)) {
       unlink(output_file, force = TRUE)
     }
@@ -887,7 +910,7 @@ first_level_metadata_path <- function(first_level_rda) {
 read_first_level_metadata_for_second <- function(first_level_rda) {
   metadata_file <- first_level_metadata_path(first_level_rda)
   if (file.exists(metadata_file)) {
-    return(read_first_level_metadata(metadata_file)$metadata)
+    return(appusage_read_cache_json(metadata_file))
   }
   entities <- parse_appusage_filename(first_level_rda)
   participant_id <- entities$sub %||% "unknown"
@@ -1148,21 +1171,27 @@ build_second_level_metadata <- function(first_metadata, first_level_rda,
     ),
     profiling = profiling %||% list()
   )
-  metadata$processing$meta_reconstruction_status <- if (isTRUE(reconstruct_meta)) {
+  mixed_line <- identical(metadata$export$component_selection_rule, "bounded_line_meta")
+  if (mixed_line) {
+    metadata$second_level$grain_sources <- list(event = "meta_events", episode = "line", daily = "line")
+  }
+  metadata$processing$meta_reconstruction_status <- if (mixed_line) {
+    "line_intervals"
+  } else if (isTRUE(reconstruct_meta)) {
     "requested"
   } else {
     "not_requested"
   }
   metadata$meta_reconstruction <- summarize_meta_reconstruction(
     second_level_data,
-    requested = reconstruct_meta,
+    requested = isTRUE(reconstruct_meta) && !mixed_line,
     pairing = meta_pairing,
     start_event_types = meta_start_event_types,
     end_event_types = meta_end_event_types
   )
   metadata$meta_daily_comparison <- summarize_meta_daily_comparison(
     second_level_data,
-    selected_source = meta_daily_source,
+    selected_source = if (mixed_line) "line" else meta_daily_source,
     reconstruction_used = isTRUE(reconstruct_meta) &&
       !is.null(second_level_data) &&
       is.data.frame(second_level_data$episode) &&
@@ -1418,8 +1447,12 @@ infer_data_frame_export_type <- function(data) {
 }
 
 second_level_events <- function(x, tz = "Asia/Shanghai") {
+  audit <- intersect(c("source_line", "event_type_raw", "configuration_tail",
+                       "configuration_extra_fields"), names(x))
   if (nrow(x) == 0) {
-    return(empty_second_event_tibble())
+    out <- empty_second_event_tibble()
+    out[audit] <- x[audit]
+    return(out)
   }
   tz <- appusage_resolve_timezone(tz)
   event_date <- appusage_date_from_datetime(x$event_datetime, tz = tz)
@@ -1444,7 +1477,12 @@ second_level_events <- function(x, tz = "Asia/Shanghai") {
     parse_warning = x$parse_warning,
     is_collection_app = x$package_name == "com.w.appusage"
   )
-  add_event_anomalies(out)[order(out$event_ts_ms, seq_len(nrow(out))), , drop = FALSE]
+  out <- add_event_anomalies(out)
+  if ("source_line" %in% names(x)) {
+    out[audit] <- x[audit]
+    return(out)
+  }
+  out[order(out$event_ts_ms, seq_len(nrow(out))), , drop = FALSE]
 }
 
 #' Reconstruct meta event episodes

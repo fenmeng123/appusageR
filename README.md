@@ -8,7 +8,7 @@ categories, and links sources to self-report records.
 Use individual functions with R objects or run a project workflow with parallel
 file processing, validated caches, checkpoints, and recovery from interruptions.
 
-**Package:** 0.3.10 · **App dictionary:** v2.0.0 · **Scientific schema:** 0.3.4
+**Package:** 0.3.11 · **App dictionary:** 2.0.0 · **Scientific schema:** 0.3.5
 
 <br clear="right" />
 
@@ -111,7 +111,7 @@ RDA/JSON pairs are reused.
 
 ### Bundled dictionary
 
-`app_category_dictionary` v2.0.0 contains **28,088 rows** and five character columns:
+`app_category_dictionary` 2.0.0 contains **28,088 rows** and five character columns:
 `App_Name`, `App_Name_Repaired`, `App_UUID`, `Level_1_Category`, and
 `Level_2_Category`. Categories describe application functions. The vocabulary
 includes 14 functional Level 1 categories, 31 functional Level 2 categories, and
@@ -129,7 +129,7 @@ head(app_category_dictionary)
 attr(app_category_dictionary, "dictionary_provenance")$dictionary_version
 ```
 
-Dictionary versions follow independent `vMAJOR.MINOR.PATCH` rules: PATCH corrects
+Dictionary versions follow independent `MAJOR.MINOR.PATCH` rules: PATCH corrects
 existing identities, MINOR adds new identities, and MAJOR changes the taxonomy.
 See the [dictionary version policy](inst/DICTIONARY_VERSIONING.md) and
 [copyright and contributor record](inst/COPYRIGHTS).

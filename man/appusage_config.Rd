@@ -27,4 +27,10 @@ An \code{appusage_config} named list.
 Scientific settings are separate from execution controls. Omitted fields
 retain package defaults; unknown fields are rejected. Configurations contain
 no run state and can be saved with \code{\link[=saveRDS]{saveRDS()}}.
+Mixed line/meta sources use native line intervals and daily totals, with
+events from meta Table 2. Leave the meta daily source unspecified and omit
+\code{reconstruct_meta} or set it to \code{FALSE}. To reconstruct meta episodes,
+select \code{parse = list(type = "meta")}. Old saved configurations with expanded
+defaults use legacy single-component selection. Create a new configuration
+to opt into automatic mixed parsing.
 }

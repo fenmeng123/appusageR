@@ -1,5 +1,5 @@
 appusage_output_schema_version <- function() {
-  "0.3.4"
+  "0.3.5"
 }
 
 appusage_new_workflow_run_id <- function() {
@@ -103,7 +103,8 @@ appusage_function_fingerprint <- function(function_names) {
 appusage_parser_implementation_fingerprint <- function() {
   appusage_function_fingerprint(c(appusage_text_implementation_functions(),
     "appusage_source_preflight", "first_level_detect_type", "normalize_first_level_input",
-    "appusage_component_boundary_diagnostics", "header_position",
+    "appusage_component_boundary_diagnostics", "appusage_coverage_facts", "appusage_failed_coverage",
+    "header_position",
     "parse_line", "parse_meta", "parse_day", "parse_app", "parse_first_level_by_type",
     "parse_line_block", "line_structural_quality", "appusage_parse_context",
     "appusage_context_row_text", "appusage_context_column", "appusage_context_hits",
@@ -113,14 +114,18 @@ appusage_parser_implementation_fingerprint <- function() {
     "appusage_context_all_text", "appusage_context_match", "appusage_context_dates",
     "appusage_context_previous_date", "appusage_context_valid", "appusage_context_input",
     "[.appusage_parse_context", "dim.appusage_parse_context", "decode_raw_text",
-    "normalize_encoding", "split_lines", "parse_meta_summary_pair", "parse_meta_events_pair",
+    "normalize_encoding", "split_lines", "appusage_table_blocks", "appusage_valid_meta_header",
+    "appusage_header_cells", "line_required_fields",
+    "appusage_detect_components_from_lines", "appusage_select_source_component",
+    "appusage_parse_line_meta_context", "parse_meta_summary_block", "parse_meta_events_block",
+    "finalize_meta_events_tibble", "as_first_level_data",
     "parse_day_block", "parse_app_block"
   ))
 }
 
 appusage_second_level_implementation_fingerprint <- function() {
   appusage_function_fingerprint(c(appusage_text_implementation_functions(),
-    "make_second_level_appusage", "standardize_appusage", "build_appusage_daily",
+    "make_second_level_appusage", "standardize_appusage", "second_level_events", "build_appusage_daily",
     "appusage_frame_timezone", "coerce_episode_column", "daily_from_episodes",
     "reconstruct_meta_episodes", "clip_overlapping_meta_timeline",
     "aggregate_meta_episodes_daily", "appusage_interval_segments",

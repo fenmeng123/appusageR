@@ -12,7 +12,8 @@
 #'   Wenjuanxing sequence-to-study-ID matching; currently errors if supplied.
 #' @param participant_id_col Reserved study participant ID column name.
 #' @param wenjuanxing_sequence_col Reserved Wenjuanxing sequence column name.
-#' @param type Export type or `"auto"`.
+#' @param type Export component, `"auto"` for content-based mixed parsing, or
+#'   `"legacy"` for the earlier single-component selection.
 #' @param input One of `"file"`, `"text"`, or `"lines"`.
 #' @param output_dir Optional parent directory for the project output folder.
 #' @param project_name Optional project name. Defaults to the next available
@@ -85,9 +86,7 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
   tz <- appusage_resolve_timezone(tz)
   provenance <- appusage_resolve_run_provenance(provenance, tz = tz)
   provenance$parser_strict <- parser_strict
-  if (!identical(type, "auto") && !type %in% c("line", "meta", "day", "app")) {
-    cli::cli_abort("`type` must be 'auto', 'line', 'meta', 'day', or 'app'.")
-  }
+  type <- match.arg(type, c("auto", "legacy", "line", "meta", "day", "app"))
   worker_decision <- appusage_first_level_worker_decision(
     parallel = parallel,
     n_cores = n_cores,
@@ -730,7 +729,7 @@ appusage_record_second_level_subset_rerun <- function(project_dir, filter, selec
   } else {
     list(
       package_version = as.character(utils::packageVersion("appusageR")),
-      output_schema_version = "0.3.0",
+      output_schema_version = appusage_output_schema_version(),
       created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%OS3%z"),
       output_study_dir = project_dir
     )
@@ -846,6 +845,12 @@ reconcile_second_level_summary_cardinality <- function(summary, row_summary,
     } else {
       NA_character_
     }
+    if (!is.na(row_index) && identical(row_summary$status[[row_index]], "error") &&
+        !is_present_string(preferred_json)) {
+      # A rejected request can intentionally retain a previous successful pair.
+      # Its owner describes the saved view, not this attempt.
+      candidates <- integer()
+    }
     chosen <- NA_integer_
     if (length(candidates) > 0L && is_present_string(preferred_json)) {
       candidate_paths <- rep(NA_character_, length(candidates))
@@ -923,6 +928,7 @@ second_level_summary_fallback_row <- function(batch_summary, index,
     first_level_data_file = appusage_summary_cell(batch_summary, "data_file", index),
     second_level_data_file = if (!is.na(row_index)) appusage_summary_cell(row_summary, "second_level_data_file", row_index) else NA_character_,
     second_level_metadata_file = if (!is.na(row_index)) appusage_summary_cell(row_summary, "second_level_metadata_file", row_index) else NA_character_,
+    error_class = if (!is.na(row_index)) appusage_summary_cell(row_summary, "error_class", row_index) else NA_character_,
     error_message = if (!is.na(row_index)) appusage_summary_cell(row_summary, "error_message", row_index) else appusage_summary_cell(batch_summary, "error_message", index),
     stringsAsFactors = FALSE
   )
@@ -1120,6 +1126,7 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
   metadata_file <- NA_character_
   data_file <- NA_character_
   preflight <- NULL
+  prepared <- NULL
   structural_quality <- NULL
   source_identity <- appusage_source_identity(
     x = identity_x,
@@ -1136,9 +1143,12 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           x = x,
           input = input,
           encoding = encoding,
-          filename_type = id_info$native_export_type_from_filename[[1]]
+          filename_type = id_info$native_export_type_from_filename[[1]], type = type
         )
         preflight <- prepared$preflight
+        if (identical(preflight$selection_rule, "explicit_component")) {
+          warnings <- c(warnings, paste("Mixed source: reading only the requested", type, "component."))
+        }
         if (!identical(preflight$status, "ok")) {
           detected_type <- if (length(preflight$detected_components) == 1L) {
             preflight$detected_components[[1]]
@@ -1179,7 +1189,8 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
         )
 
         parsed_data <- parse_first_level_by_type(
-          parse_x, input = parse_input, type = detected_type,
+          parse_x, input = parse_input,
+          type = if (identical(preflight$selection_rule, "bounded_line_meta")) "line_meta" else detected_type,
           participant_id = participant_id, source_file = source_file,
           tz = tz, encoding = encoding, strict = parser_strict
         )
@@ -1222,9 +1233,15 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
           provenance = provenance
         )
 
+        info$day_coverage <- appusage_coverage_facts(parse_x)
         info$module_state$parse <- appusage_parse_contract(
           type, source_input, encoding, tz, parser_strict, provenance)
         info$module_state$source_stat <- appusage_source_stat(identity_x, source_input)
+        info$module_state$components <- list(status = "complete",
+          selection = preflight$selection_rule,
+          meta_summary_present = "meta_summary" %in% names(first_level_data),
+          event_source_lines = "source_line" %in% names(first_level_data$meta_events),
+          tables = lapply(first_level_data, nrow))
         if (!is.null(output_dir)) {
           data_file <- file.path(
             output_dir,
@@ -1250,11 +1267,14 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
             stop(batch_cache_exists_error(appusage_text_paste(c(data_file, metadata_file), collapse = "; ")))
           }
           data <- first_level_data
-          save(data, file = data_file)
-          info$module_state$artifact <- appusage_artifact_signature(data_file)
+          transaction <- appusage_second_level_transaction_paths(data_file, metadata_file)
+          on.exit(appusage_cleanup_paths(c(transaction$temp_rda, transaction$temp_json)), add = TRUE)
+          save(data, file = transaction$temp_rda)
+          info$module_state$artifact <- appusage_artifact_signature(transaction$temp_rda)
           info$outputs$metadata_json <- normalizePath(metadata_file, winslash = "/", mustWork = FALSE)
           info$outputs$first_level_rda <- normalizePath(data_file, winslash = "/", mustWork = FALSE)
-          write_metadata_json(info, metadata_file)
+          write_metadata_json(info, transaction$temp_json)
+          appusage_publish_second_level_pair(transaction, data_file, metadata_file)
         }
 
         list(
@@ -1329,12 +1349,24 @@ preprocess_one_appusage <- function(x, id_info, type, input, output_dir,
       source_identity = source_identity,
       provenance = provenance
     )
+    if (!is.null(prepared$context))
+      error_info$day_coverage <- appusage_failed_coverage(prepared$context)
     error_info$module_state$parse <- appusage_parse_contract(
       type, source_input, encoding, tz, parser_strict, provenance)
     error_info$module_state$source_stat <- appusage_source_stat(identity_x, source_input)
+    if (isTRUE(preflight$mixed_content) &&
+        (identical(preflight$status, "incomplete_meta_blocks") ||
+         (identical(preflight$selection_rule, "bounded_line_meta") && identical(preflight$status, "ok")))) {
+      states <- error$component_states
+      if (is.null(states)) states <- if (identical(preflight$selection_rule, "incomplete_meta_blocks"))
+        list(line = "not_run", meta = "invalid_header") else if (isTRUE(structural_quality$critical))
+        list(line = "failed_quality", meta = "parsed") else list(line = "unverified", meta = "unverified")
+      error_info$module_state$components <- list(status = "incomplete", states = states)
+    }
     info <- error_info
-    if (!is.null(output_dir) && !inherits(error, "appusage_cache_exists")) {
-      write_metadata_json(error_info, metadata_file)
+    if (!is.null(output_dir) && !inherits(error, "appusage_cache_exists") &&
+        !exists("transaction", inherits = FALSE)) {
+      appusage_atomic_write_metadata_json(error_info, metadata_file)
     }
   }
   preflight_fields <- appusage_preflight_summary_fields(preflight)
@@ -1480,6 +1512,9 @@ parsed_n_rows <- function(parsed_data) {
 
 as_first_level_data <- function(parsed_data, detected_type) {
   diagnostics <- parser_diagnostics(parsed_data)
+  if (all(c("line", "meta_events") %in% names(parsed_data))) {
+    return(attach_parser_diagnostics(lapply(parsed_data, strip_individual_columns), diagnostics))
+  }
   out <- switch(detected_type,
     line = list(line = strip_individual_columns(parsed_data)),
     day = list(day = strip_individual_columns(parsed_data)),
@@ -1620,6 +1655,16 @@ build_metadata <- function(participant_id, participant_id_source, id_info,
   metadata$structural_quality <- parser_diag$format_specific$structural_quality %||% list(
     status = "not_applicable"
   )
+  if (isTRUE(compact_preflight$selection_rule %in% c("bounded_line_meta", "explicit_component"))) {
+    metadata$export$type_resolution_rule <- compact_preflight$selection_rule
+    metadata$export$filename_content_relation <- if (!is_present_string(compact_preflight$filename_type)) {
+      "content_only"
+    } else if (compact_preflight$filename_type %in% compact_preflight$detected_components) {
+      "filename_component_present"
+    } else {
+      "conflict"
+    }
+  }
   metadata
 }
 
@@ -3491,6 +3536,10 @@ write_second_level_one <- function(batch_summary, index, output_dir, overwrite,
   finished_at <- Sys.time()
   metadata_file <- if (is.null(result$error) && is_present_string(result$output)) {
     second_level_metadata_path(result$output)
+  } else if (inherits(result$error, "appusage_mixed_argument_conflict") &&
+             identical(cache$metadata$processing$second_level_status, "success")) {
+    # The requested view is invalid. Its error row must not replace the saved view.
+    NA_character_
   } else {
     tryCatch(write_second_level_status_metadata(
       batch_summary = batch_summary,
@@ -3605,6 +3654,7 @@ second_level_existing_cache_status <- function(first_level_rda, output_dir = NUL
       reason = reason,
       metadata = metadata,
       upstream_parse = first_metadata$module_state$parse,
+      first_rda = first_level_rda, first_metadata = first_metadata,
       legacy_name = legacy_name,
       owned_by_task = !identical(pair_state, "source_key_collision")
     ))

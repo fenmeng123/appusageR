@@ -50,7 +50,196 @@ mixed_content_lines <- function(meta_records = TRUE) {
   c(mixed_line_header(), mixed_line_record(), mixed_meta_lines(meta_records))
 }
 
-test_that("mixed content selects filename component and bounds line parsing", {
+test_that("mixed defaults survive project execution, saved configuration and resume", {
+  root <- tempfile("mix")
+  dir.create(root)
+  file <- file.path(root, "AppUsage_meta_2024_1_1_2_0_0.txt")
+  writeLines(mixed_content_lines(), file, useBytes = TRUE)
+  project <- file.path(root, "p")
+  result <- run_appusage_workflow(file, project_dir = project, progress = FALSE)
+  first <- result$first_level
+  second <- appusage_summary_proc2_paths(result$second_level)
+  pair <- c(first$data_file, first$metadata_file, second, second_level_metadata_path(second))
+  original <- tools::md5sum(pair)
+  info <- appusage_read_json(pair[4], simplifyVector = TRUE)
+  first_info <- appusage_read_json(pair[2], simplifyVector = TRUE)
+  for (metadata in list(first_info, info)) {
+    expect_identical(metadata$schema_version, "0.3.5")
+    expect_identical(metadata$implementation_provenance$output_schema_version, "0.3.5")
+  }
+  expect_identical(first_info$module_state$parse$output_schema_version, "0.3.5")
+  expect_identical(info$module_state$research_data$output_schema_version, "0.3.5")
+  expect_identical(info$second_level$meta_argument_sources,
+                   list(reconstruct_meta = "default", meta_daily_source = "default"))
+  expect_false(info$meta_reconstruction$requested)
+  expect_identical(info$second_level$grain_sources,
+                   list(event = "meta_events", episode = "line", daily = "line"))
+  expect_equal(info$module_state$upstream_components$tables,
+               list(line = 1L, meta_summary = 1L, meta_events = 1L))
+  expect_equal(load_appusage_data_object(second)$daily$duration_ms, 60000)
+  raw <- load_appusage_data_object(pair[1])
+  bad <- write_second_level_batch(first, output_dir = dirname(second), progress = FALSE,
+                                  resume = TRUE, meta_daily_source = "summary")
+  expect_identical(bad$second_level_status, "error")
+  expect_match(bad$error_class, "appusage_mixed_argument_conflict")
+  expect_identical(tools::md5sum(pair), original)
+  good <- write_second_level_batch(first, output_dir = dirname(second), progress = FALSE, resume = TRUE)
+  expect_identical(good$second_level_status, "success")
+  expect_identical(tools::md5sum(pair), original)
+  expect_true(appusage_delivery_raw_contract(raw, first$detected_type, info$module_state$upstream_components))
+  expect_error(build_appusage_daily(standardize_appusage(raw), meta_daily_source = "summary"),
+               class = "appusage_mixed_argument_conflict")
+  saved <- readRDS(file.path(project, "appusage_configuration.rds"))
+  expect_false(appusage_meta_explicit(appusage_validate_config(saved))$meta_daily_source)
+  run_appusage_workflow(project_dir = project)
+  expect_identical(tools::md5sum(pair), original)
+  unlink(second)
+  run_appusage_stage("research_data", project)
+  expect_identical(tools::md5sum(pair[1:2]), original[1:2])
+  expect_equal(load_appusage_data_object(second)$daily$duration_ms, 60000)
+  for (args in list(list(reconstruct_meta = TRUE), list(meta_daily_source = "summary"),
+                    list(meta_daily_source = "episodes"), list(meta_daily_source = "both"))) {
+    expect_error(do.call(run_second_level_appusage, c(list(x = load_appusage_data_object(pair[1])), args)),
+                 class = "appusage_mixed_argument_conflict")
+  }
+  explicit <- appusage_config(reconstruction = list(reconstruct_meta = FALSE), execution = list(progress = FALSE))
+  result <- run_appusage_workflow(file, project_dir = project, config = explicit)
+  info <- appusage_read_json(pair[4], simplifyVector = TRUE)
+  expect_identical(info$second_level$meta_argument_sources$reconstruct_meta, "explicit")
+  expect_identical(tools::md5sum(pair[1:2]), original[1:2])
+  expect_equal(load_appusage_data_object(second)$daily$duration_ms, 60000)
+
+  # A pre-component config has the expanded values but no evidence of their origin.
+  attr(saved, "meta_explicit") <- NULL
+  expect_identical(appusage_validate_config(saved)$parse$type, "legacy")
+  saveRDS(saved, file.path(project, "appusage_configuration.rds"))
+  legacy <- run_appusage_workflow(project_dir = project)
+  expect_identical(legacy$first_level$detected_type, "meta")
+  expect_named(load_appusage_data_object(legacy$first_level$data_file), c("meta_summary", "meta_events"))
+  expect_identical(legacy$first_level$component_selection_rule, "filename_within_detected_components")
+  legacy_json <- second_level_metadata_path(appusage_summary_proc2_paths(legacy$second_level))
+  info <- appusage_read_json(legacy_json, simplifyVector = TRUE)
+  expect_identical(info$second_level$meta_argument_sources,
+                   list(reconstruct_meta = "legacy_unknown", meta_daily_source = "legacy_unknown"))
+  tasks <- plan_appusage_workflow(project_dir = project, verify = "content")$tasks
+  expect_true(all(tasks$action[tasks$stage %in% c("parse", "research_data")] == "reuse"))
+  expect_error(run_appusage_workflow(project_dir = project, type = "auto"), "new appusage_config")
+  config <- appusage_config(parse = list(type = "legacy"))
+  expect_identical(config$parse$type, "legacy")
+  ambiguous <- run_first_level_appusage(mixed_content_lines(), input = "lines", type = "legacy")
+  expect_identical(ambiguous$status, "error")
+  one <- run_first_level_appusage(c(mixed_line_header(), mixed_line_record(), mixed_meta_lines()[3:4]),
+                                 input = "lines", type = "legacy")
+  expect_named(one$data, "line")
+})
+
+test_that("mixed component receipts gate cache-only use and repair damaged owners", {
+  root <- tempfile("mc")
+  dir.create(root)
+  source <- file.path(root, "synthetic.txt")
+  writeLines(mixed_content_lines(), source, useBytes = TRUE)
+  project <- file.path(root, "p")
+  config <- appusage_config(execution = list(progress = FALSE))
+  result <- run_appusage_workflow(source, project_dir = project, config = config)
+  first <- result$first_level
+  second <- appusage_summary_proc2_paths(result$second_level)
+  json2 <- second_level_metadata_path(second)
+  original <- load_appusage_data_object(second)
+  plan <- function(verify) plan_appusage_workflow(project_dir = project, verify = verify)$tasks
+  metadata <- appusage_read_json(first$metadata_file, simplifyVector = FALSE)
+  no_parse <- metadata
+  no_parse$module_state$parse <- NULL
+  write_metadata_json(no_parse, first$metadata_file)
+  expect_error(write_second_level_appusage(first$data_file, overwrite = TRUE),
+               class = "appusage_first_cache_unverified")
+  metadata$module_state$components <- NULL
+  write_metadata_json(metadata, first$metadata_file)
+  rebuilt <- rebuild_first_level_summary_from_cache(project, write = FALSE)
+  expect_identical(rebuilt$cache_rebuild_status, "component_verification_required")
+  for (scope in c("metadata", "cache_only")) {
+    tasks <- plan(scope)
+    parse <- tasks[tasks$stage == "parse", ]
+    expect_identical(parse$reason_code, "component_verification_required")
+    expect_identical(parse$action, if (scope == "cache_only") "blocked" else "run")
+  }
+  expect_error(write_second_level_appusage(first$data_file, overwrite = TRUE),
+               class = "appusage_first_cache_unverified")
+  run_appusage_workflow(project_dir = project)
+  expect_true(appusage_components_complete(appusage_read_json(first$metadata_file, simplifyVector = TRUE)))
+  metadata <- appusage_read_json(json2, simplifyVector = FALSE)
+  metadata$module_state$upstream_components <- NULL
+  write_metadata_json(metadata, json2)
+  tasks <- plan("cache_only")
+  expect_identical(tasks$action[tasks$stage == "parse"], "reuse")
+  expect_identical(tasks$action[tasks$stage == "research_data"], "run")
+  run_appusage_workflow(project_dir = project)
+  for (path in c(first$data_file, first$metadata_file, second, json2)) {
+    writeBin(charToRaw("broken"), path)
+    tasks <- plan("content")
+    expect_identical(tasks$action[tasks$stage == "parse"],
+                     if (path %in% c(first$data_file, first$metadata_file)) "run" else "reuse")
+    expect_identical(tasks$action[tasks$stage == "research_data"], "run")
+    run_appusage_workflow(project_dir = project)
+    expect_identical(load_appusage_data_object(second), original)
+    tasks <- plan("content")
+    expect_true(all(tasks$action[tasks$stage %in% c("parse", "research_data")] == "reuse"))
+  }
+})
+
+test_that("a damaged mixed component retains its diagnostic and never seeds a success", {
+  source <- tempfile(fileext = ".txt")
+  lines <- mixed_content_lines()
+  writeLines(lines[-5L], source, useBytes = TRUE)
+  partial <- run_first_level_appusage(source)
+  expect_error(run_second_level_appusage(partial), class = "appusage_first_cache_unverified")
+  expect_equal(nrow(parse_line(source)), 1L)
+  project <- tempfile("partial")
+  config <- appusage_config(execution = list(progress = FALSE))
+  result <- run_appusage_workflow(source, project_dir = project, config = config)
+  expect_identical(result$first_level$status, "error")
+  info <- appusage_read_json(result$first_level$metadata_file, simplifyVector = TRUE)
+  expect_identical(info$module_state$components, list(status = "incomplete",
+                   states = list(line = "not_run", meta = "invalid_header")))
+  expect_identical(result$second_level$skip_reason, "upstream_first_level_error")
+  tasks <- plan_appusage_workflow(project_dir = project, verify = "cache_only")$tasks
+  expect_identical(tasks$action[tasks$stage == "parse"], "blocked")
+  writeLines(lines, source, useBytes = TRUE)
+  repaired <- run_appusage_workflow(project_dir = project)
+  expect_identical(repaired$first_level$status, "success")
+  expect_equal(nrow(load_appusage_data_object(appusage_summary_proc2_paths(repaired$second_level))$event), 1L)
+})
+
+test_that("a parser exception after line parsing cannot publish a partial pair", {
+  source <- tempfile(fileext = ".txt")
+  writeLines(mixed_content_lines(), source, useBytes = TRUE)
+  project <- tempfile("pf")
+  local_mocked_bindings(appusage_parse_meta_context = function(...) stop("Injected table 2 failure"))
+  first <- read_appusage_batch(source, project_dir = project, progress = FALSE)
+  info <- appusage_read_json(first$metadata_file, simplifyVector = TRUE)
+  expect_identical(first$status, "error")
+  expect_identical(info$module_state$components$states, list(line = "parsed", meta = "failed"))
+  expect_false(file.exists(sub("[.]json$", ".rda", first$metadata_file)))
+  expect_identical(write_second_level_batch(first, progress = FALSE)$skip_reason, "upstream_first_level_error")
+})
+
+test_that("proc-1 rolls back the previously published pair if promotion fails", {
+  source <- tempfile(fileext = ".txt")
+  writeLines(mixed_content_lines(), source, useBytes = TRUE)
+  project <- tempfile("rb")
+  first <- read_appusage_batch(source, project_dir = project, progress = FALSE)
+  pair <- c(first$data_file, first$metadata_file)
+  before <- tools::md5sum(pair)
+  promote <- appusage_promote_file
+  local_mocked_bindings(appusage_promote_file = function(from, to) {
+    if (identical(basename(to), basename(pair[2])) && grepl("tmp-", basename(from))) return(FALSE)
+    promote(from, to)
+  })
+  failed <- read_appusage_batch(source, project_dir = project, progress = FALSE, overwrite = TRUE)
+  expect_identical(failed$status, "error")
+  expect_identical(tools::md5sum(pair), before)
+})
+
+test_that("bounded line/meta content retains both components for either filename", {
   lines <- mixed_content_lines(TRUE)
   line_preflight <- appusage_source_preflight(
     lines, input = "lines", filename_type = "line"
@@ -61,7 +250,7 @@ test_that("mixed content selects filename component and bounds line parsing", {
   expect_equal(line_preflight$selected_component, "line")
   expect_equal(
     line_preflight$selection_rule,
-    "filename_within_detected_components"
+    "bounded_line_meta"
   )
 
   parsed_line <- parse_line(lines, input = "lines", strict = TRUE)
@@ -72,8 +261,8 @@ test_that("mixed content selects filename component and bounds line parsing", {
   meta_preflight <- appusage_source_preflight(
     lines, input = "lines", filename_type = "meta"
   )
-  expect_equal(meta_preflight$selected_component, "meta")
-  expect_equal(meta_preflight$selection_rule, "filename_within_detected_components")
+  expect_equal(meta_preflight$selected_component, "line")
+  expect_equal(meta_preflight$selection_rule, "bounded_line_meta")
   parsed_meta <- parse_meta(lines, input = "lines", strict = TRUE)
   expect_equal(nrow(parsed_meta$summary), 1L)
   expect_equal(nrow(parsed_meta$events), 1L)
@@ -93,10 +282,10 @@ test_that("mixed content selects filename component and bounds line parsing", {
   expect_true(line_summary$mixed_content)
   expect_equal(
     line_summary$component_selection_rule,
-    "filename_within_detected_components"
+    "bounded_line_meta"
   )
   line_data <- load_appusage_data_object(line_summary$data_file[[1]])
-  expect_setequal(names(line_data), "line")
+  expect_setequal(names(line_data), c("line", "meta_summary", "meta_events"))
   expect_equal(nrow(line_data$line), 1L)
   line_metadata <- jsonlite::read_json(
     line_summary$metadata_file[[1]], simplifyVector = TRUE
@@ -105,16 +294,24 @@ test_that("mixed content selects filename component and bounds line parsing", {
   expect_equal(line_metadata$export$selected_component, "line")
   expect_true(line_metadata$export$mixed_content)
   expect_gt(length(line_metadata$export$boundary_diagnostics$boundaries), 0L)
+  second <- run_second_level_appusage(line_summary$data_file, output_dir = root)
+  receipt <- jsonlite::read_json(second$metadata_file)
+  expect_identical(receipt$second_level$grain_sources,
+                   list(event = "meta_events", episode = "line", daily = "line"))
+  expect_false(receipt$meta_reconstruction$requested)
+  expect_identical(receipt$meta_daily_comparison$selected_source, "line")
+  expect_equal(second$data$daily$duration_ms, 60000)
 
   meta_summary <- read_appusage_batch(
     meta_file, ids = "mixed-meta", output_dir = root,
     project_name = "MixedMeta", project_id = "C1M", progress = FALSE
   )
   expect_equal(meta_summary$status, "success")
-  expect_equal(meta_summary$detected_type, "meta")
+  expect_equal(meta_summary$detected_type, "line")
   expect_true(meta_summary$mixed_content)
   meta_data <- load_appusage_data_object(meta_summary$data_file[[1]])
-  expect_setequal(names(meta_data), c("meta_summary", "meta_events"))
+  expect_setequal(names(meta_data), names(line_data))
+  expect_identical(meta_data$meta_events$source_line, line_data$meta_events$source_line)
 })
 
 test_that("content wins single-component filename disagreement and unknown filename", {
@@ -153,8 +350,8 @@ test_that("content wins single-component filename disagreement and unknown filen
   expect_equal(unknown_summary$detected_type, "line")
 })
 
-test_that("ambiguous mixed content without safe selector fails precisely", {
-  lines <- mixed_content_lines(TRUE)
+test_that("mixed formats outside line/meta still require a safe selector", {
+  lines <- c(mixed_content_lines(TRUE), readLines(test_path("fixtures", "day_sample.txt"), encoding = "UTF-8"))
   preflight <- appusage_source_preflight(
     lines, input = "lines", filename_type = NA_character_
   )
@@ -290,4 +487,72 @@ test_that("clean line fixture remains semantically unchanged", {
   expect_true(all(diff(parsed$start_ts_ms) >= 0))
   quality <- parser_diagnostics(parsed)$format_specific$structural_quality
   expect_false(isTRUE(quality$critical))
+})
+
+test_that("interleaved blocks retain source order, repeated events and decoded tails", {
+  meta <- mixed_meta_lines()
+  line <- c(mixed_line_header(), mixed_line_record())
+  earlier <- sub("T:1704067200000", "T:1704067100000", meta[4], fixed = TRUE)
+  earlier <- sub(",1,$", ",32,", earlier)
+  tail <- ' cfg=a, "quoted", \u8868\u4e00,\u8868\u4e8c  '
+  malformed <- sub(",1,$", ",v2, ", meta[4])
+  # The repeated Table 2 uses two extra leading columns.
+  lines <- c(meta[1:4], line, paste0(",,", c(meta[3], paste0(earlier, tail),
+                                             paste0(earlier, tail), malformed)))
+  first <- run_first_level_appusage(lines, input = "lines", participant_id = "demo")
+  expect_identical(first$status, "success")
+  second <- run_second_level_appusage(first)
+  for (events in list(first$data$meta_events, second$data$event)) {
+    expect_identical(events$source_line, c(4L, 8L, 9L, 10L))
+    expect_identical(events$event_ts_ms, c(1704067200000, 1704067100000, 1704067100000, 1704067200000))
+    expect_identical(events$event_type, c(1, 32, 32, NA_real_))
+    expect_identical(events$event_type_raw, c("1", "32", "32", "v2"))
+    expect_identical(events$configuration_tail, c("", tail, tail, " "))
+    expect_identical(events$configuration_extra_fields, c(FALSE, TRUE, TRUE, FALSE))
+  }
+  expect_equal(nrow(first$data$meta_summary), 1L)
+  expect_equal(nrow(second$data$episode), 1L)
+  expect_identical(second$data$daily$duration_ms, 60000)
+})
+
+test_that("standalone table 2 requires a line block in auto mode", {
+  line <- c(mixed_line_header(), mixed_line_record())
+  meta <- mixed_meta_lines()
+  for (input in list(meta[1:2], meta[3:4], c(line, meta[1:2]))) {
+    check <- appusage_source_preflight(input, input = "lines")
+    expect_identical(check$status, "incomplete_meta_blocks")
+    expect_identical(detect_appusage_type(input, input = "lines"), "unknown")
+  }
+  mixed <- c(line, meta[3:4])
+  first <- run_first_level_appusage(mixed, input = "lines", participant_id = "demo")
+  expect_identical(names(first$data), c("line", "meta_events"))
+  expect_identical(first$data$meta_events$source_line, 4L)
+  expect_identical(detect_appusage_type(mixed, input = "lines"), "line")
+  for (type in c("line", "meta")) {
+    one <- run_first_level_appusage(mixed, input = "lines", type = type, participant_id = "demo")
+    expect_identical(one$type, type)
+    expect_identical(one$metadata$export$component_selection_rule, "explicit_component")
+    expect_true(xor("line" %in% names(one$data), "meta_events" %in% names(one$data)))
+  }
+})
+
+test_that("empty and repeated meta blocks remain distinct at line boundaries", {
+  line <- c(mixed_line_header(), mixed_line_record())
+  meta <- mixed_meta_lines()
+  empty <- run_first_level_appusage(c(line, meta[3L]), input = "lines", participant_id = "demo")
+  second <- run_second_level_appusage(empty)
+  expect_identical(second$data$event$source_line, integer())
+  expect_identical(second$data$event$configuration_tail, character())
+  expect_identical(second$data$daily$duration_ms, 60000)
+
+  # A repeated Table 1 has no right to read through the following line block.
+  missing <- ",System App,,Main,,bad-ms,,"
+  lines <- c(meta[1:2], line, meta[1:3], paste0(meta[4], meta[3]), missing)
+  parsed <- parse_meta(lines, input = "lines", strict = TRUE)
+  expect_identical(parsed$summary$package_name, rep("org.example.meta", 2L))
+  expect_identical(parsed$events$source_line, 8:9)
+  expect_identical(parsed$events$configuration_tail, c(meta[3], ""))
+  expect_true(is.na(parsed$events$package_name[2L]))
+  expect_true(is.na(parsed$events$event_ts_ms[2L]))
+  expect_true(is.na(parsed$events$event_type[2L]))
 })

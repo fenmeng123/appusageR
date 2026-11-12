@@ -7,7 +7,7 @@
 run_first_level_appusage(
   x,
   input = c("file", "text", "lines"),
-  type = c("auto", "line", "meta", "day", "app"),
+  type = c("auto", "line", "meta", "day", "app", "legacy"),
   participant_id = NULL,
   tz = "Asia/Shanghai",
   encoding = "auto",
@@ -24,7 +24,8 @@ run_first_level_appusage(
 
 \item{input}{Input mode when \code{x} is not an \code{appusage_text} object.}
 
-\item{type}{APP Usage export type, or \code{"auto"} for content detection.}
+\item{type}{\code{"auto"} parses bounded line and meta blocks together. A format
+selects that component. \code{"legacy"} applies the earlier single-component selection.}
 
 \item{participant_id}{Optional participant ID for metadata and cache naming.}
 

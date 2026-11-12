@@ -300,7 +300,7 @@ only and do not delete rows by default.
 ## Manual App Category Enrichment
 
 ```{r}
-dict <- read_app_category_dictionary() # bundled dictionary v2.0.0; independent of package version
+dict <- read_app_category_dictionary() # bundled dictionary 2.0.0; independent of package version
 
 category_summary <- write_app_categories_batch(
   project_root,

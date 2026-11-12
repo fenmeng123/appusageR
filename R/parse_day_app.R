@@ -59,7 +59,7 @@ appusage_parse_day_context <- function(x, input = c("file", "text", "lines"),
 
   source_file <- source_file %||% source_file_label(x, input)
   blocks <- collect_blocks(mat, header_rows)
-  raw <- do.call(rbind, lapply(blocks, parse_day_block, mat = mat))
+  raw <- appusage_parse_blocks(blocks, mat, "day", parse_day_block)
   out <- finalize_day_tibble(raw, participant_id, source_file, "day")
   diagnostics <- finalize_parser_diagnostics(
     diagnostics,
@@ -123,7 +123,7 @@ appusage_parse_app_context <- function(x, input = c("file", "text", "lines"),
 
   source_file <- source_file %||% source_file_label(x, input)
   blocks <- collect_blocks(mat, header_rows)
-  raw <- do.call(rbind, lapply(blocks, parse_app_block, mat = mat))
+  raw <- appusage_parse_blocks(blocks, mat, "app", parse_app_block)
   out <- finalize_day_tibble(raw, participant_id, source_file, "app")
   diagnostics <- finalize_parser_diagnostics(
     diagnostics,
