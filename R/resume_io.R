@@ -26,6 +26,10 @@ appusage_compact_validation_metadata <- function(metadata, path) {
     "outputs", "module_state", "counts", "source_record_key", "source_fingerprint",
     "implementation_provenance", "provenance")
   value <- metadata[intersect(keep, names(metadata))]
+  if (identical(metadata$processing$first_level_status, "error")) {
+    value$errors <- metadata$errors
+    value$structural_quality <- metadata$structural_quality
+  }
   value$day_coverage <- metadata$day_coverage["hint"]
   value$source <- metadata$source[intersect(c("source_fingerprint", "source_cache_key"),
     names(metadata$source))]

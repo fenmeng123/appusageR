@@ -187,7 +187,9 @@ appusage_delivery_reader <- function(project_dir, context) {
           c("source_fingerprint", "source_cache_key"))]
         value$export <- metadata$export[intersect(names(metadata$export),
           c("detected_type", "component_selection_rule"))]
-        if (length(metadata$errors)) value$errors <- TRUE
+        if (length(metadata$errors)) value$errors <- metadata$errors
+        if (identical(metadata$processing$first_level_status, "error"))
+          value$structural_quality <- metadata$structural_quality
       }
     }
     decoded[[key]] <- value

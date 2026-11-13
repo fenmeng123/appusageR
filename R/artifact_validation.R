@@ -54,6 +54,42 @@ appusage_first_contract_valid <- function(row, metadata, requested, x = NULL,
   appusage_parse_evidence(row, metadata, requested, x, input, verify)$valid
 }
 
+# A mixed export can finish parsing both components and then fail the line
+# quality gate. The error receipt, component states and measured counts must
+# corroborate the same terminal input diagnosis.
+appusage_mixed_quality_failure <- function(row, metadata) {
+  receipt <- metadata$module_state$components
+  quality <- metadata$structural_quality
+  errors <- metadata$errors
+  if (!identical(appusage_get_col_value(row, "status"), "error") ||
+      !identical(appusage_get_col_value(row, "failure_family"), "structural_quality") ||
+      !identical(metadata$processing$first_level_status, "error") ||
+      !identical(metadata$processing$first_level_failure_reason, "structural_quality_critical") ||
+      !identical(metadata$export$component_selection_rule, "bounded_line_meta") ||
+      !is.list(receipt) || !identical(receipt$status, "incomplete") ||
+      !is.list(receipt$states) || !identical(receipt$states$line, "failed_quality") ||
+      !identical(receipt$states$meta, "parsed") || !is.list(quality) ||
+      !identical(quality$status, "critical") || !isTRUE(quality$critical) ||
+      !is.data.frame(errors) || !any(startsWith(as.character(errors$class),
+        "appusage_line_structural_quality,"), na.rm = TRUE)) return(FALSE)
+  fields <- c("n_parsed_rows", "n_valid_intervals", "n_header_token_contamination", "n_exact_duplicates")
+  if (!all(vapply(quality[fields], function(n)
+    is.numeric(n) && length(n) == 1L && is.finite(n) && n >= 0 && n == floor(n), logical(1))))
+    return(FALSE)
+  n <- quality$n_parsed_rows
+  if (any(unlist(quality[fields[-1L]]) > n)) return(FALSE)
+  thresholds <- line_structural_quality_thresholds()
+  if (!appusage_contract_equal(quality$thresholds, thresholds)) return(FALSE)
+  reasons <- c(if (quality$n_valid_intervals == 0) "no_valid_intervals",
+    if (quality$n_header_token_contamination > 0) "header_token_contamination",
+    if (n > 0 && quality$n_valid_intervals / n < thresholds$valid_interval_critical_min)
+      "valid_interval_ratio_below_critical",
+    if (n > 0 && quality$n_exact_duplicates / n > thresholds$exact_duplicate_critical_ratio)
+      "exact_duplicate_ratio_above_critical")
+  length(reasons) > 0L && identical(quality$critical_reasons, reasons) &&
+    identical(appusage_get_col_value(row, "structural_critical_reasons"), paste(reasons, collapse = ";"))
+}
+
 appusage_parse_evidence <- function(row, metadata, requested, x = NULL,
                                     input = "file", verify = "content", context = NULL) {
   source_verified <- FALSE
@@ -63,7 +99,11 @@ appusage_parse_evidence <- function(row, metadata, requested, x = NULL,
     "parse_metadata_corrupt" else "parse_metadata_missing"))
   recorded <- metadata$module_state$parse
   components <- metadata$module_state$components
-  if ((is.list(components) && identical(components$status, "incomplete")) ||
+  mixed_failure <- identical(row$status[[1L]], "error") &&
+    (identical(metadata$export$component_selection_rule, "bounded_line_meta") ||
+     identical(appusage_get_col_value(row, "component_selection_rule"), "bounded_line_meta"))
+  if (((mixed_failure || (is.list(components) && identical(components$status, "incomplete"))) &&
+       !appusage_mixed_quality_failure(row, metadata)) ||
       !identical(metadata$processing$first_level_status, row$status[[1]]))
     return(result(FALSE, "incomplete_parse"))
   if (is.null(recorded)) return(result(FALSE, "verification_insufficient"))

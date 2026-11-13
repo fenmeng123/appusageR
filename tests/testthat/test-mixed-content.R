@@ -533,6 +533,44 @@ test_that("a line streaming section marker is not an unparsed app record", {
   expect_identical(appusage_failed_coverage(ctx)$blocks$state, "explicit_empty")
 })
 
+test_that("documented mixed line quality failures are terminal while incomplete parses retry", {
+  root <- tempfile("mixed-quality-")
+  dir.create(root)
+  paths <- file.path(root, paste0(1:4, "_AppUsage_line_2024_1_1_0_0_0.txt"))
+  cases <- list(mixed_line_record(), rep(mixed_line_record(), 2),
+    mixed_line_record(app = "demo\u65e5\u671f"), mixed_line_record(end = NA_real_))
+  for (i in seq_along(paths))
+    writeLines(c(mixed_line_header(), cases[[i]], mixed_meta_lines()), paths[i], useBytes = TRUE)
+  project <- file.path(root, "project")
+  run <- run_appusage_workflow(paths, project_dir = project,
+    config = appusage_config(execution = list(progress = FALSE)))
+  one <- run$first_level
+  expect_identical(one$status, c("success", rep("error", 3)))
+  expect_true(all(run$second_level$second_level_status[-1] == "skipped"))
+  expect_true(validate_appusage_project(project, verify = "content")$complete)
+  row <- one[2, , drop = FALSE]
+  path <- row$metadata_file[[1]]
+  meta <- appusage_read_cache_json(path)
+  expect_true(appusage_mixed_quality_failure(row, meta))
+  verify <- function(m) appusage_parse_evidence(row, m, meta$module_state$parse, paths[2])$reason
+  absent <- meta
+  absent$structural_quality$n_exact_duplicates <- NULL
+  expect_identical(verify(absent), "incomplete_parse")
+  absent <- meta
+  absent$module_state$components <- NULL
+  expect_identical(verify(absent), "incomplete_parse")
+  absent$export$component_selection_rule <- NULL
+  expect_identical(verify(absent), "incomplete_parse")
+  absent <- meta
+  absent$module_state$components$states$meta <- "unverified"
+  expect_identical(verify(absent), "incomplete_parse")
+  absent <- meta
+  absent$errors <- NULL
+  expect_identical(verify(absent), "incomplete_parse")
+  cat("\nchanged", file = paths[2], append = TRUE)
+  expect_identical(verify(meta), "source_changed")
+})
+
 test_that("interleaved blocks retain source order, repeated events and decoded tails", {
   meta <- mixed_meta_lines()
   line <- c(mixed_line_header(), mixed_line_record())

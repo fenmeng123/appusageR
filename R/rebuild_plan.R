@@ -143,7 +143,11 @@ plan_appusage_project_rebuild <- function(
     }
     first_metadata <- appusage_plan_metadata(first_row, "metadata_file")
     receipt <- first_metadata$module_state$components
-    component_status <- if (is.list(receipt) && identical(receipt$status, "incomplete")) {
+    component_status <- if (appusage_mixed_quality_failure(first_row, first_metadata)) {
+      "diagnosed_mixed_quality_failure"
+    } else if ((is.list(receipt) && identical(receipt$status, "incomplete")) ||
+        (identical(first_metadata$export$component_selection_rule, "bounded_line_meta") &&
+         identical(appusage_plan_value(first_row, "status"), "error"))) {
       "incomplete_parse"
     } else if (!identical(appusage_plan_value(first_row, "status"), "success")) {
       "not_applicable"
@@ -828,7 +832,8 @@ appusage_plan_rebuild_decision <- function(first_row, second_row, pair,
   structural_critical <- appusage_plan_truth(
     first_row, "structural_quality_critical"
   )
-  structural <- mixed_stale || structural_critical || audit_header_gap
+  structural <- mixed_stale || audit_header_gap ||
+    (structural_critical && !identical(component_status, "diagnosed_mixed_quality_failure"))
   daily_mismatch <- any(c(
     appusage_plan_number(second_row, "daily_self_check_numeric_mismatch", 0),
     appusage_plan_number(second_row, "daily_self_check_duplicate_keys", 0),
