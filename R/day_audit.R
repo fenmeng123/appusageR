@@ -1,3 +1,23 @@
+# Count nonblank rows inside a native block. A standalone streaming section
+# heading in the date column of a line table has no application payload.
+appusage_day_candidate_count <- function(mat, block, component, header) {
+  rows <- rows_for_block(mat, block)
+  valid <- appusage_context_valid(rows)
+  if (component == "line") {
+    date_col <- which(!is.na(header) & grepl("^[0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2}$", header))
+    if (length(date_col) == 1L) {
+      marker <- which(appusage_context_column(rows, date_col) %in% "\u6d41\u5a92\u4f53")
+      if (length(marker)) {
+        # Strip only empty CSV fields and whitespace around this exact heading.
+        heading <- stringi::stri_detect_regex(rows$store$lines[rows$rows[marker]],
+          "^\\s*(?:,\\s*)*\u6d41\u5a92\u4f53\\s*(?:,\\s*)*$")
+        valid[marker[heading]] <- FALSE
+      }
+    }
+  }
+  sum(valid)
+}
+
 # Record header evidence while the native parser still knows each block boundary.
 # The scientific tables retain their original columns and attributes.
 appusage_parse_blocks <- function(blocks, mat, component, parser, ...) {
@@ -7,8 +27,9 @@ appusage_parse_blocks <- function(blocks, mat, component, parser, ...) {
     block <- blocks[[i]]
     raw <- parser(block, mat = mat, ...)
     rows[i] <- list(raw)
-    header_date <- extract_row_date(appusage_header_cells(mat, block$header_row))
-    candidates <- sum(appusage_context_valid(rows_for_block(mat, block)))
+    header <- appusage_header_cells(mat, block$header_row)
+    header_date <- extract_row_date(header)
+    candidates <- appusage_day_candidate_count(mat, block, component, header)
     parsed <- NROW(raw)
     dates <- as.character(safe_as_date(header_date))
     counts <- parsed
@@ -47,9 +68,10 @@ appusage_failed_coverage <- function(context) {
   ranges <- appusage_table_blocks(context, headers$row)
   facts <- lapply(seq_along(ranges), function(i) {
     b <- ranges[[i]]
-    token <- extract_row_date(appusage_header_cells(context, b$header_row))
+    header <- appusage_header_cells(context, b$header_row)
+    token <- extract_row_date(header)
     date <- as.character(safe_as_date(token))
-    n <- sum(appusage_context_valid(rows_for_block(context, b)))
+    n <- appusage_day_candidate_count(context, b, unname(kind[headers$boundary_type[i]]), header)
     data.frame(component = unname(kind[headers$boundary_type[i]]), header_row = b$header_row,
       last_row = b$end, header_date = token, date = date, candidate_rows_in_block = n,
       parsed_rows = if (n) NA_integer_ else 0L,

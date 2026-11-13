@@ -513,6 +513,26 @@ test_that("clean line fixture remains semantically unchanged", {
   expect_false(isTRUE(quality$critical))
 })
 
+test_that("a line streaming section marker is not an unparsed app record", {
+  marker <- "\u6d41\u5a92\u4f53"
+  name <- paste0("Example (", marker, ")")
+  record <- mixed_line_record(app = name)
+  lines <- c(mixed_line_header(), record, marker, mixed_line_header("2024-01-02"),
+    paste0(" ", marker, ",,"), mixed_line_header("2024-01-03"),
+    mixed_line_record(app = name, start = 1704240000000, end = 1704240060000), "damaged")
+  parsed <- run_first_level_appusage(lines, input = "lines", participant_id = "demo")
+  blocks <- appusage_day_blocks(parsed$metadata)
+  expect_identical(blocks$state, c("recorded", "explicit_empty", "partial"))
+  expect_equal(blocks$candidate_rows_in_block, c(1L, 0L, 2L))
+  expect_identical(parsed$data$line$app_name, rep(name, 2L))
+  # The suffix denotes background activity. Check all activities here.
+  audit <- audit_appusage_days(parsed, activity = "all")
+  expect_equal(audit$denominator_days, 1L)
+  expect_equal(audit$mean_ms, 60000)
+  ctx <- appusage_parse_context(c(mixed_line_header(), marker))
+  expect_identical(appusage_failed_coverage(ctx)$blocks$state, "explicit_empty")
+})
+
 test_that("interleaved blocks retain source order, repeated events and decoded tails", {
   meta <- mixed_meta_lines()
   line <- c(mixed_line_header(), mixed_line_record())
