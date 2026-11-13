@@ -2,6 +2,27 @@ local_ms <- function(x, tz = "Asia/Shanghai") {
   as.numeric(as.POSIXct(x, format = "%Y-%m-%d %H:%M:%S", tz = tz)) * 1000
 }
 
+test_that("local date conversion agrees with the formatted calendar at boundaries", {
+  zones <- c("UTC", "Asia/Shanghai", "America/New_York", "Australia/Lord_Howe", "Pacific/Apia")
+  days <- c("1969-12-31", "2011-12-29", "2011-12-31", "2024-03-10", "2024-03-11",
+    "2024-04-07", "2024-10-06", "2024-11-03", "2024-11-04")
+  for (zone in zones) {
+    midnight <- as.numeric(as.POSIXct(paste(days, "00:00:00"), tz = zone))
+    seconds <- c(as.numeric(outer(midnight, c(-1, -1e-6, 0, 1e-6, 1, 5400), "+")),
+      -1e11, 3e11, NA_real_, NaN, -Inf, Inf)
+    names(seconds) <- seq_along(seconds)
+    ct <- .POSIXct(seconds, tz = "UTC")
+    for (x in list(ct, ct[FALSE], as.POSIXlt(ct, tz = "UTC"))) {
+      old <- as.Date(format(x, "%Y-%m-%d", tz = zone), format = "%Y-%m-%d")
+      expect_identical(appusage_date_from_datetime_validated(x, tz = zone), old)
+    }
+    ms <- midnight * 1000 - .001
+    old <- format(ms_to_datetime_validated(ms, zone), "%Y-%m-%d", tz = zone)
+    expect_identical(appusage_date_from_datetime_validated(ms = ms, tz = zone),
+      as.Date(old, format = "%Y-%m-%d"))
+  }
+})
+
 synthetic_line_interval <- function(start, end, source_date = as.Date("2024-01-01"),
                                     tz = "Asia/Shanghai") {
   start_ms <- local_ms(start, tz)

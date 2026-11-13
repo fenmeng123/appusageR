@@ -23,9 +23,22 @@ appusage_date_from_datetime_validated <- function(x = NULL, ms = NULL, tz) {
   if (!is.null(ms)) x <- ms_to_datetime_validated(ms, tz = tz)
   if (is.null(x)) return(as.Date(character()))
   if (inherits(x, "Date")) return(x)
-  if (inherits(x, "POSIXt")) {
-    return(as.Date(format(x, "%Y-%m-%d", tz = tz), format = "%Y-%m-%d"))
+  if (inherits(x, "POSIXct")) {
+    # Convert the instant to its local calendar once, retaining fractional
+    # endpoints around midnight. Avoid a format/strptime round trip per row.
+    local <- as.POSIXlt(x, tz = tz)
+    day <- as.Date(local)
+    year <- local$year + 1900
+    # The previous %Y-%m-%d reader accepted four-digit calendar years.
+    # Keep its platform-specific handling of dates outside that range.
+    outside <- which(is.finite(year) & (year < 0 | year > 9999))
+    if (length(outside)) day[outside] <- as.Date(format(x[outside], "%Y-%m-%d",
+      tz = tz), format = "%Y-%m-%d")
+    day[!is.finite(day)] <- as.Date(NA_character_)
+    return(day)
   }
+  if (inherits(x, "POSIXlt"))
+    return(as.Date(format(x, "%Y-%m-%d", tz = tz), format = "%Y-%m-%d"))
   if (is.numeric(x)) return(appusage_date_from_datetime_validated(ms = x, tz = tz))
   parsed_date <- safe_as_date(x)
   datetime_like <- is.na(parsed_date) & !is.na(x)
