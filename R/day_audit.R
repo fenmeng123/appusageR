@@ -234,7 +234,7 @@ audit_appusage_days <- function(data, metadata = NULL, window = NULL,
     x <- x[x$source_export_type %in% component, , drop = FALSE]
   if (component == "line" && "episode_source" %in% names(x))
     x <- appusage_line_episode_rows(x)
-  dates <- safe_as_date(x$source_table_date %||% x$table_date %||% x$date %||% character())
+  dates <- safe_as_date(x[["source_table_date"]] %||% x[["table_date"]] %||% x[["date"]] %||% character())
   if (length(dates) != nrow(x)) stop("A record date column is required.")
   days <- safe_as_date(blocks$date %||% character())
   window_source <- if (is.null(window)) "file_range_proxy" else "external"

@@ -4,6 +4,24 @@ audit_intervals <- function(start, end, package = rep("a", length(start)), durat
     activity_type = rep("foreground", length(start)), stringsAsFactors = FALSE)
 }
 
+test_that("tibble day and app exports use available date columns without warnings", {
+  day <- as.Date("2024-01-01")
+  x <- tibble::tibble(date = day, duration_ms = 1000, package_name = "org.example",
+    app_name = "Example", activity_type = "foreground")
+  for (component in c("day", "app")) {
+    frame <- x
+    for (column in c("date", "table_date", "source_table_date")) {
+      frame[[column]] <- day + match(column, c("date", "table_date", "source_table_date"))
+      check <- function(y) audit_appusage_days(y, component = component)
+      expect_no_warning(audit <- check(frame))
+      expect_identical(audit, check(as.data.frame(frame)))
+      expect_identical(audit$calendar$date, frame[[column]])
+    }
+  }
+  x$date <- NULL
+  expect_error(audit_appusage_days(x, component = "day"), "record date column")
+})
+
 geometry <- function(x, ...) audit_appusage_overlap(x, precision = "native_export_ms",
   include_collection_app = TRUE, tz = "UTC", ...)
 
