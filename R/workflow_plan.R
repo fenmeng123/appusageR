@@ -29,7 +29,8 @@ plan_appusage_workflow <- function(x = NULL, project_dir, config = NULL,
 
 appusage_prepare_workflow_plan <- function(x = NULL, project_dir, config = NULL,
                                            verify = "metadata", ids = NULL,
-                                           provenance = NULL, context = NULL) {
+                                           provenance = NULL, context = NULL,
+                                           delivery = NULL) {
   project_dir <- normalizePath(project_dir, winslash = "/", mustWork = FALSE)
   saved <- file.path(project_dir, "appusage_configuration.rds")
   if (is.null(config) && file.exists(saved)) config <- readRDS(saved)
@@ -60,7 +61,11 @@ appusage_prepare_workflow_plan <- function(x = NULL, project_dir, config = NULL,
   summary_rows <- vector("list", nrow(manifest))
   for (i in seq_len(nrow(manifest))) {
     row <- if (!is.na(index[[i]])) first[index[[i]], , drop = FALSE] else NULL
-    metadata <- if (!is.null(row)) appusage_runtime_json(row$metadata_file[[1]], context) else NULL
+    metadata <- if (!is.null(row)) {
+      path <- row$metadata_file[[1]]
+      if (is.null(delivery)) appusage_runtime_json(path, context) else
+        tryCatch(delivery$read_metadata(path), error = function(e) NULL)
+    }
     evidence <- appusage_parse_evidence(row, metadata, requested,
       if (verify == "content") manifest$source_file[[i]] else NULL,
       config$parse$input, if (verify == "metadata") "preview" else verify, context)
@@ -77,9 +82,11 @@ appusage_prepare_workflow_plan <- function(x = NULL, project_dir, config = NULL,
     cache <- NULL
     if (valid && row$status[[1]] == "success") {
       cache <- second_level_existing_cache_status(row$data_file[[1]],
-        file.path(project_dir, "proclevel-2"), row, 1L, first_metadata = metadata)
+        file.path(project_dir, "proclevel-2"), row, 1L, first_metadata = metadata,
+        read_metadata = if (is.null(delivery)) appusage_read_validation_json else delivery$read_metadata)
       cache <- appusage_second_cache_for_options(cache, options, provenance,
-        verify = verify != "metadata", requested = research_contract)
+        verify = verify != "metadata", requested = research_contract,
+        verified_first = if (!is.null(delivery)) row$data_file[[1]] else NULL)
       if (!is.null(cache$metadata)) summary_rows[[i]] <- qc_summary_row_from_metadata(
         cache$json_file, metadata = cache$metadata)
       if (!forced && identical(cache$status, "complete")) research <- "reuse"
@@ -103,13 +110,14 @@ appusage_prepare_workflow_plan <- function(x = NULL, project_dir, config = NULL,
         if (research == "blocked") "upstream_failed" else "dictionary_contract_changed_or_missing")
     if (identical(cache$status, "collision")) reasons[[2]] <- "identity_conflict"
     if (forced) reasons[c(parse, research, qc, category) == "run"] <- "forced"
-    changes <- list(appusage_contract_details(metadata$module_state$parse, requested),
-      appusage_contract_details(cache$metadata$module_state$research_data, research_contract),
-      appusage_contract_details(cache$metadata$module_state$qc, qc_contract),
-      if (config$category$enabled) appusage_contract_details(cache$metadata$module_state$category, category_contract) else character())
-    details <- vapply(seq_along(stages), function(j) if (length(changes[[j]]) &&
-      !reasons[[j]] %in% c("up_to_date", "disabled_by_config"))
-        appusage_text_paste(changes[[j]], collapse = "; ") else reasons[[j]], character(1))
+    recorded <- list(metadata$module_state$parse, cache$metadata$module_state$research_data,
+      cache$metadata$module_state$qc, cache$metadata$module_state$category)
+    contracts <- list(requested, research_contract, qc_contract, category_contract)
+    details <- reasons
+    for (j in which(!reasons %in% c("up_to_date", "disabled_by_config"))) {
+      changes <- appusage_contract_details(recorded[[j]], contracts[[j]])
+      if (length(changes)) details[[j]] <- appusage_text_paste(changes, collapse = "; ")
+    }
     tasks[[i]] <- data.frame(source_file = manifest$source_file[[i]],
       task_id = appusage_task_id(manifest$source_file[[i]], stages), scope = "source",
       source_record_key = if (is.null(row)) NA_character_ else appusage_get_col_value(row, "source_record_key", NA_character_),
@@ -125,7 +133,7 @@ appusage_prepare_workflow_plan <- function(x = NULL, project_dir, config = NULL,
   summary_rows <- Filter(Negate(is.null), summary_rows)
   second <- if (length(summary_rows)) do.call(bind_appusage_summary_rows, summary_rows) else tibble::tibble()
   project_tasks <- appusage_plan_project_tasks(project_dir, config, tasks, first, second,
-    verify, context)
+    verify, context, projection_valid = delivery$projection_valid)
   structure(list(project_dir = project_dir, manifest = manifest, config = config,
     tasks = tasks, project_tasks = project_tasks, verification = verify,
     overview = appusage_workflow_overview(first[index[!is.na(index)], , drop = FALSE], second,

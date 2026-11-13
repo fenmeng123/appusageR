@@ -113,3 +113,51 @@ test_that("same-size RDA damage invalidates indexed reuse and repairs only that 
   counts <- result$run_record$metrics
   expect_equal(counts$calls[counts$operation == "research_data"], 1)
 })
+
+test_that("delivery rechecks both cache pairs after missing files and same-size edits", {
+  f <- resume_io_fixture()
+  first <- f$result$first_level
+  paths <- c(first$data_file, first$metadata_file, appusage_summary_proc2_paths(f$result$second_level), f$json)
+  inspect <- function() validate_appusage_project(f$project, verify = "content")
+  expect_true(inspect()$complete)
+  for (path in paths) {
+    backup <- paste0(path, ".original")
+    expect_true(file.rename(path, backup))
+    missing <- suppressWarnings(inspect())
+    expect_false(missing$complete)
+    expect_true(file.copy(backup, path, copy.date = TRUE))
+
+    bytes <- readBin(path, "raw", n = file.size(path))
+    if (endsWith(path, ".rda")) {
+      # The gzip header timestamp can change without altering the decoded object.
+      expect_identical(bytes[1:3], as.raw(c(31, 139, 8)))
+      bytes[5] <- as.raw(bitwXor(as.integer(bytes[5]), 1L))
+    } else {
+      at <- grepRaw(charToRaw(first$source_record_key[[1]]), bytes, fixed = TRUE, all = TRUE)
+      expect_gt(length(at), 0L)
+      bytes[at] <- charToRaw("X")
+    }
+    writeBin(bytes, path)
+    Sys.setFileTime(path, file.info(backup)$mtime)
+    expect_equal(file.size(path), file.size(backup))
+    if (endsWith(path, ".rda"))
+      expect_identical(load_appusage_data_object(path), load_appusage_data_object(backup))
+    modified <- inspect()
+    expect_false(modified$complete)
+    expect_true(file.copy(backup, path, overwrite = TRUE, copy.date = TRUE))
+    unlink(backup)
+  }
+  expect_true(inspect()$complete)
+})
+
+test_that("a change during a delivery pass invalidates the read-only snapshot", {
+  root <- tempfile("validation-snapshot-")
+  dir.create(file.path(root, "proclevel-1"), recursive = TRUE)
+  path <- file.path(root, "proclevel-1", "example_proc-1.json")
+  writeLines('{"processing":{"first_level_status":"error"}}', path)
+  reader <- appusage_delivery_reader(root, appusage_runtime_context())
+  expect_identical(reader$read_metadata(path)$processing$first_level_status, "error")
+  expect_true(reader$stable())
+  cat(" ", file = path, append = TRUE)
+  expect_false(reader$stable())
+})

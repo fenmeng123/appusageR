@@ -37,8 +37,12 @@ validate_appusage_project <- function(project_dir, x = NULL, config = NULL,
       status = if (isTRUE(passed)) "passed" else "failed", detail = detail,
       source_file = source_file, stringsAsFactors = FALSE)
   }
-  plan <- tryCatch(appusage_prepare_workflow_plan(x, project_dir, config, verify,
-    context = context), error = identity)
+  delivery <- NULL
+  plan <- tryCatch({
+    if (verify == "content") delivery <- appusage_delivery_reader(project_dir, context)
+    appusage_prepare_workflow_plan(x, project_dir, config, verify,
+      context = context, delivery = delivery)
+  }, error = identity)
   if (inherits(plan, "error")) {
     add("workflow_evidence", FALSE, conditionMessage(plan))
     manifest <- if (is.data.frame(x)) x else data.frame(source_file = x)
@@ -70,14 +74,15 @@ validate_appusage_project <- function(project_dir, x = NULL, config = NULL,
     for (i in seq_len(nrow(first))) {
       row <- first[i, , drop = FALSE]
       path <- row$source_file[[1]]
-      meta <- appusage_read_validation_json(row$metadata_file[[1]])
+      meta <- if (is.null(delivery)) appusage_read_validation_json(row$metadata_file[[1]]) else
+        tryCatch(delivery$read_metadata(row$metadata_file[[1]]), error = function(e) NULL)
       identity <- appusage_metadata_source_identity(meta)
       add("source_metadata_identity", is_present_string(identity$source_record_key) &&
         identical(identity$source_record_key, appusage_get_col_value(row, "source_record_key", NA_character_)) &&
         identical(identity$source_fingerprint, appusage_get_col_value(row, "source_fingerprint", NA_character_)),
         "JSON source identity must agree with the first-level summary.", path)
       if (row$status[[1]] != "success") {
-        diagnosed <- appusage_read_json_safely(row$metadata_file[[1]])
+        diagnosed <- if (is.null(delivery)) appusage_read_json_safely(row$metadata_file[[1]]) else meta
         j <- match(appusage_get_col_value(row, "source_record_key", NA_character_), second[["source_record_key"]])
         add("upstream_failure", row$status[[1]] == "error" && length(diagnosed$errors) > 0L &&
           !is.na(j) && second$second_level_status[[j]] == "skipped",
@@ -95,7 +100,7 @@ validate_appusage_project <- function(project_dir, x = NULL, config = NULL,
         rda <- appusage_summary_proc2_paths(row2)[[1]]
         data <- load_appusage_data_object(rda)
         appusage_delivery_research_contract(data)
-        meta2 <- appusage_read_validation_json(second_level_metadata_path(rda))
+        meta2 <- delivery$read_metadata(second_level_metadata_path(rda))
         if (!identical(appusage_metadata_source_identity(meta2)$source_record_key, row$source_record_key[[1]]))
           stop("Second-level metadata source identity differs.")
         counts <- second_level_qc_counts(data)
@@ -117,6 +122,8 @@ validate_appusage_project <- function(project_dir, x = NULL, config = NULL,
         "All questionnaire rows, source links and exported cells verified.")
     }
   }
+  if (!is.null(delivery) && !delivery$stable())
+    add("cache_changed_during_validation", FALSE, "Project files changed during content verification.")
   checks <- if (length(checks)) tibble::as_tibble(do.call(rbind, checks)) else tibble::tibble()
   complete <- verify == "content" && nrow(checks) > 0L && all(checks$status == "passed")
   legacy <- any(tasks$reason_code %in% c("verification_insufficient", "component_verification_required"))
@@ -129,6 +136,65 @@ validate_appusage_project <- function(project_dir, x = NULL, config = NULL,
     elapsed_sec = proc.time()[["elapsed"]] - started,
     suggested_calls = appusage_inspection_commands(project_dir)),
     class = c("appusage_delivery", "list"))
+}
+
+# One read-only delivery pass shares owner evidence between the stage planner
+# and the payload checks. Execution and later calls obtain independent evidence.
+appusage_delivery_reader <- function(project_dir, context) {
+  state <- appusage_projection_state(project_dir)$summary
+  snapshot <- function() {
+    paths <- c(list.files(file.path(project_dir, c("proclevel-1", "proclevel-2")),
+      pattern = "[.](json|rda)$", full.names = TRUE), names(state$outputs),
+      names(state$dependencies), file.path(project_dir, "appusage_projection_state.rds"))
+    file.info(unique(paths), extra_cols = FALSE)[c("size", "mtime", "ctime")]
+  }
+  before <- snapshot()
+  valid <- appusage_projection_valid(state, project_dir)
+  # A valid projection already compared every proc-2 JSON to its recorded digest.
+  # An independently verified decoding index can supply the corresponding values.
+  owners <- list2env(if (valid) state$dependencies else list(), parent = emptyenv())
+  decoded <- new.env(parent = emptyenv())
+  read_metadata <- function(path) {
+    key <- normalizePath(path, winslash = "/", mustWork = FALSE)
+    if (exists(key, envir = decoded, inherits = FALSE)) {
+      appusage_count("validation_json_reuse")
+      return(decoded[[key]])
+    }
+    indexed <- context$validation_json[[key]]
+    digest <- owners[[key]]
+    indexed_ok <- inherits(indexed$value, "appusage_validation_metadata") &&
+      !is.null(digest) && identical(digest, indexed$signature$md5)
+    # A proc-1 entry outside the projection can still avoid decoding a verified
+    # successful owner. Failed-source diagnostics need the actual errors field.
+    if (!indexed_ok && endsWith(key, "_proc-1.json") &&
+        inherits(indexed$value, "appusage_validation_metadata") &&
+        identical(indexed$value$processing$first_level_status, "success")) {
+      indexed_ok <- identical(indexed$signature, appusage_artifact_signature(key)) &&
+        !is.null(indexed$signature)
+    }
+    if (indexed_ok) {
+      appusage_count("validation_json_reuse")
+      value <- indexed$value
+    } else {
+      metadata <- appusage_read_cache_json(key)
+      if (endsWith(key, "_proc-2.json")) {
+        value <- appusage_compact_validation_metadata(metadata, key)
+      } else {
+        fields <- c("identity", "source_record_key", "source_fingerprint",
+          "processing", "counts", "module_state")
+        value <- metadata[intersect(fields, names(metadata))]
+        value$source <- metadata$source[intersect(names(metadata$source),
+          c("source_fingerprint", "source_cache_key"))]
+        value$export <- metadata$export[intersect(names(metadata$export),
+          c("detected_type", "component_selection_rule"))]
+        if (length(metadata$errors)) value$errors <- TRUE
+      }
+    }
+    decoded[[key]] <- value
+    value
+  }
+  list(projection_valid = valid, read_metadata = read_metadata,
+    stable = function() identical(before, snapshot()))
 }
 
 appusage_delivery_config <- function(project_dir, config = NULL) {

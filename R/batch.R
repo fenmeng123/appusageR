@@ -3605,7 +3605,8 @@ second_level_expected_paths <- function(first_level_rda, output_dir = NULL) {
 
 second_level_existing_cache_status <- function(first_level_rda, output_dir = NULL,
                                                batch_summary = NULL,
-                                               index = NULL, first_metadata = NULL) {
+                                               index = NULL, first_metadata = NULL,
+                                               read_metadata = appusage_read_validation_json) {
   paths <- second_level_expected_paths(first_level_rda, output_dir)
   entities <- parse_appusage_filename(first_level_rda)
   expected_key <- if (!is.null(batch_summary) && !is.null(index)) {
@@ -3674,7 +3675,7 @@ second_level_existing_cache_status <- function(first_level_rda, output_dir = NUL
     return(result("incomplete", "rda_only_incomplete", "rda_only_partial_cache"))
   }
   metadata <- tryCatch(
-    appusage_read_validation_json(paths$json_file),
+    read_metadata(paths$json_file),
     error = function(e) e
   )
   if (inherits(metadata, "error")) {

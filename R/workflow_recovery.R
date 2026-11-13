@@ -41,7 +41,7 @@ appusage_align_first_level_seed <- function(existing, x, id_plan, input, type,
 }
 
 appusage_second_cache_for_options <- function(cache, options, provenance = NULL, verify = TRUE,
-                                              requested = NULL) {
+                                              requested = NULL, verified_first = NULL) {
   if (!identical(cache$status, "complete")) return(cache)
   requested <- requested %||% appusage_research_contract(options, provenance)
   upstream_ok <- (is.null(cache$metadata$module_state$upstream_parse) && is.null(cache$upstream_parse)) ||
@@ -53,7 +53,8 @@ appusage_second_cache_for_options <- function(cache, options, provenance = NULL,
     upstream_ok <- upstream_ok && appusage_components_complete(first) &&
       appusage_contract_equal(first$module_state$components, state$upstream_components) &&
       appusage_contract_equal(first$module_state$artifact, state$upstream_artifact) &&
-      appusage_artifact_valid(cache$first_rda, first$module_state$artifact, verify)
+      ((!is.null(verified_first) && identical(cache$first_rda, verified_first)) ||
+        appusage_artifact_valid(cache$first_rda, first$module_state$artifact, verify))
   } else {
     upstream_ok <- upstream_ok && !is.null(cache$metadata$module_state$upstream_artifact) &&
       appusage_artifact_valid(cache$first_rda, cache$metadata$module_state$upstream_artifact, verify)

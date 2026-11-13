@@ -85,7 +85,7 @@ appusage_projection_valid <- function(state, project_dir, verify = TRUE) {
 }
 
 appusage_plan_project_tasks <- function(project_dir, config, source_tasks, first,
-                                        second, verify, context = NULL) {
+                                        second, verify, context = NULL, projection_valid = NULL) {
   state <- appusage_projection_state(project_dir)
   recorded_request <- state$matching$request
   matching <- if (config$matching$enabled) "run" else "disabled"
@@ -113,8 +113,8 @@ appusage_plan_project_tasks <- function(project_dir, config, source_tasks, first
   if (upstream && matching == "run") reason <- "upstream_required"
   if (forced && matching == "run") reason <- "forced"
   unchanged <- !any(source_tasks$action == "run") && matching %in% c("reuse", "disabled") && !forced
-  summary <- if (unchanged && appusage_projection_valid(state$summary, project_dir,
-      verify = verify != "metadata")) "reuse" else "run"
+  summary <- if (unchanged && (projection_valid %||% appusage_projection_valid(
+      state$summary, project_dir, verify = verify != "metadata"))) "reuse" else "run"
   stages <- appusage_stage_registry()$stage[appusage_stage_registry()$scope == "project"]
   codes <- c(reason, if (summary == "reuse") "up_to_date" else if (forced) "forced" else
     if (!is.null(state$summary) && !identical(state$summary$implementation,
