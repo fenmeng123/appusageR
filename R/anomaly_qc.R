@@ -23,6 +23,20 @@
 #'   source-anomaly QC thresholds. This changes flags and eligibility only;
 #'   source rows are never removed or rewritten.
 #' @return A compact list of anomaly metrics suitable for JSON metadata.
+#' @details
+#' The result separates anomaly counts, severity, thresholds and
+#' `source_anomaly_qc`. Counts can overlap across rules and are not numbers of
+#' excluded participants. Supply the saved source metadata for export-span
+#' checks. [assess_appusage_qc()] combines these metrics with daily coverage;
+#' [audit_appusage_overlap()] describes interval overlap separately.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' record <- appusage_demo$records$cross_midnight
+#' metrics <- qc_appusage_anomalies(record$data, metadata = record$metadata)
+#' stopifnot(metrics$status == "success")
+#' metrics[c("n_episode_anomalies", "n_daily_anomalies", "has_critical_anomaly")]
+#' stopifnot(sum(record$data$daily$duration_ms) == 720000)
 #' @export
 qc_appusage_anomalies <- function(data, metadata = NULL,
                                   max_episode_ms = 24 * 60 * 60 * 1000,

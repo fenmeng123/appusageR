@@ -21,3 +21,20 @@ Module 1 convenience wrapper for raw APP Usage text input. It keeps only the
 normalized line vector plus lightweight source metadata, so the result can be
 passed directly to \code{run_first_level_appusage()}.
 }
+\details{
+The result contains \code{lines}, source basename/path, requested encoding,
+line count and read warnings. Passing it to the first-level wrapper keeps
+source identity while reusing the decoded text.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+text <- read_appusage_text(path)
+text[c("source_file", "n_lines", "requested_encoding")]
+first <- run_first_level_appusage(text, strict = TRUE)
+stopifnot(first$status == "success", nrow(first$data$line) == 14L)
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

@@ -9,6 +9,17 @@
 #' @param encoding Source encoding. Use `"auto"` to try common encodings.
 #'
 #' @return A UTF-8 character vector of lines.
+#' @details
+#' File reads return text with encoding diagnostics in attributes. Numeric
+#' values are parsed later by [run_first_level_appusage()].
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#' lines <- read_appusage_lines(path)
+#' head(lines, 3)
+#' stopifnot(is.character(lines), length(lines) > 0L)
 #' @export
 read_appusage_lines <- function(x, input = c("file", "text", "lines"),
                                 encoding = "auto") {
@@ -45,6 +56,17 @@ read_appusage_lines <- function(x, input = c("file", "text", "lines"),
 #' @param encoding Source encoding or `"auto"`.
 #'
 #' @return A UTF-8 character vector.
+#' @details
+#' Vector length and missing values are retained. A leading byte-order mark
+#' is removed after UTF-8 conversion. This text helper accepts decoded strings;
+#' [read_appusage_lines()] handles file bytes and encoding detection.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' names <- appusage_demo$records$line_seven_days$data$daily$app_name[1:2]
+#' normalized <- normalize_encoding(paste0(intToUtf8(0xfeff), names), encoding = "UTF-8")
+#' stopifnot(identical(normalized, names))
+#' normalized
 #' @export
 normalize_encoding <- function(x, encoding = "auto") {
   x <- as.character(x)
@@ -141,6 +163,18 @@ split_lines <- function(text) {
 #' @param x Values to parse.
 #'
 #' @return Numeric vector.
+#' @details
+#' Whitespace, commas and an initial `T:` are removed before numeric parsing.
+#' Empty, missing and nonnumeric values become `NA_real_`. Values remain in
+#' milliseconds; formatted duration labels are not interpreted as clock times.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' ms <- appusage_demo$records$line_seven_days$data$daily$duration_ms[1:2]
+#' text <- c(paste0("T:", ms), "", NA_character_)
+#' parsed <- parse_ms_value(text)
+#' stopifnot(identical(parsed[1:2], ms), all(is.na(parsed[3:4])))
+#' parsed
 #' @export
 parse_ms_value <- function(x) {
   x <- as.character(x)
@@ -159,6 +193,18 @@ parse_ms_value <- function(x) {
 #' @param x Values to parse.
 #'
 #' @return Numeric milliseconds.
+#' @details
+#' The first unsigned numeric token, including scientific notation, is
+#' returned in milliseconds. Missing or unrecognized labels return `NA_real_`.
+#' This extraction helper does not add split-screen use to foreground totals.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' ms <- appusage_demo$records$line_seven_days$data$daily$duration_ms[[1L]]
+#' # Illustrate the annotation syntax using a duration from the teaching record.
+#' parsed <- parse_split_screen_ms(c(paste(ms, "(split-screen)"), "", NA_character_))
+#' stopifnot(parsed[[1L]] == ms, all(is.na(parsed[2:3])))
+#' parsed
 #' @export
 parse_split_screen_ms <- function(x) {
   x <- as.character(x)
@@ -171,6 +217,18 @@ parse_split_screen_ms <- function(x) {
 #' @param x Date values.
 #'
 #' @return Date vector. Missing or invalid dates are returned as `NA`.
+#' @details
+#' Extracts a year-month-day date from character input, accepting hyphens
+#' or slashes. It returns one `Date` per input and retains invalid/missing
+#' positions as `NA`. Timestamp-to-date conversion should first use the
+#' intended timezone.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' dates <- appusage_demo$records$line_seven_days$data$daily$date
+#' parsed <- safe_as_date(gsub("-", "/", as.character(dates), fixed = TRUE))
+#' stopifnot(identical(parsed, dates), is.na(safe_as_date("missing")))
+#' head(parsed)
 #' @export
 safe_as_date <- function(x) {
   x <- as.character(x)
@@ -185,6 +243,19 @@ safe_as_date <- function(x) {
 #' @param date_col Date column name.
 #'
 #' @return `data` with a `weekday` column.
+#' @details
+#' Returns a copy of the input with English weekday names in `weekday`.
+#' Existing weekday values are replaced. Row order and all other columns
+#' are retained; missing dates give missing weekday labels.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' daily <- appusage_demo$records$line_seven_days$data$daily
+#' labelled <- add_weekday(daily)
+#' stopifnot(nrow(labelled) == nrow(daily),
+#'           identical(labelled$duration_ms, daily$duration_ms),
+#'           length(unique(labelled$weekday)) == 7L)
+#' unique(labelled[, c("date", "weekday")])
 #' @export
 add_weekday <- function(data, date_col = "date") {
   data$weekday <- weekday_name(data[[date_col]])
@@ -197,6 +268,18 @@ add_weekday <- function(data, date_col = "date") {
 #'
 #' @return Lowercase trimmed package names. The artificial `ALL` package is
 #'   standardized to `"ALL"`.
+#' @details
+#' Whitespace is trimmed and package identifiers are lowercased. Blank and
+#' textual missing markers become `NA_character_`. The total-row sentinel is
+#' normalized to uppercase `ALL`; it is not an application identity.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' packages <- appusage_demo$records$line_seven_days$data$daily$package_name[1:2]
+#' normalized <- standardize_package_name(c(paste0(" ", toupper(packages), " "), "all", ""))
+#' stopifnot(identical(normalized[1:2], packages), normalized[[3L]] == "ALL",
+#'           is.na(normalized[[4L]]))
+#' normalized
 #' @export
 standardize_package_name <- function(x) {
   x <- as.character(x)
@@ -214,6 +297,17 @@ standardize_package_name <- function(x) {
 #' @param x Timestamp values.
 #'
 #' @return Numeric milliseconds since the Unix epoch.
+#' @details
+#' Returns numeric Unix-epoch milliseconds. Divide by 1000 when constructing
+#' a `POSIXct` value with an explicit epoch origin and timezone; the helper
+#' itself leaves the authoritative millisecond values numeric.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' ms <- appusage_demo$records$line_seven_days$data$episode$start_ts_ms[1:2]
+#' parsed <- parse_t_timestamp(paste0("T:", ms))
+#' stopifnot(identical(parsed, ms))
+#' as.POSIXct(parsed / 1000, origin = "1970-01-01", tz = appusage_demo$info$timezone)
 #' @export
 parse_t_timestamp <- function(x) {
   parse_ms_value(x)
@@ -225,6 +319,18 @@ parse_t_timestamp <- function(x) {
 #' @param tz Time zone.
 #'
 #' @return POSIXct vector.
+#' @details
+#' Input strings represent wall-clock time in `tz`. Both a decimal second
+#' separator and the export's trailing `:mmm` milliseconds are supported.
+#' The return value is `POSIXct`; invalid or missing values become `NA`.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' times <- safe_as_datetime(appusage_demo$survey$submitted_at,
+#'                           tz = appusage_demo$info$timezone)
+#' stopifnot(inherits(times, "POSIXct"), length(times) == 17L,
+#'           all(format(times, "%H:%M:%S", tz = appusage_demo$info$timezone) == "11:00:00"))
+#' head(times)
 #' @export
 safe_as_datetime <- function(x, tz = "Asia/Shanghai") {
   tz <- appusage_resolve_timezone(tz)
@@ -240,6 +346,18 @@ safe_as_datetime <- function(x, tz = "Asia/Shanghai") {
 #'
 #' @return Character labels. Unknown values are preserved as
 #'   `EVENT_TYPE_<number>`.
+#' @details
+#' Returns labels parallel to the numeric Android UsageEvents codes.
+#' Code 1 denotes activity resumption/foreground transition and code 2 denotes
+#' pause/background transition. Labels describe events; duration reconstruction
+#' is handled separately by [reconstruct_meta_episodes()].
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' events <- appusage_demo$records$meta_seven_days$data$event
+#' labels <- label_event_type(events$event_type)
+#' stopifnot(length(labels) == 28L, !anyNA(labels))
+#' unique(data.frame(event_type = events$event_type, label = labels))
 #' @export
 label_event_type <- function(x) {
   x_chr <- as.character(x)

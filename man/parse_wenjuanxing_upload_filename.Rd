@@ -20,3 +20,20 @@ Wenjuanxing may prepend upload files with text similar to
 this parser extracts the integer immediately before \verb{_div style=tex_} and
 then attempts to parse the remaining native APP Usage filename.
 }
+\details{
+Both the platform-style prefix and the numeric \code{sequence_AppUsage_...}
+form are supported. The result combines upload sequence, uploaded basename,
+native timestamp/type and separate filename parse diagnostics. This helper
+reads a name only; \code{\link[=preflight_self_report_matching]{preflight_self_report_matching()}} checks survey columns.
+}
+\examples{
+data(appusage_demo)
+name <- appusage_demo$sources$source_basename[[1L]]
+meta <- parse_wenjuanxing_upload_filename(name)
+stopifnot(meta$wenjuanxing_sequence_id == 101L,
+          meta$filename_parse_status == "success")
+meta[c("wenjuanxing_sequence_id", "uploaded_file_name")]
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

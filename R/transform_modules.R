@@ -7,6 +7,20 @@
 #' @param tz Effective IANA timezone.
 #' @param max_episode_ms,max_daily_app_ms Existing row anomaly thresholds.
 #' @return An `appusage_standardized` list suitable for [build_appusage_daily()].
+#' @details
+#' The return separates `event`, native `episode`, `native_daily` and
+#' `meta_summary_daily`, with capability flags. Use [build_appusage_daily()]
+#' for daily aggregation or [run_second_level_appusage()] for the composed
+#' second-level result.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#' first <- run_first_level_appusage(path, strict = TRUE)
+#' native <- standardize_appusage(first$data)
+#' native$capabilities
+#' stopifnot(nrow(native$episode) == 14L, nrow(native$event) == 0L)
 #' @export
 standardize_appusage <- function(data, export_type = NULL, tz = "Asia/Shanghai",
                                  max_episode_ms = 86400000,
@@ -45,6 +59,20 @@ standardize_appusage <- function(data, export_type = NULL, tz = "Asia/Shanghai",
 #' @param tz Effective timezone; defaults to the standardized input's timezone.
 #' @return An `appusage_daily_result` list with `daily`, component tables and
 #'   explicit aggregation diagnostics. No files are written.
+#' @details
+#' Use the selected `daily` table for analysis. Component tables and
+#' aggregation diagnostics explain its origin; summing the selected table
+#' and its component tables would count the same use more than once.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#' first <- run_first_level_appusage(path, strict = TRUE)
+#' native <- standardize_appusage(first$data)
+#' daily <- build_appusage_daily(native)
+#' stopifnot(sum(daily$daily$duration_ms) == 12600000)
+#' head(daily$daily[, c("date", "app_name", "duration_ms")])
 #' @export
 build_appusage_daily <- function(data, meta_episodes = NULL,
                                  meta_daily_source = c("summary", "episodes", "both"),
@@ -111,6 +139,24 @@ appusage_frame_timezone <- function(data, tz) {
 #' @param config QC settings, or a complete [appusage_config()] object.
 #' @param include_collection_app Whether coverage includes the collection app.
 #' @return A complete QC result list, including counts, anomalies and eligibility.
+#' @details
+#' Returns execution `qc_status`, row `counts`, `anomaly_qc` diagnostics
+#' and `qc` with coverage and `analysis_eligible_*` flags. Pass retained source
+#' metadata separately: a wrapper supplies its data, but does not automatically
+#' supply its metadata argument. QC evaluates and reports; it does not delete
+#' input rows or write files. Missing source metadata limits source-context checks.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' data(appusage_demo)
+#' record <- appusage_demo$records$mixed_line_meta
+#' qc <- assess_appusage_qc(record, metadata = record$metadata,
+#'                          participant_id = "105")
+#' qc$qc[c("pass_qc", "analysis_eligible_event", "analysis_eligible_daily")]
+#' stopifnot(qc$qc_status == "success", qc$qc$pass_qc)
+#' short <- appusage_demo$records$recorded_blank_absent_days
+#' short_qc <- assess_appusage_qc(short, metadata = short$metadata,
+#'                                participant_id = "106")
+#' stopifnot(!short_qc$qc$pass_qc)
 #' @export
 assess_appusage_qc <- function(data, metadata = NULL, participant_id = "record-000001",
                                config = list(), include_collection_app = NULL) {

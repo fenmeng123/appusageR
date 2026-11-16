@@ -22,6 +22,23 @@
 #'   row looks like a generated daily total.
 #'
 #' @return One row per participant with QC metrics and flags.
+#' @details
+#' Accepts standardized proc-2 daily tables as well as parsed daily tables.
+#' Supply the participant column explicitly when a per-source table has none.
+#' `pass_qc` combines the minimum positive-duration days and weekday coverage;
+#' this coverage result differs from grain-specific scientific eligibility.
+#' Use [assess_appusage_qc()] for complete source/anomaly QC.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' data(appusage_demo)
+#' daily <- appusage_demo$records$line_seven_days$data$daily
+#' daily$participant_id <- "101"
+#' qc <- qc_appusage_day(daily)
+#' qc[, c("participant_id", "n_nonempty_days", "pass_qc")]
+#' stopifnot(qc$n_nonempty_days == 7L, qc$pass_qc)
+#' short <- appusage_demo$records$recorded_blank_absent_days$data$daily
+#' short$participant_id <- "106"
+#' stopifnot(!qc_appusage_day(short)$pass_qc)
 #' @export
 qc_appusage_day <- function(data, participant_col = "participant_id",
                             date_col = "date",
@@ -88,6 +105,24 @@ qc_appusage_day <- function(data, participant_col = "participant_id",
 #' @param qc_table Output from `qc_appusage_day()`.
 #'
 #' @return Filtered `data`.
+#' @details
+#' Uses the first column of `qc_table` as the participant key and retains
+#' rows whose key has `pass_qc = TRUE`. Generate this table with
+#' [qc_appusage_day()] so its key and logical pass field follow that contract.
+#' This is an explicit filtering step; computing QC alone retains source rows.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' complete <- appusage_demo$records$line_seven_days$data$daily
+#' complete$participant_id <- "101"
+#' short <- appusage_demo$records$recorded_blank_absent_days$data$daily
+#' short$participant_id <- "106"
+#' daily <- rbind(complete, short)
+#' qc <- qc_appusage_day(daily)
+#' kept <- filter_valid_appusage(daily, qc)
+#' stopifnot(nrow(daily) == 16L, nrow(kept) == 14L,
+#'           all(kept$participant_id == "101"))
+#' qc[, c("participant_id", "pass_qc")]
 #' @export
 filter_valid_appusage <- function(data, qc_table) {
   if (!"pass_qc" %in% names(qc_table)) {

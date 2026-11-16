@@ -9,6 +9,19 @@
 #' @param encoding Source encoding or `"auto"`.
 #'
 #' @return A lightweight `appusage_text` list.
+#' @details
+#' The result contains `lines`, source basename/path, requested encoding,
+#' line count and read warnings. Passing it to the first-level wrapper keeps
+#' source identity while reusing the decoded text.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#' text <- read_appusage_text(path)
+#' text[c("source_file", "n_lines", "requested_encoding")]
+#' first <- run_first_level_appusage(text, strict = TRUE)
+#' stopifnot(first$status == "success", nrow(first$data$line) == 14L)
 #' @export
 read_appusage_text <- function(x, input = c("file", "text", "lines"),
                                encoding = "auto") {
@@ -67,6 +80,23 @@ read_appusage_text <- function(x, input = c("file", "text", "lines"),
 #'   Defaults to `strict` for compatibility with the original single-source API.
 #'
 #' @return An `appusage_first_level` list with parsed data and metadata.
+#' @details
+#' Inspect `status` before using `data`. Successful results contain faithful
+#' format-specific tables, `metadata` and optional cache paths. `strict = FALSE`
+#' returns a failed-source result; `parser_strict = TRUE` retains the parser
+#' quality gate. File names identify the source; content determines its format.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#' first <- run_first_level_appusage(path, strict = TRUE)
+#' first$data$line[, c("app_name", "duration_ms")]
+#' stopifnot(sum(first$data$line$duration_ms) == 12600000)
+#' # Explicitly select a malformed synthetic input and retain its diagnosis.
+#' bad <- file.path(folder, appusage_demo$sources$source_relpath[15L])
+#' failed <- run_first_level_appusage(bad, strict = FALSE, parser_strict = TRUE)
+#' stopifnot(failed$status == "error")
 #' @export
 run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
                                      type = c("auto", "line", "meta", "day", "app", "legacy"),
@@ -133,6 +163,22 @@ run_first_level_appusage <- function(x, input = c("file", "text", "lines"),
 #'   interval boundaries.
 #'
 #' @return An `appusage_second_level` list.
+#' @details
+#' The successful result has `data` (typed event/episode/daily tables),
+#' `data_file` and `metadata_file`; paths are missing for in-memory execution.
+#' Unavailable grains are typed empty tables. In mixed auto mode, omitted meta
+#' options use native line episodes/daily totals and meta events. Explicit meta
+#' reconstruction requires selecting the meta component at first level.
+#' Durations and timestamps ending in `_ms` are numeric milliseconds.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[5L])
+#' first <- run_first_level_appusage(path, strict = TRUE)
+#' second <- run_second_level_appusage(first)
+#' vapply(second$data, nrow, integer(1))
+#' stopifnot(identical(second$data, appusage_demo$records$mixed_line_meta$data))
 #' @export
 run_second_level_appusage <- function(x, export_type = NULL,
                                       output_dir = NULL,
@@ -228,6 +274,17 @@ run_second_level_appusage <- function(x, export_type = NULL,
 #'   duration disagreement checks.
 #'
 #' @return A QC tibble or project summary tibble.
+#' @details
+#' The in-memory branch returns coverage QC from [qc_appusage_day()]. If a
+#' participant column is absent, it uses a single record owner. For complete
+#' in-memory source/anomaly checks use [assess_appusage_qc()]. The project
+#' branch updates existing proc-2 metadata using [write_qc_metadata_batch()].
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' data(appusage_demo)
+#' qc <- run_qc_appusage(appusage_demo$records$line_seven_days)
+#' stopifnot(qc$pass_qc, qc$n_nonempty_days == 7L)
+#' qc[, c("participant_id", "n_nonempty_days", "pass_qc")]
 #' @export
 run_qc_appusage <- function(x = NULL, project_dir = NULL,
                             participant_col = "participant_id",
@@ -299,6 +356,26 @@ run_qc_appusage <- function(x = NULL, project_dir = NULL,
 #' @param x Data frame or second-level data list after [add_app_categories()].
 #'
 #' @return A tibble of de-duplicated uncoded app rows.
+#' @details
+#' Identities are deduplicated across available grains. Duration and `n_rows`
+#' come from one canonical usage table, rather than summing event, episode and
+#' daily representations. `ALL` rows are excluded. Missing or unusable duration
+#' is `NA`, not zero. For population denominators and manual-review priorities
+#' use [profile_uncoded_apps()] with an explicit primary-source/person manifest.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' # Explicit teaching labels for fictional applications, separate from the dictionary.
+#' dictionary <- data.frame(
+#'   App_UUID = "org.example.reader", App_Name = "Demo Reader",
+#'   Level_1_Category = "Education and Business",
+#'   Level_2_Category = "Books and Reference")
+#' classified <- add_app_categories(appusage_demo$records$line_seven_days$data,
+#'                                   dictionary)
+#' uncoded <- extract_uncoded_apps(classified)
+#' stopifnot(nrow(uncoded) == 1L, uncoded$package_name == "org.example.music",
+#'           uncoded$total_duration_ms == 8400000)
+#' uncoded
 #' @export
 extract_uncoded_apps <- function(x) {
   frames <- if (is.data.frame(x)) list(x) else if (is.list(x))
@@ -369,6 +446,34 @@ extract_uncoded_apps <- function(x) {
 #' @param project_dir Exact output project directory for reproducible resumes.
 #' @param plan Optional [plan_appusage_workflow()] result; revalidated at run time.
 #' @param resume Whether compatible existing source stages may be reused.
+#' @details
+#' Results include `first_level`, `second_level`, `qc`, `project_dir`,
+#' `plan` and `run_record`. Resume using the same exact output project directory
+#' so its manifest/configuration and paired artifacts can be checked.
+#' `overwrite` is not needed for an ordinary unchanged resume. A missing or
+#' invalid pair schedules the affected stage; upstream compatible work is reused.
+#' The example creates and repairs only a temporary teaching cache.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   output <- tempfile("appusage-example-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   result <- run_appusage_workflow(path, project_dir = output,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+#'   plan <- plan_appusage_workflow(project_dir = output, verify = "content")
+#'   stopifnot(all(plan$tasks$action %in% c("reuse", "disabled")))
+#'   resumed <- run_appusage_workflow(project_dir = output)
+#'   stopifnot(all(attr(resumed$first_level, "execution_actions") == "reuse"))
+#'   # Remove only the generated temporary proc-2 JSON to demonstrate repair.
+#'   unlink(result$second_level$second_level_metadata_file[[1L]])
+#'   repair <- plan_appusage_workflow(project_dir = output, verify = "content")
+#'   stopifnot(repair$tasks$action[repair$tasks$stage == "research_data"] == "run")
+#'   restored <- run_appusage_workflow(project_dir = output)
+#'   stopifnot(file.exists(restored$second_level$second_level_metadata_file[[1L]]))
+#' })
 #' @export
 run_appusage_workflow <- function(x = NULL, output_dir = NULL, ids = NULL,
                                   type = "auto", input = "file",

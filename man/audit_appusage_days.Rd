@@ -52,7 +52,15 @@ its source table date. Empty and absent tables require an explicit zero
 assumption. Event-only and cumulative meta tables have no daily duration.
 }
 \examples{
-d <- data.frame(date = as.Date("2024-10-08"), duration_ms = 180000,
-                activity_type = "foreground", package_name = "org.example.reader")
-audit_appusage_days(d)$calendar
+data(appusage_demo)
+record <- appusage_demo$records$recorded_blank_absent_days
+observed <- audit_appusage_days(record, metadata = record$metadata)
+zero_window <- audit_appusage_days(record, metadata = record$metadata,
+                                 strategy = "zero_window")
+observed$calendar
+# Compare denominators without modifying stored daily durations or QC.
+stopifnot(observed$denominator_days == 2L, observed$mean_ms == 150000,
+          zero_window$denominator_days == 4L, zero_window$mean_ms == 75000)
+observed[c("denominator_days", "mean_ms")]
+zero_window[c("denominator_days", "mean_ms")]
 }

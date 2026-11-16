@@ -48,23 +48,27 @@
 #'   separate from the batch's stop-on-error `strict` policy.
 #'
 #' @return Invisibly returns a tibble summary. It does not return parsed data.
+#' @details
+#' Each source has one summary row. `status`, `error_class` and
+#' `error_message` describe execution; `data_file` and `metadata_file` locate
+#' the proc-1 pair. Load the single `data` object into a separate environment.
+#' This function performs parsing; [write_second_level_batch()] supplies
+#' standardized scientific tables and QC is a separate stage.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
 #' @examples
-#' # Read a synthetic line export containing two Reader episodes.
-#' demo_dir <- system.file("extdata", "ProjectName-Demo_ProjectID-001",
-#'                         package = "appusageR", mustWork = TRUE)
-#' logs <- list.files(demo_dir, pattern = "[.]txt$", full.names = TRUE)
-#' output <- tempfile("batch-")
-#' batch <- read_appusage_batch(
-#'   logs, output_dir = output, project_name = "Demo", project_id = "001",
-#'   parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE
-#' )
-#' batch[, c("participant_id", "detected_type", "status", "n_rows")]
-#'
-#' # The summary points to the saved records for each file.
-#' parsed <- new.env(parent = emptyenv())
-#' load(batch$data_file[[1L]], envir = parsed)
-#' parsed$data$line[, c("app_name", "duration_ms")]
-#' unlink(output, recursive = TRUE)
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   output <- tempfile("appusage-example-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   first <- read_appusage_batch(path, project_dir = output,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+#'   first[, c("participant_id", "status", "n_rows")]
+#'   saved <- new.env(parent = emptyenv())
+#'   load(first$data_file[[1L]], envir = saved)
+#'   stopifnot(nrow(saved$data$line) == 14L)
+#' })
 #' @export
 read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
                                 participant_id_col = NULL,
@@ -230,6 +234,32 @@ read_appusage_batch <- function(x, ids = NULL, self_report = NULL,
 #' @param ... Additional arguments passed to `write_second_level_appusage()`.
 #'
 #' @return Invisibly returns a tibble summary for second-level writing.
+#' @details
+#' Successful rows identify `second_level_data_file` and the paired
+#' `second_level_metadata_file`. Failed first-level sources retain downstream
+#' status rows. `resume = TRUE` verifies completed pairs before reuse;
+#' `overwrite = FALSE` protects existing artifacts. For coordinated stage
+#' recovery use [run_appusage_workflow()].
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   output <- tempfile("appusage-example-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   first <- read_appusage_batch(path, project_dir = output,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+#'   second <- write_second_level_batch(first, parallel = FALSE,
+#'     n_cores = 1L, progress = FALSE)
+#'   saved <- new.env(parent = emptyenv())
+#'   load(second$second_level_data_file[[1L]], envir = saved)
+#'   stopifnot(sum(saved$data$daily$duration_ms) == 12600000)
+#'   resumed <- write_second_level_batch(first, resume = TRUE,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE)
+#'   stopifnot(identical(second$second_level_data_file,
+#'                       resumed$second_level_data_file))
+#' })
 #' @export
 write_second_level_batch <- function(batch_summary, output_dir = NULL,
                                      overwrite = FALSE, resume = FALSE,
@@ -370,6 +400,32 @@ refresh_second_level_summary_from_metadata <- function(batch_summary,
 #' @param ... Additional arguments passed to [write_second_level_batch()].
 #'
 #' @return Invisibly returns an `appusage_second_level_subset_rerun` list.
+#' @details
+#' The returned list contains `selected_first_level`, the rebuilt
+#' `second_level` rows, the full merged `summary` and `n_selected`. Its defaults
+#' intentionally rebuild selected records (`overwrite = TRUE`, `resume = FALSE`).
+#' Use [plan_appusage_project_rebuild()] to inspect scope first. The example
+#' selects only the meta source from a two-source temporary teaching cache.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   output <- tempfile("appusage-help-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1:2])
+#'   first <- read_appusage_batch(path, project_dir = output,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+#'   second <- write_second_level_batch(first,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE)
+#'
+#'   rerun <- rerun_second_level_project_subset(output,
+#'     filter = list(detected_type = "meta"), parallel = FALSE, n_cores = 1L,
+#'     progress = FALSE)
+#'   stopifnot(rerun$n_selected == 1L, nrow(rerun$summary) == 2L,
+#'             all(rerun$selected_first_level$detected_type == "meta"))
+#'   rerun$summary[, c("participant_id", "second_level_status")]
+#' })
 #' @export
 rerun_second_level_project_subset <- function(project_dir,
                                               filter = list(detected_type = "meta"),

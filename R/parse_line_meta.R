@@ -7,6 +7,18 @@
 #' @inheritParams parse_day
 #'
 #' @return A tibble with canonical episode-level columns.
+#' @details
+#' Interval rows retain source order and raw display fields. The numeric
+#' `start_ts_ms`, `end_ts_ms` and `duration_ms` fields are authoritative;
+#' [make_second_level_appusage()] derives daily totals, including midnight splits.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#' parsed <- parse_line(path, strict = TRUE)
+#' stopifnot(nrow(parsed) == 14L, sum(parsed$duration_ms) == 12600000)
+#' head(parsed[, c("date", "package_name", "duration_ms")])
 #' @export
 parse_line <- function(x, input = c("file", "text", "lines"),
                        participant_id = NULL, source_file = NULL,
@@ -85,6 +97,19 @@ appusage_parse_line_context <- function(x, input = c("file", "text", "lines"),
 #' @inheritParams parse_day
 #'
 #' @return A list with `summary` and `events` tibbles.
+#' @details
+#' `summary` contains Table 1 usage totals and `events` contains Table 2
+#' ordered events, including event codes and configuration fields. Parsing
+#' keeps these separate; use [reconstruct_meta_episodes()] for event pairing.
+#' For a mixed export use [read_appusage_text()] to retain both components.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[2L])
+#' parsed <- parse_meta(path, strict = TRUE)
+#' stopifnot(nrow(parsed$summary) == 14L, nrow(parsed$events) == 28L)
+#' head(parsed$events[, c("event_ts_ms", "event_type", "package_name")])
 #' @export
 parse_meta <- function(x, input = c("file", "text", "lines"),
                        participant_id = NULL, source_file = NULL,

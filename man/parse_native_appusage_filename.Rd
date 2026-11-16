@@ -19,3 +19,21 @@ Native APP Usage exports are expected to use names such as
 \code{AppUsage_line_2023_12_15_19_36_5.txt}. Filename metadata is used for
 provenance only; content detection remains the parser source of truth.
 }
+\details{
+The list includes filename type, export timestamp and parse status/warning.
+Timestamps use the supplied timezone. The helper accepts a native postfix
+within a renamed upload; the upload sequence is parsed separately by
+\code{\link[=parse_wenjuanxing_upload_filename]{parse_wenjuanxing_upload_filename()}}.
+}
+\examples{
+data(appusage_demo)
+name <- appusage_demo$sources$source_basename[[5L]]
+meta <- parse_native_appusage_filename(name, tz = appusage_demo$info$timezone)
+stopifnot(meta$native_filename_parse_status == "success",
+          meta$native_export_type_from_filename == "meta")
+# This filename says meta; its synthetic content contains line and meta blocks.
+meta[c("native_export_type_from_filename", "native_export_created_at")]
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

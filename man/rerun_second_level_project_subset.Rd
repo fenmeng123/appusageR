@@ -53,3 +53,33 @@ then refreshes the project-level second-level summary from current \code{proc-2}
 metadata while preserving non-rebuilt rows such as upstream first-level
 failures and self-report matching annotations.
 }
+\details{
+The returned list contains \code{selected_first_level}, the rebuilt
+\code{second_level} rows, the full merged \code{summary} and \code{n_selected}. Its defaults
+intentionally rebuild selected records (\code{overwrite = TRUE}, \code{resume = FALSE}).
+Use \code{\link[=plan_appusage_project_rebuild]{plan_appusage_project_rebuild()}} to inspect scope first. The example
+selects only the meta source from a two-source temporary teaching cache.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  output <- tempfile("appusage-help-")
+  on.exit(unlink(output, recursive = TRUE))
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1:2])
+  first <- read_appusage_batch(path, project_dir = output,
+    parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+  second <- write_second_level_batch(first,
+    parallel = FALSE, n_cores = 1L, progress = FALSE)
+
+  rerun <- rerun_second_level_project_subset(output,
+    filter = list(detected_type = "meta"), parallel = FALSE, n_cores = 1L,
+    progress = FALSE)
+  stopifnot(rerun$n_selected == 1L, nrow(rerun$summary) == 2L,
+            all(rerun$selected_first_level$detected_type == "meta"))
+  rerun$summary[, c("participant_id", "second_level_status")]
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

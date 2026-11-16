@@ -9,7 +9,7 @@ test_that("local date conversion agrees with the formatted calendar at boundarie
   for (zone in zones) {
     midnight <- as.numeric(as.POSIXct(paste(days, "00:00:00"), tz = zone))
     seconds <- c(as.numeric(outer(midnight, c(-1, -1e-6, 0, 1e-6, 1, 5400), "+")),
-      -1e11, 3e11, NA_real_, NaN, -Inf, Inf)
+      -1e11, 3e11)
     names(seconds) <- seq_along(seconds)
     ct <- .POSIXct(seconds, tz = "UTC")
     for (x in list(ct, ct[FALSE], as.POSIXlt(ct, tz = "UTC"))) {
@@ -20,6 +20,35 @@ test_that("local date conversion agrees with the formatted calendar at boundarie
     old <- format(ms_to_datetime_validated(ms, zone), "%Y-%m-%d", tz = zone)
     expect_identical(appusage_date_from_datetime_validated(ms = ms, tz = zone),
       as.Date(old, format = "%Y-%m-%d"))
+  }
+})
+
+test_that("nonfinite date inputs consistently become typed missing dates", {
+  zones <- c("UTC", "Asia/Shanghai", "America/New_York", "Australia/Lord_Howe", "Pacific/Apia")
+  invalid <- c(NA_real_, NaN, -Inf, Inf)
+  for (zone in zones) {
+    instant <- as.POSIXct("2024-01-15 12:00:00", tz = zone)
+    ct <- .POSIXct(c(as.numeric(instant), invalid), tz = zone)
+    expected <- as.Date(c("2024-01-15", rep(NA_character_, 4L)))
+    inputs <- list(ct, as.POSIXlt(ct, tz = zone),
+      structure(c(as.numeric(expected[1L]), invalid), class = "Date"),
+      as.numeric(ct) * 1000, c("2024-01-15", "NA", "NaN", "-Inf", "Inf"))
+    for (x in inputs) {
+      original <- x
+      expect_identical(appusage_date_from_datetime(x, tz = zone), expected)
+      expect_identical(x, original)
+      expect_identical(appusage_date_from_datetime(x[FALSE], tz = zone), as.Date(character()))
+    }
+    expect_identical(appusage_date_from_datetime(ms = as.numeric(ct) * 1000, tz = zone), expected)
+    named <- inputs[[3L]]
+    names(named) <- letters[seq_along(named)]
+    names(expected) <- names(named)
+    expect_identical(appusage_date_from_datetime(named, tz = zone), expected)
+  }
+  expect_identical(appusage_date_from_datetime(), as.Date(character()))
+  for (values in list(c(1L, 2L), c(1L, NA_integer_), integer())) {
+    dates <- structure(values, class = "Date", source = "synthetic")
+    expect_identical(appusage_date_from_datetime(dates), dates)
   }
 })
 

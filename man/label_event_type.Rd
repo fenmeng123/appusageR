@@ -16,3 +16,19 @@ Character labels. Unknown values are preserved as
 \description{
 Label Android UsageEvents event types
 }
+\details{
+Returns labels parallel to the numeric Android UsageEvents codes.
+Code 1 denotes activity resumption/foreground transition and code 2 denotes
+pause/background transition. Labels describe events; duration reconstruction
+is handled separately by \code{\link[=reconstruct_meta_episodes]{reconstruct_meta_episodes()}}.
+}
+\examples{
+data(appusage_demo)
+events <- appusage_demo$records$meta_seven_days$data$event
+labels <- label_event_type(events$event_type)
+stopifnot(length(labels) == 28L, !anyNA(labels))
+unique(data.frame(event_type = events$event_type, label = labels))
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

@@ -24,3 +24,20 @@ Finds project folders named like
 Excel files by \code{ProjectID}. This is a structure-only scan and does not read
 \code{.txt} contents.
 }
+\details{
+Reports project names/IDs, raw-folder paths, file counts and candidate
+Excel paths. Keep ProjectID values as character to preserve leading zeroes.
+When multiple workbooks are candidates, resolve the choice explicitly before
+running \code{\link[=run_appusage_project_workflow]{run_appusage_project_workflow()}}.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+projects <- scan_appusage_project_root(folder)
+stopifnot(nrow(projects) == 1L, projects$project_id == "009",
+          projects$n_txt_files == 15L, projects$excel_count == 1L)
+projects[, c("project_name", "project_id", "n_txt_files", "excel_count")]
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

@@ -42,3 +42,21 @@ Checks that requested self-report columns exist and summarizes missing and
 duplicate sequence/upload values. This does not perform final APP
 Usage/self-report matching.
 }
+\details{
+Returns column-presence, missing-value and duplicate-value counts for the
+original questionnaire rows. A successful preflight establishes the table
+interface; \code{\link[=match_appusage_self_report]{match_appusage_self_report()}} subsequently resolves uploads.
+The example uses the same 17 rows as the packaged Survey workbook.
+}
+\examples{
+data(appusage_demo)
+check <- preflight_self_report_matching(appusage_demo$survey,
+  sequence_col = "sequence_id", upload_col = "upload",
+  participant_id_col = "survey_id")
+stopifnot(check$status == "success", check$n_rows == 17L,
+          check$n_missing_upload == 1L)
+check
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

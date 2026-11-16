@@ -34,6 +34,21 @@
 #'   for every timestamp-derived date and daily boundary.
 #'
 #' @return A list with `event`, `episode`, and `daily` tibbles.
+#' @details
+#' The returned list is the scientific payload, rather than the status wrapper
+#' returned by [run_second_level_appusage()]. Unavailable grains have typed empty
+#' tables. On mixed input, omitted meta options preserve line intervals/daily
+#' totals and meta events without counting reconstructed meta use a second time.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[5L])
+#' first <- run_first_level_appusage(path, strict = TRUE)
+#' grains <- make_second_level_appusage(first$data)
+#' stopifnot(nrow(grains$event) == 28L, nrow(grains$episode) == 14L,
+#'           sum(grains$daily$duration_ms) == 12600000)
+#' vapply(grains, nrow, integer(1))
 #' @export
 make_second_level_appusage <- function(data, export_type = NULL,
                                        include_collection_app = TRUE,
@@ -169,6 +184,28 @@ make_second_level_appusage <- function(data, export_type = NULL,
 #'   workflow. Standalone calls compute one provenance record for this write.
 #'
 #' @return Invisibly returns the written second-level RDA path.
+#' @details
+#' This single-file writer publishes one paired RDA/JSON cache. Load the RDA
+#' into a new environment to inspect its sole `data` object. Inline QC is stored
+#' in the proc-2 metadata; it does not create a third scientific cache level.
+#' For project-wide summaries and resume decisions use [write_second_level_batch()].
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   output <- tempfile("appusage-help-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   first <- read_appusage_batch(path, project_dir = output,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+#'
+#'   rda <- write_second_level_appusage(first$data_file[[1L]])
+#'   saved <- new.env(parent = emptyenv())
+#'   stopifnot(identical(load(rda, envir = saved), "data"),
+#'             sum(saved$data$daily$duration_ms) == 12600000)
+#'   names(saved$data)
+#' })
 #' @export
 write_second_level_appusage <- function(first_level_rda, output_dir = NULL,
                                         overwrite = FALSE,
@@ -1679,8 +1716,24 @@ second_level_events <- function(x, tz = "Asia/Shanghai") {
 #' @param ... Reserved for future reconstruction options.
 #'
 #' @return A second-level episode tibble compatible with line-derived episodes.
-#'   The tibble carries a `meta_reconstruction_diagnostics` attribute for JSON
-#'   metadata writers.
+#'   Pairing and merging diagnostics are stored for JSON metadata writers in
+#'   the attribute:
+#'   \preformatted{meta_reconstruction_diagnostics}
+#' @details
+#' Pairs are formed within the requested package or package/class key and
+#' ordered by timestamp with original row order as a tie-break. The returned
+#' episodes retain reconstruction status and unmatched-event evidence.
+#' The diagnostics summarize pairing and merging;
+#' [build_appusage_daily()] subsequently splits intervals at local midnight.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[2L])
+#' parsed <- parse_meta(path, strict = TRUE)
+#' episodes <- reconstruct_meta_episodes(parsed$events)
+#' stopifnot(nrow(episodes) == 14L, sum(episodes$duration_ms) == 8400000)
+#' attr(episodes, "meta_reconstruction_diagnostics")
 #' @export
 reconstruct_meta_episodes <- function(events, pairing = c("package", "package_class"),
                                       start_event_types = 1,

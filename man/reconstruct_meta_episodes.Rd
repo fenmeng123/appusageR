@@ -42,12 +42,32 @@ merging adjacent reconstructed meta episodes.}
 }
 \value{
 A second-level episode tibble compatible with line-derived episodes.
-The tibble carries a \code{meta_reconstruction_diagnostics} attribute for JSON
-metadata writers.
+Pairing and merging diagnostics are stored for JSON metadata writers in
+the attribute:
+\preformatted{meta_reconstruction_diagnostics}
 }
 \description{
 Explicitly converts APP Usage meta Table 2 event logs into episode-level
 records. This function is not called by \code{\link[=parse_meta]{parse_meta()}}. It is called by
 default in second-level meta workflows, with unmatched-event diagnostics
 stored in metadata.
+}
+\details{
+Pairs are formed within the requested package or package/class key and
+ordered by timestamp with original row order as a tie-break. The returned
+episodes retain reconstruction status and unmatched-event evidence.
+The diagnostics summarize pairing and merging;
+\code{\link[=build_appusage_daily]{build_appusage_daily()}} subsequently splits intervals at local midnight.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[2L])
+parsed <- parse_meta(path, strict = TRUE)
+episodes <- reconstruct_meta_episodes(parsed$events)
+stopifnot(nrow(episodes) == 14L, sum(episodes$duration_ms) == 8400000)
+attr(episodes, "meta_reconstruction_diagnostics")
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
 }

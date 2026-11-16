@@ -37,3 +37,19 @@ Parses episode-level APP Usage records. Episode duration is computed from
 \code{end_ts_ms - start_ts_ms}; formatted duration labels are preserved as display
 text only.
 }
+\details{
+Interval rows retain source order and raw display fields. The numeric
+\code{start_ts_ms}, \code{end_ts_ms} and \code{duration_ms} fields are authoritative;
+\code{\link[=make_second_level_appusage]{make_second_level_appusage()}} derives daily totals, including midnight splits.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+parsed <- parse_line(path, strict = TRUE)
+stopifnot(nrow(parsed) == 14L, sum(parsed$duration_ms) == 12600000)
+head(parsed[, c("date", "package_name", "duration_ms")])
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

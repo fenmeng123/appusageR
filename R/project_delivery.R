@@ -13,6 +13,25 @@
 #'   scope, checks, source/project tasks, overview, and suggested recovery calls.
 #'   Diagnosed upstream failures remain in its source denominator. Complete
 #'   delivery can include these failures; metadata previews remain unverified.
+#' @details
+#' Use `verify = "content"` for a delivery check; the default metadata
+#' preview reports its more limited scope. `complete` refers to the delivery
+#' contract, including preserved input failures, rather than every source
+#' passing QC. `checks` records the individual validation results.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   output <- tempfile("appusage-example-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   result <- run_appusage_workflow(path, project_dir = output,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+#'   report <- validate_appusage_project(output, verify = "content")
+#'   stopifnot(report$complete)
+#'   summary(report)
+#' })
 #' @export
 validate_appusage_project <- function(project_dir, x = NULL, config = NULL,
                                       verify = c("metadata", "content")) {

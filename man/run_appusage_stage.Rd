@@ -26,3 +26,29 @@ are refreshed through the same service used by the full workflow.
 Uses the same scientific and storage functions as the workflow. Existing
 caches supply upstream data; raw files are never read by downstream stages.
 }
+\details{
+A parse call can initialize an output project. Later stages consume its
+saved caches and configuration. Select a stage explicitly to limit execution
+scope and inspect the returned \code{run_record} for actual actions. The example
+runs parse, research-data construction and routine QC in sequence.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  output <- tempfile("appusage-help-")
+  on.exit(unlink(output, recursive = TRUE))
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  config <- appusage_config(execution = list(parallel = FALSE, workers = 1L,
+                                           progress = FALSE))
+  first <- run_appusage_stage("parse", output, config = config, x = path)
+  second <- run_appusage_stage("research_data", output)
+  qc <- run_appusage_stage("qc", output)
+  stopifnot(nrow(first) == 1L, nrow(second) == 1L)
+  qc[, c("participant_id", "qc_status", "pass_qc")]
+  attr(qc, "run_record")
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

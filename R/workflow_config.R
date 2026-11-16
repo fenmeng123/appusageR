@@ -10,9 +10,22 @@
 #' defaults use legacy single-component selection. Create a new configuration
 #' to opt into automatic mixed parsing.
 #' @param parse,time,reconstruction,daily,qc,category,matching,execution Named
-#'   lists overriding settings in the respective module. See the workflow
-#'   vignette for the supported fields.
+#'   lists overriding settings in the respective module. See
+#'   [appusage_configuration] for every supported field, default and unit.
 #' @return An `appusage_config` named list.
+#' @details
+#' For the synthetic examples, leave scientific fields omitted and set
+#' execution controls explicitly. Pass a configuration through `config`; do not
+#' also pass legacy execution/scientific arguments to [run_appusage_workflow()].
+#' A saved configuration is separate from the plan and the actual run record.
+#' @seealso [appusage_configuration], [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' data(appusage_demo)
+#' config <- appusage_config(
+#'   time = list(tz = appusage_demo$info$timezone),
+#'   execution = list(parallel = FALSE, workers = 1L, progress = FALSE))
+#' config$qc[c("min_nonempty_days", "require_all_weekdays")]
+#' stopifnot(config$parse$type == "auto", config$execution$resume)
 #' @export
 appusage_config <- function(parse = list(), time = list(), reconstruction = list(),
                             daily = list(), qc = list(), category = list(),

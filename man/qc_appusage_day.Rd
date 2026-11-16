@@ -52,3 +52,24 @@ the input data. By default, daily totals are calculated from app rows. If an
 APP Usage \code{ALL} row appears to be an app-generated daily total, it is excluded
 from the calculation set to avoid double counting.
 }
+\details{
+Accepts standardized proc-2 daily tables as well as parsed daily tables.
+Supply the participant column explicitly when a per-source table has none.
+\code{pass_qc} combines the minimum positive-duration days and weekday coverage;
+this coverage result differs from grain-specific scientific eligibility.
+Use \code{\link[=assess_appusage_qc]{assess_appusage_qc()}} for complete source/anomaly QC.
+}
+\examples{
+data(appusage_demo)
+daily <- appusage_demo$records$line_seven_days$data$daily
+daily$participant_id <- "101"
+qc <- qc_appusage_day(daily)
+qc[, c("participant_id", "n_nonempty_days", "pass_qc")]
+stopifnot(qc$n_nonempty_days == 7L, qc$pass_qc)
+short <- appusage_demo$records$recorded_blank_absent_days$data$daily
+short$participant_id <- "106"
+stopifnot(!qc_appusage_day(short)$pass_qc)
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

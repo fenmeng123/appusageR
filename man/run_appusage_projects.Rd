@@ -55,3 +55,34 @@ Projects execute in table order; file processing inside a project uses the
 requested workers. A content check precedes every reuse decision. Checkpoints
 contain compact project status and paths, never scientific payloads.
 }
+\details{
+Use exact output directories in the registry; \code{batch_dir} must be separate
+from every raw/output directory. Registry rows are serial and \code{workers}
+controls file processing within each project. Inspect \code{projects$status},
+\code{action} and delivery results before resuming. The bounded example selects
+one successful source from ProjectID \code{"009"}; additional registry rows use
+the same independently resumable contract.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  work <- tempfile("appusage-collection-")
+  on.exit(unlink(work, recursive = TRUE))
+  project <- scan_appusage_project_root(folder)
+  manifest <- build_appusage_project_manifest(project$project_dir[[1L]])
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  manifest <- manifest[manifest$source_file == normalizePath(path, winslash = "/"), ]
+  projects <- data.frame(project_id = "009", project_name = "Demo",
+    project_dir = project$project_dir[[1L]], output_dir = file.path(work, "output"))
+  projects$manifest <- list(manifest)
+  config <- appusage_config(execution = list(progress = FALSE))
+  result <- run_appusage_projects(projects, batch_dir = file.path(work, "batch"),
+    config = config, workers = 1L, continue_on_error = FALSE)
+  stopifnot(nrow(result$projects) == 1L, result$projects$status == "completed")
+  result$projects[, c("project_id", "status", "action", "n_sources")]
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

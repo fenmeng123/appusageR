@@ -19,3 +19,21 @@ Lists direct files in a project folder and records file metadata and
 filename-derived APP Usage/Wenjuanxing fields without parsing \code{.txt}
 contents.
 }
+\details{
+The manifest records paths, sizes, filename identity and whether each
+direct file is a TXT candidate. Zero-byte and malformed teaching inputs
+remain represented. A manifest inventories sources; parser and QC outcomes
+are recorded by subsequent workflow stages.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+projects <- scan_appusage_project_root(folder)
+manifest <- build_appusage_project_manifest(projects$project_dir[[1L]],
+  self_report_file = projects$excel_path[[1L]])
+stopifnot(nrow(manifest) == 15L, all(manifest$project_id == "009"))
+head(manifest[, c("source_file", "is_txt")])
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

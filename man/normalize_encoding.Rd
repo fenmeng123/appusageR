@@ -18,3 +18,18 @@ A UTF-8 character vector.
 Converts character data to UTF-8. File input should usually be handled by
 \code{read_appusage_lines()}.
 }
+\details{
+Vector length and missing values are retained. A leading byte-order mark
+is removed after UTF-8 conversion. This text helper accepts decoded strings;
+\code{\link[=read_appusage_lines]{read_appusage_lines()}} handles file bytes and encoding detection.
+}
+\examples{
+data(appusage_demo)
+names <- appusage_demo$records$line_seven_days$data$daily$app_name[1:2]
+normalized <- normalize_encoding(paste0(intToUtf8(0xfeff), names), encoding = "UTF-8")
+stopifnot(identical(normalized, names))
+normalized
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

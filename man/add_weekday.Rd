@@ -17,3 +17,20 @@ add_weekday(data, date_col = "date")
 \description{
 Add weekday labels
 }
+\details{
+Returns a copy of the input with English weekday names in \code{weekday}.
+Existing weekday values are replaced. Row order and all other columns
+are retained; missing dates give missing weekday labels.
+}
+\examples{
+data(appusage_demo)
+daily <- appusage_demo$records$line_seven_days$data$daily
+labelled <- add_weekday(daily)
+stopifnot(nrow(labelled) == nrow(daily),
+          identical(labelled$duration_ms, daily$duration_ms),
+          length(unique(labelled$weekday)) == 7L)
+unique(labelled[, c("date", "weekday")])
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

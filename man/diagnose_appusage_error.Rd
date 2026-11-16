@@ -26,3 +26,24 @@ A structured \code{appusage_error_context} list.
 \description{
 Diagnose an APP Usage processing error
 }
+\details{
+Retains condition class/message, source filename/size, processing stage
+and available code context in a named list. Passing the original condition
+preserves more diagnostic information than passing a message string.
+Formatting the result is separate from writing a report to disk.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+source <- appusage_demo$sources$scenario == "zero_byte_upload"
+path <- file.path(folder, appusage_demo$sources$source_relpath[source])
+# Capture the deliberate zero-byte teaching failure as a condition.
+failure <- tryCatch(run_first_level_appusage(path, strict = TRUE), error = identity)
+stopifnot(inherits(failure, "appusage_zero_byte_source"))
+context <- diagnose_appusage_error(failure, source_file = path, stage = "first_level")
+stopifnot(inherits(context, "appusage_error_context"), context$file_size == 0)
+context[c("stage", "source_basename", "condition_class", "condition_message")]
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

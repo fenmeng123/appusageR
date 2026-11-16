@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="245" viewBox="0 0 900 245" role="img" aria-labelledby="title desc">
+<title id="title">APP Usage data flow and cache ownership</title>
+<desc id="desc">Synthetic text enters parsed proc-1, then research proc-2 with event, episode and daily tables. QC and categories belong to proc-2 JSON. Survey matching leads to project summaries and delivery checks.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#42647a"/></marker></defs>
+<rect width="900" height="245" fill="#ffffff"/>
+<g fill="#edf5fa" stroke="#42647a" stroke-width="1.4">
+<rect x="10" y="40" width="135" height="70" rx="8"/>
+<rect x="180" y="40" width="170" height="70" rx="8"/>
+<rect x="385" y="20" width="225" height="110" rx="8"/>
+<rect x="650" y="40" width="235" height="70" rx="8"/>
+<rect x="385" y="170" width="225" height="55" rx="8"/>
+<rect x="650" y="170" width="235" height="55" rx="8"/>
+</g>
+<g stroke="#42647a" stroke-width="2" fill="none" marker-end="url(#arrow)">
+<path d="M145,75 H178"/><path d="M350,75 H383"/><path d="M610,75 H648"/>
+<path d="M497,130 V168"/><path d="M610,197 H648"/><path d="M768,110 V168"/>
+</g>
+<g font-family="Arial,sans-serif" font-size="17" fill="#17364a" text-anchor="middle">
+<text x="78" y="69">Text exports</text><text x="78" y="94" font-size="14">Source diagnostics</text>
+<text x="265" y="69">proc-1 RDA / JSON</text><text x="265" y="94" font-size="14">Faithful parsing</text>
+<text x="497" y="49">proc-2 RDA / JSON</text><text x="497" y="76" font-size="14">event / episode / daily</text><text x="497" y="104" font-size="14">QC + categories in JSON</text>
+<text x="768" y="69">Survey relationships</text><text x="768" y="94" font-size="14">All questionnaire rows retained</text>
+<text x="497" y="203">Project summaries</text><text x="768" y="203">Content delivery check</text>
+</g></svg>

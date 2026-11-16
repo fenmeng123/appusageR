@@ -43,3 +43,28 @@ loads RDA payloads, and never launches preprocessing. Selected second-level
 rows can subsequently be passed to \code{\link[=rerun_second_level_project_subset]{rerun_second_level_project_subset()}} by
 \code{source_record_key}.
 }
+\details{
+Use this source-oriented preview to select records needing investigation
+or a targeted second-level rebuild. The default leaves the preview on screen;
+\code{write_plan = TRUE} saves it explicitly. For content validation of paired
+artifacts use \code{\link[=validate_appusage_project]{validate_appusage_project()}} with \code{verify = "content"}.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  output <- tempfile("appusage-help-")
+  on.exit(unlink(output, recursive = TRUE))
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  result <- run_appusage_workflow(path, project_dir = output,
+    parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+  preview <- plan_appusage_project_rebuild(output, write_plan = FALSE)
+  stopifnot(nrow(preview) == 1L,
+            !file.exists(file.path(output, "rebuild_plan_preview.csv")))
+  names(preview)
+  head(preview)
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

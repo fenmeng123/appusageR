@@ -17,7 +17,8 @@ build_appusage_filename(
 
 \item{export_type}{APP Usage export type.}
 
-\item{proc}{Processing step, using \code{1}, \code{2}, or \code{3}.}
+\item{proc}{Processing step. Current scientific caches use \code{1} or \code{2};
+legacy numeric processing labels can also be formatted.}
 
 \item{extension}{File extension without leading dot.}
 
@@ -31,4 +32,21 @@ A file name.
 \description{
 Uses key-value entities joined by underscores, with each key and value joined
 by a hyphen.
+}
+\details{
+This helper constructs a basename; it neither creates a file nor allocates
+a source identity. Current scientific caches use \code{proc = 1} and \code{proc = 2}.
+Supply a source key when different uploads share a participant and export type;
+batch workflows derive this key from source provenance.
+}
+\examples{
+data(appusage_demo)
+id <- appusage_demo$sources$sequence_id[[1L]]
+name <- build_appusage_filename(id, "line", proc = 2, source_key = "demo101")
+name
+stopifnot(parse_appusage_filename(name)$sub == id,
+          parse_appusage_filename(name)$proc == "2")
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
 }

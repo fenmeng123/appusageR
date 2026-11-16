@@ -22,3 +22,22 @@ A single character value: \code{"line"}, \code{"meta"}, \code{"day"}, \code{"app
 Detects whether APP Usage export content is \code{line}, \code{meta}, \code{day}, \code{app}, or
 \code{unknown}.
 }
+\details{
+This is a content-based selector, not an inventory of every component.
+For the mixed teaching source it returns \code{"line"}; \code{\link[=read_appusage_text]{read_appusage_text()}}
+with \code{type = "auto"} preserves the accompanying meta Table 2 events.
+An unrecognized or unusable source returns \code{"unknown"}. Filename export
+labels alone do not establish the content type.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[1:5])
+detect_appusage_type(path[[5L]])
+types <- vapply(path, detect_appusage_type, character(1))
+stopifnot(identical(unname(types), c("line", "meta", "day", "app", "line")))
+types
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

@@ -5,13 +5,27 @@
 #'
 #' @param participant_id Participant identifier.
 #' @param export_type APP Usage export type.
-#' @param proc Processing step, using `1`, `2`, or `3`.
+#' @param proc Processing step. Current scientific caches use `1` or `2`;
+#'   legacy numeric processing labels can also be formatted.
 #' @param source_key Optional deterministic source cache key. New caches use
 #'   this additive entity to distinguish multiple records with the same
 #'   participant and export type; legacy names omit it.
 #' @param extension File extension without leading dot.
 #'
 #' @return A file name.
+#' @details
+#' This helper constructs a basename; it neither creates a file nor allocates
+#' a source identity. Current scientific caches use `proc = 1` and `proc = 2`.
+#' Supply a source key when different uploads share a participant and export type;
+#' batch workflows derive this key from source provenance.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' id <- appusage_demo$sources$sequence_id[[1L]]
+#' name <- build_appusage_filename(id, "line", proc = 2, source_key = "demo101")
+#' name
+#' stopifnot(parse_appusage_filename(name)$sub == id,
+#'           parse_appusage_filename(name)$proc == "2")
 #' @export
 build_appusage_filename <- function(participant_id, export_type,
                                     proc = 1,
@@ -37,6 +51,19 @@ build_appusage_filename <- function(participant_id, export_type,
 #' @param filename File name or path.
 #'
 #' @return A list of key-value entities plus extension.
+#' @details
+#' The result uses filename entity names such as `sub`, `type`, `src` and
+#' `proc`, plus `extension`. It parses cache naming syntax; it does not validate
+#' the associated file or its scientific content. Native TXT names are handled
+#' by [parse_native_appusage_filename()].
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' name <- build_appusage_filename(appusage_demo$sources$sequence_id[[1L]],
+#'                                "line", proc = 2, source_key = "demo101")
+#' entities <- parse_appusage_filename(name)
+#' stopifnot(entities$sub == "101", entities$src == "demo101", entities$proc == "2")
+#' entities
 #' @export
 parse_appusage_filename <- function(filename) {
   base <- basename(filename)
@@ -72,6 +99,20 @@ parse_appusage_filename <- function(filename) {
 #' @param tz Time zone used when converting the export timestamp.
 #'
 #' @return A list with parsed filename metadata.
+#' @details
+#' The list includes filename type, export timestamp and parse status/warning.
+#' Timestamps use the supplied timezone. The helper accepts a native postfix
+#' within a renamed upload; the upload sequence is parsed separately by
+#' [parse_wenjuanxing_upload_filename()].
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' name <- appusage_demo$sources$source_basename[[5L]]
+#' meta <- parse_native_appusage_filename(name, tz = appusage_demo$info$timezone)
+#' stopifnot(meta$native_filename_parse_status == "success",
+#'           meta$native_export_type_from_filename == "meta")
+#' # This filename says meta; its synthetic content contains line and meta blocks.
+#' meta[c("native_export_type_from_filename", "native_export_created_at")]
 #' @export
 parse_native_appusage_filename <- function(filename, tz = "Asia/Shanghai") {
   base <- basename(filename)
@@ -156,6 +197,19 @@ appusage_native_filename_postfix <- function(filename) {
 #' @param tz Time zone used when converting any native export timestamp.
 #'
 #' @return A list with Wenjuanxing and native APP Usage filename metadata.
+#' @details
+#' Both the platform-style prefix and the numeric `sequence_AppUsage_...`
+#' form are supported. The result combines upload sequence, uploaded basename,
+#' native timestamp/type and separate filename parse diagnostics. This helper
+#' reads a name only; [preflight_self_report_matching()] checks survey columns.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' name <- appusage_demo$sources$source_basename[[1L]]
+#' meta <- parse_wenjuanxing_upload_filename(name)
+#' stopifnot(meta$wenjuanxing_sequence_id == 101L,
+#'           meta$filename_parse_status == "success")
+#' meta[c("wenjuanxing_sequence_id", "uploaded_file_name")]
 #' @export
 parse_wenjuanxing_upload_filename <- function(filename, tz = "Asia/Shanghai") {
   base <- basename(filename)
@@ -294,19 +348,34 @@ parse_wenjuanxing_upload_filename <- function(filename, tz = "Asia/Shanghai") {
 #'
 #' Resolves one participant ID per input record from an explicit `ids` vector,
 #' names on `x`, Wenjuanxing sequence IDs in filenames, or fallback record IDs.
-#' The self-report matching interface is reserved here but not implemented until
-#' a real example table is available.
+#' Survey linkage uses [match_appusage_self_report()] after source processing.
 #'
 #' @param x Character vector of inputs.
 #' @param ids Optional participant IDs parallel to `x`.
 #' @param input Input mode, usually `"file"`.
-#' @param self_report Optional self-report data frame. Reserved for a future
-#'   Wenjuanxing matching implementation.
+#' @param self_report Reserved argument; keep `NULL`. Use
+#'   [match_appusage_self_report()] for questionnaire linkage.
 #' @param participant_id_col Reserved study participant ID column name.
 #' @param wenjuanxing_sequence_col Reserved Wenjuanxing sequence column name.
 #'
 #' @return A tibble with `participant_id`, `participant_id_source`, and filename
 #'   metadata columns.
+#' @details
+#' Resolution priority is explicit `ids`, names on `x`, filename sequence,
+#' then generated record IDs. The result retains the ID's origin separately
+#' from native filename metadata. Survey linkage is performed by
+#' [match_appusage_self_report()]; `self_report` here must remain `NULL`.
+#' Use character IDs when leading zeroes are meaningful.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[1:2])
+#' resolved <- resolve_participant_ids(path)
+#' stopifnot(identical(resolved$participant_id, c("101", "102")))
+#' explicit <- resolve_participant_ids(path, ids = c("00101", "00102"))
+#' stopifnot(identical(explicit$participant_id, c("00101", "00102")))
+#' resolved[, c("participant_id", "participant_id_source")]
 #' @export
 resolve_participant_ids <- function(x, ids = NULL, input = "file",
                                     self_report = NULL,

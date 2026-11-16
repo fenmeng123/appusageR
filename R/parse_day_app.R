@@ -13,6 +13,19 @@
 #' @param strict If `TRUE`, malformed input raises an error.
 #'
 #' @return A tibble with canonical day-level columns.
+#' @details
+#' The returned daily table retains `ALL` total rows with `is_all_apps = TRUE`.
+#' Select app rows when adding durations. Source counts and display text remain
+#' available alongside the numeric millisecond duration.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[3L])
+#' parsed <- parse_day(path, strict = TRUE)
+#' stopifnot(nrow(parsed) == 21L, sum(parsed$is_all_apps) == 7L,
+#'           sum(parsed$duration_ms[!parsed$is_all_apps]) == 6300000)
+#' head(parsed[, c("date", "package_name", "duration_ms", "is_all_apps")])
 #' @export
 parse_day <- function(x, input = c("file", "text", "lines"),
                       participant_id = NULL, source_file = NULL,
@@ -79,6 +92,18 @@ appusage_parse_day_context <- function(x, input = c("file", "text", "lines"),
 #' @inheritParams parse_day
 #'
 #' @return A tibble with canonical day-level columns.
+#' @details
+#' Each row describes one recorded app on one date. App exports may cover
+#' only a subset of installed apps; their durations describe that recorded
+#' coverage. The seven-day teaching export contains one app.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[4L])
+#' parsed <- parse_app(path, strict = TRUE)
+#' stopifnot(nrow(parsed) == 7L, sum(parsed$duration_ms) == 6300000)
+#' unique(parsed$package_name)
 #' @export
 parse_app <- function(x, input = c("file", "text", "lines"),
                       participant_id = NULL, source_file = NULL,

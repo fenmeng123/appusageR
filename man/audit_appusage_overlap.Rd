@@ -66,8 +66,11 @@ Stored duration is apportioned by span when a record crosses midnight.
 Endpoint-derived values describe the geometry of the supplied representation.
 }
 \examples{
-x <- data.frame(start_ts_ms = c(0, 2), end_ts_ms = c(10, 8),
-                duration_ms = c(10, 6), package_name = c("a", "b"),
-                activity_type = "foreground")
-audit_appusage_overlap(x, precision = "native_export_ms", tz = "UTC")$totals
+data(appusage_demo)
+record <- appusage_demo$records$overlapping_intervals
+audit <- audit_appusage_overlap(record, metadata = record$metadata)
+stopifnot(audit$totals[["stored_duration_sum"]] == 44000,
+          audit$totals[["endpoint_union"]] == 14000,
+          audit$totals[["multiplicity_excess"]] == 30000)
+audit$totals
 }

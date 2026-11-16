@@ -96,3 +96,29 @@ Reads a first-level APP Usage RDA file containing exactly one object named
 \code{proc-2} RDA and JSON files. The RDA still contains exactly one object named
 \code{data}; the JSON stores second-level transformation metadata.
 }
+\details{
+This single-file writer publishes one paired RDA/JSON cache. Load the RDA
+into a new environment to inspect its sole \code{data} object. Inline QC is stored
+in the proc-2 metadata; it does not create a third scientific cache level.
+For project-wide summaries and resume decisions use \code{\link[=write_second_level_batch]{write_second_level_batch()}}.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  output <- tempfile("appusage-help-")
+  on.exit(unlink(output, recursive = TRUE))
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  first <- read_appusage_batch(path, project_dir = output,
+    parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+
+  rda <- write_second_level_appusage(first$data_file[[1L]])
+  saved <- new.env(parent = emptyenv())
+  stopifnot(identical(load(rda, envir = saved), "data"),
+            sum(saved$data$daily$duration_ms) == 12600000)
+  names(saved$data)
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

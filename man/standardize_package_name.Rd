@@ -16,3 +16,19 @@ standardized to \code{"ALL"}.
 \description{
 Standardize Android package names
 }
+\details{
+Whitespace is trimmed and package identifiers are lowercased. Blank and
+textual missing markers become \code{NA_character_}. The total-row sentinel is
+normalized to uppercase \code{ALL}; it is not an application identity.
+}
+\examples{
+data(appusage_demo)
+packages <- appusage_demo$records$line_seven_days$data$daily$package_name[1:2]
+normalized <- standardize_package_name(c(paste0(" ", toupper(packages), " "), "all", ""))
+stopifnot(identical(normalized[1:2], packages), normalized[[3L]] == "ALL",
+          is.na(normalized[[4L]]))
+normalized
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

@@ -22,7 +22,12 @@ appusage_date_from_datetime <- function(x = NULL, ms = NULL,
 appusage_date_from_datetime_validated <- function(x = NULL, ms = NULL, tz) {
   if (!is.null(ms)) x <- ms_to_datetime_validated(ms, tz = tz)
   if (is.null(x)) return(as.Date(character()))
-  if (inherits(x, "Date")) return(x)
+  if (inherits(x, "Date")) {
+    # Existing NA values already satisfy the contract, including integer Dates.
+    invalid <- is.nan(x) | is.infinite(x)
+    if (any(invalid)) x[invalid] <- NA
+    return(x)
+  }
   if (inherits(x, "POSIXct")) {
     # Convert the instant to its local calendar once, retaining fractional
     # endpoints around midnight. Avoid a format/strptime round trip per row.
@@ -37,8 +42,13 @@ appusage_date_from_datetime_validated <- function(x = NULL, ms = NULL, tz) {
     day[!is.finite(day)] <- as.Date(NA_character_)
     return(day)
   }
-  if (inherits(x, "POSIXlt"))
-    return(as.Date(format(x, "%Y-%m-%d", tz = tz), format = "%Y-%m-%d"))
+  if (inherits(x, "POSIXlt")) {
+    day <- as.Date(format(x, "%Y-%m-%d", tz = tz), format = "%Y-%m-%d")
+    # R versions differ in whether formatted Inf survives as a Date.
+    # A nonfinite value has no calendar date, for either POSIX input class.
+    day[!is.finite(day)] <- as.Date(NA_character_)
+    return(day)
+  }
   if (is.numeric(x)) return(appusage_date_from_datetime_validated(ms = x, tz = tz))
   parsed_date <- safe_as_date(x)
   datetime_like <- is.na(parsed_date) & !is.na(x)

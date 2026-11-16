@@ -21,6 +21,27 @@
 #'
 #' @return A tibble with one row per manifest source, deterministic action and
 #'   reason fields, cache-pair state and provenance comparisons.
+#' @details
+#' Use this source-oriented preview to select records needing investigation
+#' or a targeted second-level rebuild. The default leaves the preview on screen;
+#' `write_plan = TRUE` saves it explicitly. For content validation of paired
+#' artifacts use [validate_appusage_project()] with `verify = "content"`.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   output <- tempfile("appusage-help-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   result <- run_appusage_workflow(path, project_dir = output,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+#'   preview <- plan_appusage_project_rebuild(output, write_plan = FALSE)
+#'   stopifnot(nrow(preview) == 1L,
+#'             !file.exists(file.path(output, "rebuild_plan_preview.csv")))
+#'   names(preview)
+#'   head(preview)
+#' })
 #' @export
 plan_appusage_project_rebuild <- function(
     project_dir, current_provenance = NULL,

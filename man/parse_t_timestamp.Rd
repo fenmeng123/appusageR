@@ -15,3 +15,18 @@ Numeric milliseconds since the Unix epoch.
 \description{
 Removes the APP Usage \code{"T:"} prefix and parses millisecond timestamps.
 }
+\details{
+Returns numeric Unix-epoch milliseconds. Divide by 1000 when constructing
+a \code{POSIXct} value with an explicit epoch origin and timezone; the helper
+itself leaves the authoritative millisecond values numeric.
+}
+\examples{
+data(appusage_demo)
+ms <- appusage_demo$records$line_seven_days$data$episode$start_ts_ms[1:2]
+parsed <- parse_t_timestamp(paste0("T:", ms))
+stopifnot(identical(parsed, ms))
+as.POSIXct(parsed / 1000, origin = "1970-01-01", tz = appusage_demo$info$timezone)
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

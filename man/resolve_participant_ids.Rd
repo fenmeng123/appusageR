@@ -20,8 +20,8 @@ resolve_participant_ids(
 
 \item{input}{Input mode, usually \code{"file"}.}
 
-\item{self_report}{Optional self-report data frame. Reserved for a future
-Wenjuanxing matching implementation.}
+\item{self_report}{Reserved argument; keep \code{NULL}. Use
+\code{\link[=match_appusage_self_report]{match_appusage_self_report()}} for questionnaire linkage.}
 
 \item{participant_id_col}{Reserved study participant ID column name.}
 
@@ -34,6 +34,25 @@ metadata columns.
 \description{
 Resolves one participant ID per input record from an explicit \code{ids} vector,
 names on \code{x}, Wenjuanxing sequence IDs in filenames, or fallback record IDs.
-The self-report matching interface is reserved here but not implemented until
-a real example table is available.
+Survey linkage uses \code{\link[=match_appusage_self_report]{match_appusage_self_report()}} after source processing.
+}
+\details{
+Resolution priority is explicit \code{ids}, names on \code{x}, filename sequence,
+then generated record IDs. The result retains the ID's origin separately
+from native filename metadata. Survey linkage is performed by
+\code{\link[=match_appusage_self_report]{match_appusage_self_report()}}; \code{self_report} here must remain \code{NULL}.
+Use character IDs when leading zeroes are meaningful.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[1:2])
+resolved <- resolve_participant_ids(path)
+stopifnot(identical(resolved$participant_id, c("101", "102")))
+explicit <- resolve_participant_ids(path, ids = c("00101", "00102"))
+stopifnot(identical(explicit$participant_id, c("00101", "00102")))
+resolved[, c("participant_id", "participant_id_source")]
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
 }

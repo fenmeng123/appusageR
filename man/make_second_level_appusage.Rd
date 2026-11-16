@@ -70,3 +70,22 @@ grains are returned as zero-row tibbles. Meta Table 2 is preserved as event
 data. Meta event-to-episode reconstruction is explicit, diagnosable, and
 enabled by default in second-level meta processing.
 }
+\details{
+The returned list is the scientific payload, rather than the status wrapper
+returned by \code{\link[=run_second_level_appusage]{run_second_level_appusage()}}. Unavailable grains have typed empty
+tables. On mixed input, omitted meta options preserve line intervals/daily
+totals and meta events without counting reconstructed meta use a second time.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[5L])
+first <- run_first_level_appusage(path, strict = TRUE)
+grains <- make_second_level_appusage(first$data)
+stopifnot(nrow(grains$event) == 28L, nrow(grains$episode) == 14L,
+          sum(grains$daily$duration_ms) == 12600000)
+vapply(grains, nrow, integer(1))
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

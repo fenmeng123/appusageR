@@ -135,21 +135,33 @@ processing by default. Starting in 0.3.0, this wrapper can also discover a
 project folder and paired Wenjuanxing Excel file from a raw-data root and
 write a matched self-report Excel file.
 }
+\details{
+In raw-root mode the string ProjectID selects its source folder and
+questionnaire workbook. Results include the source \code{manifest}, \code{first_level},
+\code{second_level}, \code{qc}, \code{matched_self_report} and output \code{project_dir}. All
+questionnaire rows survive, including unmatched rows. The input \code{project_dir}
+argument names a raw folder; this differs from the exact output directory
+accepted by \code{\link[=run_appusage_workflow]{run_appusage_workflow()}}. Resume with the same input selectors
+and \code{output_root}. The example is bounded to one source;
+\code{demo("synthetic-project", package = "appusageR")} processes all 15.
+}
 \examples{
-# Process the bundled synthetic project, including daily aggregation and QC.
-demo_dir <- system.file("extdata", "ProjectName-Demo_ProjectID-001",
-                        package = "appusageR", mustWork = TRUE)
-output <- tempfile("project-")
-result <- run_appusage_project_workflow(
-  project_dir = demo_dir, output_root = output,
-  parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE
-)
-# This one-day log falls below the default QC minimum of seven non-empty days.
-result$qc[, c("participant_id", "qc_status", "pass_qc")]
-
-# The 1-minute and 2-minute Reader episodes form one daily total.
-processed <- new.env(parent = emptyenv())
-load(result$second_level$second_level_data_file[[1L]], envir = processed)
-processed$data$daily[, c("date", "app_name", "duration_ms")]
-unlink(output, recursive = TRUE)
+local({
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  output <- tempfile("appusage-project-example-")
+  on.exit(unlink(output, recursive = TRUE))
+  # Process one source and retain all 17 survey rows.
+  result <- run_appusage_project_workflow(
+    raw_data_root = folder, project_id = "009", output_root = output,
+    self_report_sheet = "Survey", sequence_col = "sequence_id",
+    upload_col = "upload", submit_time_col = "submitted_at", max_files = 1L,
+    parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+  result$qc[, c("participant_id", "qc_status", "pass_qc")]
+  linked <- result$matched_self_report
+  stopifnot(nrow(linked) == 17L, sum(linked$moSens_match_status == "matched") == 1L)
+  table(linked$moSens_match_status)
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
 }

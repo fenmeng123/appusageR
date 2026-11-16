@@ -31,3 +31,25 @@ Runs the same anomaly, source and daily coverage checks as inline/file QC.
 Unlike the legacy coverage-only \code{\link[=run_qc_appusage]{run_qc_appusage()}} in-memory mode, this
 function returns the complete result used in proc-2 metadata.
 }
+\details{
+Returns execution \code{qc_status}, row \code{counts}, \code{anomaly_qc} diagnostics
+and \code{qc} with coverage and \verb{analysis_eligible_*} flags. Pass retained source
+metadata separately: a wrapper supplies its data, but does not automatically
+supply its metadata argument. QC evaluates and reports; it does not delete
+input rows or write files. Missing source metadata limits source-context checks.
+}
+\examples{
+data(appusage_demo)
+record <- appusage_demo$records$mixed_line_meta
+qc <- assess_appusage_qc(record, metadata = record$metadata,
+                         participant_id = "105")
+qc$qc[c("pass_qc", "analysis_eligible_event", "analysis_eligible_daily")]
+stopifnot(qc$qc_status == "success", qc$qc$pass_qc)
+short <- appusage_demo$records$recorded_blank_absent_days
+short_qc <- assess_appusage_qc(short, metadata = short$metadata,
+                               participant_id = "106")
+stopifnot(!short_qc$qc$pass_qc)
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

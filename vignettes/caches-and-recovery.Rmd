@@ -1,0 +1,108 @@
+---
+title: "4. Resume caches and diagnose failures"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{4. Resume caches and diagnose failures}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(appusageR)
+data(appusage_demo)
+```
+
+Use a temporary project to observe reuse and repair. All destructive steps below
+target only files created by this example.
+
+```{r first-run}
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+work <- tempfile("appusage-recovery-")
+config <- appusage_config(execution = list(parallel = FALSE, workers = 1L, progress = FALSE))
+first <- run_appusage_workflow(path, project_dir = work, config = config)
+stopifnot(isTRUE(validate_appusage_project(work, verify = "content")$complete))
+```
+
+## Unchanged inputs reuse completed stages
+
+```{r resume}
+elapsed <- system.time(resumed <- run_appusage_workflow(project_dir = work))
+plan <- plan_appusage_workflow(project_dir = work, verify = "content")
+plan$tasks[, c("stage", "action", "reason_code")]
+stopifnot(all(plan$tasks$action %in% c("reuse", "disabled")))
+elapsed
+resumed$run_record$tasks
+```
+
+The entry point still spends time validating evidence and constructing results.
+Read actual stage actions alongside elapsed time. A metadata preview is cheaper
+but does not load and validate scientific content. See
+`?appusage_configuration` for `source_verification` options.
+
+## Missing JSON and damaged RDA
+
+```{r missing-pair}
+pair <- resumed$second_level[1L, ]
+unlink(pair$second_level_metadata_file)
+expected_warnings <- character()
+record_damage_warning <- function(w) {
+  message <- conditionMessage(w)
+  if (grepl("cannot open file|magic number", message)) {
+    expected_warnings <<- c(expected_warnings, message)
+    invokeRestart("muffleWarning")
+  }
+}
+missing <- withCallingHandlers(validate_appusage_project(work, verify = "content"),
+                              warning = record_damage_warning)
+stopifnot(!isTRUE(missing$complete))
+repair_plan <- plan_appusage_workflow(project_dir = work, verify = "content")
+repair_plan$tasks[, c("stage", "action", "reason_code")]
+repaired <- run_appusage_workflow(project_dir = work)
+stopifnot(isTRUE(validate_appusage_project(work, verify = "content")$complete))
+```
+
+```{r damaged-pair}
+pair <- repaired$second_level[1L, ]
+writeBin(charToRaw("deliberately damaged synthetic cache"), pair$second_level_data_file)
+damaged <- withCallingHandlers(validate_appusage_project(work, verify = "content"),
+                              warning = record_damage_warning)
+stopifnot(!isTRUE(damaged$complete))
+restored <- run_appusage_workflow(project_dir = work)
+stopifnot(isTRUE(validate_appusage_project(work, verify = "content")$complete))
+cache <- new.env(parent = emptyenv())
+load(restored$second_level$second_level_data_file[1L], envir = cache)
+stopifnot(identical(cache$data, appusage_demo$records$line_seven_days$data))
+expected_warnings
+```
+
+A missing or damaged pair is different from a complete terminal input diagnosis.
+The example records and displays the expected missing-file/invalid-RDA warnings;
+any other warning is left to R's normal handler.
+The planner selects the required work from compatible upstream caches; it does
+not turn every source into a fresh run. `?plan_appusage_project_rebuild` offers a
+metadata-only inventory for older layouts. `run_appusage_stage("summary", ...)`
+rebuilds projections from valid caches; rebuilding a summary is not scientific
+reprocessing.
+
+## Inspect a partial source failure
+
+```{r partial-input}
+index <- match("invalid_interval_structure", appusage_demo$sources$scenario)
+bad_path <- file.path(folder, appusage_demo$sources$source_relpath[index])
+issue <- tryCatch(run_first_level_appusage(bad_path, strict = TRUE), error = identity)
+stopifnot(inherits(issue, "appusage_line_structural_quality"))
+conditionMessage(issue)
+```
+
+This source contains one valid interval and one interval missing its end time.
+Its critical structural diagnosis is preserved, rather than publishing the valid
+fragment as if it were a complete source. The next project example retains this
+and four other diagnoses through an unchanged resume.
+
+```{r cleanup}
+unlink(work, recursive = TRUE)
+```
+
+Next: [categories and dictionaries](categories-and-dictionary.html).

@@ -8,11 +8,13 @@
 #' @param other_l1,other_l2 Labels used only for operational residual classification.
 #' @return A versioned `appusage_category_policy` list.
 #' @examples
+#' data(appusage_demo)
 #' policy <- appusage_category_policy()
-#' policy$share_threshold
-#' policy$prevalence_threshold
-#' # Keep unknown applications pending rather than assigning residual labels.
-#' appusage_category_policy(auto_other = FALSE)
+#' stopifnot(policy$share_threshold == 0.05, policy$prevalence_threshold == 0.01)
+#' pending <- appusage_category_policy(auto_other = FALSE)
+#' classified <- add_app_categories(appusage_demo$records$line_seven_days$data$daily,
+#'                                  policy = pending)
+#' unique(classified[, c("package_name", "app_category_disposition")])
 #' @export
 appusage_category_policy <- function(share_threshold = 0.05,
                                      prevalence_threshold = 0.01,

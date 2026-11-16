@@ -17,8 +17,8 @@ appusage_config(
 }
 \arguments{
 \item{parse, time, reconstruction, daily, qc, category, matching, execution}{Named
-lists overriding settings in the respective module. See the workflow
-vignette for the supported fields.}
+lists overriding settings in the respective module. See
+\link{appusage_configuration} for every supported field, default and unit.}
 }
 \value{
 An \code{appusage_config} named list.
@@ -33,4 +33,21 @@ events from meta Table 2. Leave the meta daily source unspecified and omit
 select \code{parse = list(type = "meta")}. Old saved configurations with expanded
 defaults use legacy single-component selection. Create a new configuration
 to opt into automatic mixed parsing.
+}
+\details{
+For the synthetic examples, leave scientific fields omitted and set
+execution controls explicitly. Pass a configuration through \code{config}; do not
+also pass legacy execution/scientific arguments to \code{\link[=run_appusage_workflow]{run_appusage_workflow()}}.
+A saved configuration is separate from the plan and the actual run record.
+}
+\examples{
+data(appusage_demo)
+config <- appusage_config(
+  time = list(tz = appusage_demo$info$timezone),
+  execution = list(parallel = FALSE, workers = 1L, progress = FALSE))
+config$qc[c("min_nonempty_days", "require_all_weekdays")]
+stopifnot(config$parse$type == "auto", config$execution$resume)
+}
+\seealso{
+\link{appusage_configuration}, \link{appusage_demo}, \link{appusage_synthetic_project}
 }

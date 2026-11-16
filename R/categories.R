@@ -10,6 +10,20 @@
 #'
 #' @return A tibble with dictionary columns and matching diagnostics as
 #'   attributes.
+#' @details
+#' With `path = NULL`, reads the bundled five-column dictionary; its version
+#' is independent of the R package version. The standardized return value adds
+#' matching-key helpers and lookup/diagnostic attributes. Use it as input to
+#' [add_app_categories()]. A supplied Excel file follows the same column contract.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' dictionary <- read_app_category_dictionary()
+#' names(dictionary)
+#' classified <- add_app_categories(
+#'   appusage_demo$records$line_seven_days$data$daily, dictionary)
+#' # The org.example identities are fictional; inspect their actual match status.
+#' unique(classified[, c("package_name", "app_category_match_status")])
 #' @export
 read_app_category_dictionary <- function(path = NULL, sheet = 1, ...) {
   if (is.null(path)) return(standardize_category_dict(appusage_default_dictionary(),
@@ -46,6 +60,27 @@ read_app_category_dictionary <- function(path = NULL, sheet = 1, ...) {
 #'
 #' @return `data` with category columns added. Matching summaries are attached
 #'   as the `app_category_summary` attribute.
+#' @details
+#' Unique APK labels take precedence. Conflicting APK candidates are narrowed
+#' by exact name within that APK; unresolved conflicts remain pending. Name
+#' fallback is used only when APK lookup fails. `app_category_disposition`
+#' distinguishes dictionary matches, review states and operational residuals.
+#' The example supplies one explicit fictional teaching label; it leaves the
+#' bundled dictionary and the original scientific data unchanged.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' # Explicit teaching labels for fictional applications, separate from the dictionary.
+#' dictionary <- data.frame(
+#'   App_UUID = "org.example.reader", App_Name = "Demo Reader",
+#'   Level_1_Category = "Education and Business",
+#'   Level_2_Category = "Books and Reference")
+#' daily <- appusage_demo$records$line_seven_days$data$daily
+#' classified <- add_app_categories(daily, dictionary)
+#' reader <- classified$package_name == "org.example.reader"
+#' stopifnot(all(classified$Level_2_Category[reader] == "Books and Reference"),
+#'           identical(classified$duration_ms, daily$duration_ms))
+#' unique(classified[, c("package_name", "Level_2_Category", "app_category_disposition")])
 #' @export
 add_app_categories <- function(data, dictionary = NULL, overwrite = TRUE,
                                policy = appusage_category_policy(), profile = NULL) {
@@ -118,6 +153,36 @@ appusage_add_categories_prepared <- function(data, dictionary, overwrite, policy
 #' @param parallel,workers File-worker execution controls.
 #'
 #' @return Invisibly returns a tibble summary of category matching.
+#' @details
+#' Uses [update_app_categories_cache()] for paired updates and checkpoint
+#' recovery. Return rows include each path, action and outcome. With an identical
+#' dictionary/policy contract and intact pair, `resume = TRUE` reuses the result.
+#' Only classification and its related metadata/projections are refreshed.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   output <- tempfile("appusage-help-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   first <- read_appusage_batch(path, project_dir = output,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+#'   second <- write_second_level_batch(first,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE)
+#'   # Explicit teaching labels for fictional applications, separate from the dictionary.
+#'   dictionary <- data.frame(
+#'     App_UUID = "org.example.reader", App_Name = "Demo Reader",
+#'     Level_1_Category = "Education and Business",
+#'     Level_2_Category = "Books and Reference")
+#'
+#'   written <- write_app_categories_batch(output, dictionary,
+#'     parallel = FALSE, workers = 1L, progress = FALSE)
+#'   reused <- write_app_categories_batch(output, dictionary,
+#'     parallel = FALSE, workers = 1L, progress = FALSE)
+#'   stopifnot(all(written$action == "run"), all(reused$action == "reuse"))
+#'   reused
+#' })
 #' @export
 write_app_categories_batch <- function(project_dir, dictionary = NULL,
                                        overwrite = TRUE, progress = TRUE,

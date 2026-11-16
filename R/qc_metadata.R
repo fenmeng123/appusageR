@@ -26,6 +26,29 @@
 #'   duration disagreement checks.
 #'
 #' @return Invisibly returns the refreshed second-level analytic summary tibble.
+#' @details
+#' The return keeps source execution status, coverage `pass_qc` and
+#' grain-specific `analysis_eligible_*` fields separate. Coverage/source QC
+#' belongs to proc-2 JSON. If changed duration thresholds own saved anomaly
+#' fields, those fields are synchronized from proc-1 before metadata publication.
+#' See [assess_appusage_qc()] for the in-memory computation.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   output <- tempfile("appusage-example-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   first <- read_appusage_batch(path, project_dir = output,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+#'   second <- write_second_level_batch(first, parallel = FALSE,
+#'     n_cores = 1L, progress = FALSE)
+#'   qc <- write_qc_metadata_batch(output, progress = FALSE, strict = TRUE)
+#'   stopifnot(qc$qc_status == "success", qc$pass_qc)
+#'   qc[, c("participant_id", "qc_status", "pass_qc")]
+#'   stopifnot(!dir.exists(file.path(output, "proclevel-3")))
+#' })
 #' @export
 write_qc_metadata_batch <- function(project_dir, output_dir = NULL,
                                     strict = FALSE, overwrite = TRUE,

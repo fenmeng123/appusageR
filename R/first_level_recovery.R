@@ -85,6 +85,30 @@ appusage_first_level_memory_risk_signal <- function(x, input, parallel, n_cores)
 #'
 #' @return A tibble with one row per recovered cache record plus optional
 #'   `not_processed` manifest rows.
+#' @details
+#' With `write = FALSE`, returns the recovered summary for inspection.
+#' With `write = TRUE`, replaces the project summary and dataset description.
+#' This recovery reconstructs reporting from stored cache evidence; it does not
+#' parse raw exports. The example removes only its temporary summary CSV.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   output <- tempfile("appusage-help-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   first <- read_appusage_batch(path, project_dir = output,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+#'
+#'   summary_file <- file.path(output, "analytic_summary_table_proclevel-1.csv")
+#'   unlink(summary_file)
+#'   preview <- rebuild_first_level_summary_from_cache(output, write = FALSE, strict = TRUE)
+#'   stopifnot(nrow(preview) == 1L, !file.exists(summary_file))
+#'   restored <- rebuild_first_level_summary_from_cache(output, strict = TRUE)
+#'   stopifnot(file.exists(summary_file), nrow(restored) == 1L)
+#'   restored[, c("participant_id", "status")]
+#' })
 #' @export
 rebuild_first_level_summary_from_cache <- function(project_dir,
                                                    manifest = NULL,
@@ -782,7 +806,16 @@ appusage_first_level_worker_decision <- function(parallel,
   if (is.na(max_workers) || max_workers < 1L) {
     max_workers <- 12L
   }
-  memory_info <- memory_info %||% appusage_detect_memory_info()
+  # Serial execution already selects one worker. A host-memory query cannot
+  # change that decision, so record that it was not requested. Parallel calls
+  # still obtain a fresh reading for every decision, including retry decisions.
+  memory_info <- memory_info %||% if (isTRUE(parallel)) {
+    appusage_detect_memory_info()
+  } else {
+    list(detected_total_memory_bytes = NA_real_,
+      detected_free_memory_bytes = NA_real_, memory_detected = FALSE,
+      memory_source = "not_requested_serial")
+  }
   size_info <- size_info %||% appusage_source_size_info(x, input = input)
 
   if (!isTRUE(parallel)) {

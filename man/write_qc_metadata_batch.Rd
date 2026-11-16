@@ -67,3 +67,30 @@ Runs daily-data QC one second-level cache at a time, updates matching
 \code{proc-2} JSON metadata under \code{proclevel-2}, and refreshes
 \verb{analytic_summary_table_proclevel-2.csv} from those metadata files.
 }
+\details{
+The return keeps source execution status, coverage \code{pass_qc} and
+grain-specific \verb{analysis_eligible_*} fields separate. Coverage/source QC
+belongs to proc-2 JSON. If changed duration thresholds own saved anomaly
+fields, those fields are synchronized from proc-1 before metadata publication.
+See \code{\link[=assess_appusage_qc]{assess_appusage_qc()}} for the in-memory computation.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  output <- tempfile("appusage-example-")
+  on.exit(unlink(output, recursive = TRUE))
+  first <- read_appusage_batch(path, project_dir = output,
+    parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+  second <- write_second_level_batch(first, parallel = FALSE,
+    n_cores = 1L, progress = FALSE)
+  qc <- write_qc_metadata_batch(output, progress = FALSE, strict = TRUE)
+  stopifnot(qc$qc_status == "success", qc$pass_qc)
+  qc[, c("participant_id", "qc_status", "pass_qc")]
+  stopifnot(!dir.exists(file.path(output, "proclevel-3")))
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

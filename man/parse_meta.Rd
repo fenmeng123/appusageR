@@ -36,3 +36,20 @@ A list with \code{summary} and \code{events} tibbles.
 Splits meta exports into app-level summary records and event-level usage-log
 records.
 }
+\details{
+\code{summary} contains Table 1 usage totals and \code{events} contains Table 2
+ordered events, including event codes and configuration fields. Parsing
+keeps these separate; use \code{\link[=reconstruct_meta_episodes]{reconstruct_meta_episodes()}} for event pairing.
+For a mixed export use \code{\link[=read_appusage_text]{read_appusage_text()}} to retain both components.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[2L])
+parsed <- parse_meta(path, strict = TRUE)
+stopifnot(nrow(parsed$summary) == 14L, nrow(parsed$events) == 28L)
+head(parsed$events[, c("event_ts_ms", "event_type", "package_name")])
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

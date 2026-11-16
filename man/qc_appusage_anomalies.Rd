@@ -51,3 +51,21 @@ A compact list of anomaly metrics suitable for JSON metadata.
 data without filtering or modifying the data. The checks are intended for
 metadata and summary reporting.
 }
+\details{
+The result separates anomaly counts, severity, thresholds and
+\code{source_anomaly_qc}. Counts can overlap across rules and are not numbers of
+excluded participants. Supply the saved source metadata for export-span
+checks. \code{\link[=assess_appusage_qc]{assess_appusage_qc()}} combines these metrics with daily coverage;
+\code{\link[=audit_appusage_overlap]{audit_appusage_overlap()}} describes interval overlap separately.
+}
+\examples{
+data(appusage_demo)
+record <- appusage_demo$records$cross_midnight
+metrics <- qc_appusage_anomalies(record$data, metadata = record$metadata)
+stopifnot(metrics$status == "success")
+metrics[c("n_episode_anomalies", "n_daily_anomalies", "has_critical_anomaly")]
+stopifnot(sum(record$data$daily$duration_ms) == 720000)
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

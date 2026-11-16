@@ -16,3 +16,25 @@ A markdown/plain-text issue report string.
 Formats data/source context before code traceback so failed source records
 can be located before reading the R stack.
 }
+\details{
+The returned character string can be printed with \code{cat()} or explicitly
+saved with \code{writeLines()}. It includes source context, condition details and
+available traceback/excerpt fields. Review those fields when sharing a report;
+the teaching example contains fictional source identities only.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+source <- appusage_demo$sources$scenario == "zero_byte_upload"
+path <- file.path(folder, appusage_demo$sources$source_relpath[source])
+# Capture the deliberate zero-byte teaching failure as a condition.
+failure <- tryCatch(run_first_level_appusage(path, strict = TRUE), error = identity)
+stopifnot(inherits(failure, "appusage_zero_byte_source"))
+context <- diagnose_appusage_error(failure, source_file = path, stage = "first_level")
+report <- format_appusage_issue_report(context)
+stopifnot(grepl("zero-byte", report, fixed = TRUE))
+cat(report)
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

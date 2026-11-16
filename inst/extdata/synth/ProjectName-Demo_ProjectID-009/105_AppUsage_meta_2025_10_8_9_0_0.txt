@@ -1,0 +1,77 @@
+2025-10-01,开始时间（ms）,开始时间,应用名称,应用标识,使用时长,结束时间（ms）,结束时间
+,T:1759280400000,09:00:00,Demo Reader,org.example.reader,600秒,T:1759281000000,09:10:00
+,T:1759316400000,19:00:00,Demo Music,org.example.music,1200秒,T:1759317600000,19:20:00
+2025-10-01表一,应用名称,应用包名,开始时间,结束时间,最后一次,总时间,开始时间（ms）,结束时间（ms）,最后一次（ms）,总时间（ms）
+,Demo Reader,org.example.reader,2025-10-01 09:00:00:000,2025-10-01 09:10:00:000,2025-10-01 09:10:00:000,600秒,T:1759280400000,T:1759281000000,T:1759281000000,600000
+,Demo Music,org.example.music,2025-10-01 19:00:00:000,2025-10-01 19:20:00:000,2025-10-01 19:20:00:000,1200秒,T:1759316400000,T:1759317600000,T:1759317600000,1200000
+2025-10-01表二,应用名称,应用包名,具体页面,时间,时间戳,类型,配置
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-01 09:00:00:000,T:1759280400000,1,orientation=portrait,demo=synthetic
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-01 09:10:00:000,T:1759281000000,2,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-01 19:00:00:000,T:1759316400000,1,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-01 19:20:00:000,T:1759317600000,2,orientation=portrait,demo=synthetic
+2025-10-02,开始时间（ms）,开始时间,应用名称,应用标识,使用时长,结束时间（ms）,结束时间
+,T:1759366800000,09:00:00,Demo Reader,org.example.reader,600秒,T:1759367400000,09:10:00
+,T:1759402800000,19:00:00,Demo Music,org.example.music,1200秒,T:1759404000000,19:20:00
+2025-10-02表一,应用名称,应用包名,开始时间,结束时间,最后一次,总时间,开始时间（ms）,结束时间（ms）,最后一次（ms）,总时间（ms）
+,Demo Reader,org.example.reader,2025-10-02 09:00:00:000,2025-10-02 09:10:00:000,2025-10-02 09:10:00:000,600秒,T:1759366800000,T:1759367400000,T:1759367400000,600000
+,Demo Music,org.example.music,2025-10-02 19:00:00:000,2025-10-02 19:20:00:000,2025-10-02 19:20:00:000,1200秒,T:1759402800000,T:1759404000000,T:1759404000000,1200000
+2025-10-02表二,应用名称,应用包名,具体页面,时间,时间戳,类型,配置
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-02 09:00:00:000,T:1759366800000,1,orientation=portrait,demo=synthetic
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-02 09:10:00:000,T:1759367400000,2,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-02 19:00:00:000,T:1759402800000,1,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-02 19:20:00:000,T:1759404000000,2,orientation=portrait,demo=synthetic
+2025-10-03,开始时间（ms）,开始时间,应用名称,应用标识,使用时长,结束时间（ms）,结束时间
+,T:1759453200000,09:00:00,Demo Reader,org.example.reader,600秒,T:1759453800000,09:10:00
+,T:1759489200000,19:00:00,Demo Music,org.example.music,1200秒,T:1759490400000,19:20:00
+2025-10-03表一,应用名称,应用包名,开始时间,结束时间,最后一次,总时间,开始时间（ms）,结束时间（ms）,最后一次（ms）,总时间（ms）
+,Demo Reader,org.example.reader,2025-10-03 09:00:00:000,2025-10-03 09:10:00:000,2025-10-03 09:10:00:000,600秒,T:1759453200000,T:1759453800000,T:1759453800000,600000
+,Demo Music,org.example.music,2025-10-03 19:00:00:000,2025-10-03 19:20:00:000,2025-10-03 19:20:00:000,1200秒,T:1759489200000,T:1759490400000,T:1759490400000,1200000
+2025-10-03表二,应用名称,应用包名,具体页面,时间,时间戳,类型,配置
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-03 09:00:00:000,T:1759453200000,1,orientation=portrait,demo=synthetic
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-03 09:10:00:000,T:1759453800000,2,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-03 19:00:00:000,T:1759489200000,1,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-03 19:20:00:000,T:1759490400000,2,orientation=portrait,demo=synthetic
+2025-10-04,开始时间（ms）,开始时间,应用名称,应用标识,使用时长,结束时间（ms）,结束时间
+,T:1759539600000,09:00:00,Demo Reader,org.example.reader,600秒,T:1759540200000,09:10:00
+,T:1759575600000,19:00:00,Demo Music,org.example.music,1200秒,T:1759576800000,19:20:00
+2025-10-04表一,应用名称,应用包名,开始时间,结束时间,最后一次,总时间,开始时间（ms）,结束时间（ms）,最后一次（ms）,总时间（ms）
+,Demo Reader,org.example.reader,2025-10-04 09:00:00:000,2025-10-04 09:10:00:000,2025-10-04 09:10:00:000,600秒,T:1759539600000,T:1759540200000,T:1759540200000,600000
+,Demo Music,org.example.music,2025-10-04 19:00:00:000,2025-10-04 19:20:00:000,2025-10-04 19:20:00:000,1200秒,T:1759575600000,T:1759576800000,T:1759576800000,1200000
+2025-10-04表二,应用名称,应用包名,具体页面,时间,时间戳,类型,配置
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-04 09:00:00:000,T:1759539600000,1,orientation=portrait,demo=synthetic
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-04 09:10:00:000,T:1759540200000,2,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-04 19:00:00:000,T:1759575600000,1,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-04 19:20:00:000,T:1759576800000,2,orientation=portrait,demo=synthetic
+2025-10-05,开始时间（ms）,开始时间,应用名称,应用标识,使用时长,结束时间（ms）,结束时间
+,T:1759626000000,09:00:00,Demo Reader,org.example.reader,600秒,T:1759626600000,09:10:00
+,T:1759662000000,19:00:00,Demo Music,org.example.music,1200秒,T:1759663200000,19:20:00
+2025-10-05表一,应用名称,应用包名,开始时间,结束时间,最后一次,总时间,开始时间（ms）,结束时间（ms）,最后一次（ms）,总时间（ms）
+,Demo Reader,org.example.reader,2025-10-05 09:00:00:000,2025-10-05 09:10:00:000,2025-10-05 09:10:00:000,600秒,T:1759626000000,T:1759626600000,T:1759626600000,600000
+,Demo Music,org.example.music,2025-10-05 19:00:00:000,2025-10-05 19:20:00:000,2025-10-05 19:20:00:000,1200秒,T:1759662000000,T:1759663200000,T:1759663200000,1200000
+2025-10-05表二,应用名称,应用包名,具体页面,时间,时间戳,类型,配置
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-05 09:00:00:000,T:1759626000000,1,orientation=portrait,demo=synthetic
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-05 09:10:00:000,T:1759626600000,2,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-05 19:00:00:000,T:1759662000000,1,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-05 19:20:00:000,T:1759663200000,2,orientation=portrait,demo=synthetic
+2025-10-06,开始时间（ms）,开始时间,应用名称,应用标识,使用时长,结束时间（ms）,结束时间
+,T:1759712400000,09:00:00,Demo Reader,org.example.reader,600秒,T:1759713000000,09:10:00
+,T:1759748400000,19:00:00,Demo Music,org.example.music,1200秒,T:1759749600000,19:20:00
+2025-10-06表一,应用名称,应用包名,开始时间,结束时间,最后一次,总时间,开始时间（ms）,结束时间（ms）,最后一次（ms）,总时间（ms）
+,Demo Reader,org.example.reader,2025-10-06 09:00:00:000,2025-10-06 09:10:00:000,2025-10-06 09:10:00:000,600秒,T:1759712400000,T:1759713000000,T:1759713000000,600000
+,Demo Music,org.example.music,2025-10-06 19:00:00:000,2025-10-06 19:20:00:000,2025-10-06 19:20:00:000,1200秒,T:1759748400000,T:1759749600000,T:1759749600000,1200000
+2025-10-06表二,应用名称,应用包名,具体页面,时间,时间戳,类型,配置
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-06 09:00:00:000,T:1759712400000,1,orientation=portrait,demo=synthetic
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-06 09:10:00:000,T:1759713000000,2,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-06 19:00:00:000,T:1759748400000,1,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-06 19:20:00:000,T:1759749600000,2,orientation=portrait,demo=synthetic
+2025-10-07,开始时间（ms）,开始时间,应用名称,应用标识,使用时长,结束时间（ms）,结束时间
+,T:1759798800000,09:00:00,Demo Reader,org.example.reader,600秒,T:1759799400000,09:10:00
+,T:1759834800000,19:00:00,Demo Music,org.example.music,1200秒,T:1759836000000,19:20:00
+2025-10-07表一,应用名称,应用包名,开始时间,结束时间,最后一次,总时间,开始时间（ms）,结束时间（ms）,最后一次（ms）,总时间（ms）
+,Demo Reader,org.example.reader,2025-10-07 09:00:00:000,2025-10-07 09:10:00:000,2025-10-07 09:10:00:000,600秒,T:1759798800000,T:1759799400000,T:1759799400000,600000
+,Demo Music,org.example.music,2025-10-07 19:00:00:000,2025-10-07 19:20:00:000,2025-10-07 19:20:00:000,1200秒,T:1759834800000,T:1759836000000,T:1759836000000,1200000
+2025-10-07表二,应用名称,应用包名,具体页面,时间,时间戳,类型,配置
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-07 09:00:00:000,T:1759798800000,1,orientation=portrait,demo=synthetic
+,Demo Reader,org.example.reader,org.example.reader.Main,2025-10-07 09:10:00:000,T:1759799400000,2,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-07 19:00:00:000,T:1759834800000,1,orientation=portrait,demo=synthetic
+,Demo Music,org.example.music,org.example.music.Main,2025-10-07 19:20:00:000,T:1759836000000,2,orientation=portrait,demo=synthetic

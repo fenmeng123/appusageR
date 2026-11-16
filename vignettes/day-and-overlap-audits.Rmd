@@ -1,64 +1,104 @@
 ---
-title: "Day coverage and overlapping intervals"
+title: "3. Explain QC, blank days and overlapping intervals"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Day coverage and overlapping intervals}
+  %\VignetteIndexEntry{3. Explain QC, blank days and overlapping intervals}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
-The synthetic UTF-8 export bundled as `extdata/audit-line-meta.txt` contains six line records and one meta event. The six start/end offsets in seconds after local midnight are (0,10), (0,10), (0,6), (4,10), (3,7), and (6,14). Each row names a different example app. The following date has a line header with an empty body.
-
-```{r}
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 library(appusageR)
-path <- system.file("extdata", "audit-line-meta.txt", package = "appusageR")
-first <- run_first_level_appusage(path, participant_id = "demo", strict = TRUE)
-second <- run_second_level_appusage(first)
-window <- as.Date(c("2024-10-08", "2024-10-10"))
-observed <- audit_appusage_days(second, window = window)
-zero <- audit_appusage_days(second, window = window, strategy = "zero_window")
+data(appusage_demo)
+```
+
+This tutorial uses saved synthetic records, so diagnostics can be explored
+without writing caches. Processing success, QC pass and grain eligibility answer
+different questions.
+
+## Keep the denominators visible
+
+```{r qc}
+quality <- lapply(names(appusage_demo$records), function(key) {
+  record <- appusage_demo$records[[key]]
+  id <- appusage_demo$sources$sequence_id[match(key, appusage_demo$sources$scenario)]
+  assess_appusage_qc(record, metadata = record$metadata, participant_id = id)
+})
+qc <- do.call(rbind, lapply(quality, function(x) as.data.frame(x$qc)))
+qc$participant_id <- appusage_demo$sources$sequence_id[
+  match(names(appusage_demo$records), appusage_demo$sources$scenario)]
+stopifnot(nrow(appusage_demo$sources) == 15L, length(quality) == 10L,
+          sum(qc$pass_qc) == 5L, sum(!qc$pass_qc) == 5L)
+qc[, c("participant_id", "pass_qc", "analysis_eligible_daily")]
+```
+
+Of 15 uploads, 10 reach research processing and QC. Five of those 10 pass QC;
+the other five have deliberately short coverage. The five input failures are
+not evaluated by QC. Read `analysis_eligible_event`, `analysis_eligible_episode`
+and `analysis_eligible_daily` separately; an unavailable grain is not a failed
+quality assessment of an observed grain. See `?assess_appusage_qc` for the fields.
+
+## Recorded, explicit-empty and absent days
+
+```{r days}
+record <- appusage_demo$records$recorded_blank_absent_days
+before <- record
+observed <- audit_appusage_days(record, metadata = record$metadata)
+zero <- audit_appusage_days(record, metadata = record$metadata, strategy = "zero_window")
 observed$calendar
-c(recorded_mean_ms = observed$mean_ms, window_mean_ms = zero$mean_ms)
-stopifnot(observed$denominator_days == 1, zero$denominator_days == 3,
-          observed$numerator_ms == 44000, zero$numerator_ms == 44000)
+stopifnot(identical(observed$calendar$coverage,
+                    c("recorded", "explicit_empty", "no_block", "recorded")),
+          observed$denominator_days == 2L, observed$numerator_ms == 300000,
+          observed$mean_ms == 150000, zero$denominator_days == 4L,
+          zero$mean_ms == 75000, identical(record, before))
+data.frame(strategy = c("observed_complete", "zero_window"),
+           days = c(observed$denominator_days, zero$denominator_days),
+           mean_minutes = c(observed$mean_ms, zero$mean_ms) / 60000)
 ```
 
-The 8 October numerator sums the six saved durations. Including 9 October (empty header) and 10 October (absent header) as zero changes the denominator to three. The default keeps the two blank days out of the mean. The event component supplies its own coverage evidence.
+The two recorded dates contain 2 and 3 minutes. Their mean is 2.5 minutes. The
+explicit-empty date has a header but no records; the absent date has no block.
+Treating both as zero is the explicit `zero_window` sensitivity assumption and
+gives 1.25 minutes over four days. This view leaves saved durations and QC intact.
 
-```{r}
-audit_appusage_days(second, component = "meta_events", window = window)$calendar
-overlap <- audit_appusage_overlap(second)
+## Five kinds of interval overlap
+
+```{r overlap, fig.width=6, fig.height=3}
+record <- appusage_demo$records$overlapping_intervals
+overlap <- audit_appusage_overlap(record, metadata = record$metadata)
 overlap$pairs
-overlap$daily
-stopifnot(all(overlap$pairs$total > 0), overlap$totals[["endpoint_union"]] == 14000)
-x <- second$data$episode
-plot(c(0, 14), c(1, nrow(x)), type = "n", ylab = "Example record",
-     xlab = "Seconds since first start")
+stopifnot(identical(as.numeric(overlap$pairs$total), c(1, 2, 2, 2, 7)),
+          overlap$totals[["stored_duration_sum"]] == 44000,
+          overlap$totals[["endpoint_union"]] == 14000,
+          overlap$totals[["multiplicity_excess"]] == 30000)
+x <- record$data$episode
 origin <- min(x$start_ts_ms)
-segments((x$start_ts_ms - origin) / 1000, seq_len(nrow(x)),
-         (x$end_ts_ms - origin) / 1000, seq_len(nrow(x)), lwd = 3)
+plot(c(0, 14), c(1, nrow(x)), type = "n", ylab = "Synthetic interval",
+     xlab = "Seconds from first start")
+segments((x$start_ts_ms-origin)/1000, seq_len(nrow(x)),
+         (x$end_ts_ms-origin)/1000, seq_len(nrow(x)), lwd = 3)
 ```
 
-The endpoints cover 14 seconds. The sum of spans is 44 seconds and the excess is 30 seconds. Pair counts describe geometry. The optional allocation views assign time across the full set of intervals under an explicit assumption.
+The six intervals are `(0,10)`, `(0,10)`, `(0,6)`, `(4,10)`, `(3,7)` and `(6,14)`.
+Their durations sum to 44 seconds, while the union spans 14 seconds. The extra
+30 seconds express multiplicity. Pair counts classify identical endpoints,
+same start, same end, strict containment and partial crossing. Optional
+`strategy = "equal_share"` or `"priority"` returns an allocation view under the
+specified assumption; neither changes the stored scientific tables.
 
-```{r}
-allocation <- audit_appusage_overlap(second, strategy = "equal_share")
-allocation$view[[1]]
-priority <- sort(unique(x$package_name))
-audit_appusage_overlap(second, strategy = "priority", priority = priority)$view[[1]]
+## Midnight splitting
+
+```{r midnight}
+midnight <- appusage_demo$records$cross_midnight$data
+midnight$daily[, c("date", "duration_ms")]
+stopifnot(identical(as.numeric(midnight$daily$duration_ms), c(300000, 420000)),
+          sum(midnight$daily$duration_ms) == sum(midnight$episode$duration_ms))
 ```
 
-For a mapped interval table, supply millisecond epoch values and declare their original representation. The example below uses displayed minute boundaries and a positive saved duration in the same minute. That row contributes to the stored-duration total. It has no positive endpoint span. Unknown applications leave shared slices unassigned when included in the analysis.
+The ten-minute interval at 23:55 contributes five minutes to each date; a separate
+two-minute interval adds to the second day. Native-block day auditing describes
+the source table's date; standardized daily aggregation splits intervals at
+local midnight. These are distinct, named views.
 
-```{r}
-mapped <- data.frame(start_ts_ms = c(0, 0, 60000, 60000),
-                     end_ts_ms = c(120000, 60000, 120000, 60000),
-                     duration_ms = c(100000, 30000, 45000, 1200),
-                     package_name = c("example.a", "example.a", NA, "example.b"),
-                     activity_type = "foreground")
-view <- audit_appusage_overlap(mapped, precision = "display_minute",
-                              strategy = "equal_share", tz = "UTC",
-                              include_collection_app = TRUE)
-view$row_status
-view$view[[1]]
-```
+Next: [cache recovery and source diagnostics](caches-and-recovery.html).

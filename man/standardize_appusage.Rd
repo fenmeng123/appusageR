@@ -28,3 +28,21 @@ An \code{appusage_standardized} list suitable for \code{\link[=build_appusage_da
 This computational module retains native grains and meta inputs separately.
 It does not read/write files, reconstruct episodes, filter apps or perform QC.
 }
+\details{
+The return separates \code{event}, native \code{episode}, \code{native_daily} and
+\code{meta_summary_daily}, with capability flags. Use \code{\link[=build_appusage_daily]{build_appusage_daily()}}
+for daily aggregation or \code{\link[=run_second_level_appusage]{run_second_level_appusage()}} for the composed
+second-level result.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+first <- run_first_level_appusage(path, strict = TRUE)
+native <- standardize_appusage(first$data)
+native$capabilities
+stopifnot(nrow(native$episode) == 14L, nrow(native$event) == 0L)
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

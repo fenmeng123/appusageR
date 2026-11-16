@@ -55,3 +55,18 @@ Module 4 wrapper for in-memory daily QC or project-level QC metadata updates.
 In project mode this calls \code{\link[=write_qc_metadata_batch]{write_qc_metadata_batch()}} and updates \code{proc-2}
 JSON metadata without creating \code{proclevel-3}.
 }
+\details{
+The in-memory branch returns coverage QC from \code{\link[=qc_appusage_day]{qc_appusage_day()}}. If a
+participant column is absent, it uses a single record owner. For complete
+in-memory source/anomaly checks use \code{\link[=assess_appusage_qc]{assess_appusage_qc()}}. The project
+branch updates existing proc-2 metadata using \code{\link[=write_qc_metadata_batch]{write_qc_metadata_batch()}}.
+}
+\examples{
+data(appusage_demo)
+qc <- run_qc_appusage(appusage_demo$records$line_seven_days)
+stopifnot(qc$pass_qc, qc$n_nonempty_days == 7L)
+qc[, c("participant_id", "n_nonempty_days", "pass_qc")]
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

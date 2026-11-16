@@ -16,3 +16,19 @@ Numeric milliseconds.
 Extracts millisecond values from APP Usage split-screen labels such as
 a millisecond count followed by the export's split-screen annotation.
 }
+\details{
+The first unsigned numeric token, including scientific notation, is
+returned in milliseconds. Missing or unrecognized labels return \code{NA_real_}.
+This extraction helper does not add split-screen use to foreground totals.
+}
+\examples{
+data(appusage_demo)
+ms <- appusage_demo$records$line_seven_days$data$daily$duration_ms[[1L]]
+# Illustrate the annotation syntax using a duration from the teaching record.
+parsed <- parse_split_screen_ms(c(paste(ms, "(split-screen)"), "", NA_character_))
+stopifnot(parsed[[1L]] == ms, all(is.na(parsed[2:3])))
+parsed
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

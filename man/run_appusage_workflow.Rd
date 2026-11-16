@@ -93,3 +93,35 @@ summaries and paths.
 Shared, configuration-driven execution of faithful parsing, research-data
 construction, routine QC and optional category/relationship modules.
 }
+\details{
+Results include \code{first_level}, \code{second_level}, \code{qc}, \code{project_dir},
+\code{plan} and \code{run_record}. Resume using the same exact output project directory
+so its manifest/configuration and paired artifacts can be checked.
+\code{overwrite} is not needed for an ordinary unchanged resume. A missing or
+invalid pair schedules the affected stage; upstream compatible work is reused.
+The example creates and repairs only a temporary teaching cache.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  output <- tempfile("appusage-example-")
+  on.exit(unlink(output, recursive = TRUE))
+  result <- run_appusage_workflow(path, project_dir = output,
+    parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+  plan <- plan_appusage_workflow(project_dir = output, verify = "content")
+  stopifnot(all(plan$tasks$action \%in\% c("reuse", "disabled")))
+  resumed <- run_appusage_workflow(project_dir = output)
+  stopifnot(all(attr(resumed$first_level, "execution_actions") == "reuse"))
+  # Remove only the generated temporary proc-2 JSON to demonstrate repair.
+  unlink(result$second_level$second_level_metadata_file[[1L]])
+  repair <- plan_appusage_workflow(project_dir = output, verify = "content")
+  stopifnot(repair$tasks$action[repair$tasks$stage == "research_data"] == "run")
+  restored <- run_appusage_workflow(project_dir = output)
+  stopifnot(file.exists(restored$second_level$second_level_metadata_file[[1L]]))
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

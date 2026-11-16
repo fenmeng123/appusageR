@@ -36,3 +36,19 @@ A tibble with canonical day-level columns.
 Parses app-specific longitudinal daily APP Usage exports into the canonical
 day-level schema where possible.
 }
+\details{
+Each row describes one recorded app on one date. App exports may cover
+only a subset of installed apps; their durations describe that recorded
+coverage. The seven-day teaching export contains one app.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[4L])
+parsed <- parse_app(path, strict = TRUE)
+stopifnot(nrow(parsed) == 7L, sum(parsed$duration_ms) == 6300000)
+unique(parsed$package_name)
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

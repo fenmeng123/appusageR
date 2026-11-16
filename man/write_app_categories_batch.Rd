@@ -41,3 +41,37 @@ Reads each \code{proc-2} RDA in a project, adds manual app categories to every
 second-level table with app identifiers, and writes the updated \code{data} object
 back to the same \code{proc-2} RDA file.
 }
+\details{
+Uses \code{\link[=update_app_categories_cache]{update_app_categories_cache()}} for paired updates and checkpoint
+recovery. Return rows include each path, action and outcome. With an identical
+dictionary/policy contract and intact pair, \code{resume = TRUE} reuses the result.
+Only classification and its related metadata/projections are refreshed.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  output <- tempfile("appusage-help-")
+  on.exit(unlink(output, recursive = TRUE))
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  first <- read_appusage_batch(path, project_dir = output,
+    parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+  second <- write_second_level_batch(first,
+    parallel = FALSE, n_cores = 1L, progress = FALSE)
+  # Explicit teaching labels for fictional applications, separate from the dictionary.
+  dictionary <- data.frame(
+    App_UUID = "org.example.reader", App_Name = "Demo Reader",
+    Level_1_Category = "Education and Business",
+    Level_2_Category = "Books and Reference")
+
+  written <- write_app_categories_batch(output, dictionary,
+    parallel = FALSE, workers = 1L, progress = FALSE)
+  reused <- write_app_categories_batch(output, dictionary,
+    parallel = FALSE, workers = 1L, progress = FALSE)
+  stopifnot(all(written$action == "run"), all(reused$action == "reuse"))
+  reused
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

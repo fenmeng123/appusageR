@@ -36,3 +36,27 @@ The default preview reads summaries and JSON metadata only. It does not
 read raw content or deserialize RDA payloads. \code{verify = "content"} checks
 source bytes and artifact checksums. Execution always revalidates a plan.
 }
+\details{
+A new project plans parsing and downstream work. An existing project can
+use its saved manifest/configuration by omitting \code{x} and \code{config}. Inspect
+\code{tasks$stage}, \code{action} and \code{reason} before execution. Metadata inspection is
+a preview; \code{\link[=run_appusage_workflow]{run_appusage_workflow()}} revalidates before using artifacts.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  output <- tempfile("appusage-example-")
+  on.exit(unlink(output, recursive = TRUE))
+  config <- appusage_config(execution = list(progress = FALSE, workers = 1L))
+  plan <- plan_appusage_workflow(path, project_dir = output, config = config)
+  plan$tasks[, c("stage", "action", "reason")]
+  stopifnot(all(plan$tasks$action[plan$tasks$stage == "parse"] == "run"))
+  # Planning leaves the output directory uncreated.
+  stopifnot(!dir.exists(output))
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

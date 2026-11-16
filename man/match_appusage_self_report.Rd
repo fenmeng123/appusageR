@@ -34,3 +34,40 @@ matches, and diagnostics.
 This in-memory module preserves unmatched questionnaire rows. The manifest
 must explicitly identify eligible second-level paths; it does not open them.
 }
+\details{
+Returns \code{matched_self_report} (all original rows/columns plus linkage
+fields), \code{file_matches} and \code{diagnostics}. Matching uses upload sequence and
+filename together. For duplicate candidates it uses export-type priority,
+then distance to submission time and a deterministic basename tie-break.
+This function resolves supplied references without opening the RDA files;
+\code{\link[=validate_appusage_project]{validate_appusage_project()}} provides artifact validation. Only two sources
+are processed below, so the full-project eight-match oracle does not apply.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  output <- tempfile("appusage-example-")
+  on.exit(unlink(output, recursive = TRUE))
+  # Build two real temporary proc-2 references from the same teaching sources.
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1:2])
+  first <- read_appusage_batch(path, project_dir = output,
+    parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+  second <- write_second_level_batch(first, parallel = FALSE,
+    n_cores = 1L, progress = FALSE)
+  manifest <- data.frame(source_file = first$source_file,
+    second_level_rda = second$second_level_data_file[
+      match(first$data_file, second$first_level_data_file)])
+  links <- match_appusage_self_report(appusage_demo$survey, manifest,
+    project_dir = output, sequence_col = "sequence_id", upload_col = "upload",
+    submit_time_col = "submitted_at")
+  linked <- links$matched_self_report
+  stopifnot(nrow(linked) == 17L, sum(linked$moSens_match_status == "matched") == 2L,
+            identical(linked$survey_id, appusage_demo$survey$survey_id))
+  table(linked$moSens_match_status)
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

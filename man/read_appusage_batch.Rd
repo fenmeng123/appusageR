@@ -112,21 +112,28 @@ project folder and creates \code{proclevel-1} only because first-level
 preprocessing is the only step executed by this function. Later processing
 functions create their own processing-level folders when they run.
 }
+\details{
+Each source has one summary row. \code{status}, \code{error_class} and
+\code{error_message} describe execution; \code{data_file} and \code{metadata_file} locate
+the proc-1 pair. Load the single \code{data} object into a separate environment.
+This function performs parsing; \code{\link[=write_second_level_batch]{write_second_level_batch()}} supplies
+standardized scientific tables and QC is a separate stage.
+}
 \examples{
-# Read a synthetic line export containing two Reader episodes.
-demo_dir <- system.file("extdata", "ProjectName-Demo_ProjectID-001",
-                        package = "appusageR", mustWork = TRUE)
-logs <- list.files(demo_dir, pattern = "[.]txt$", full.names = TRUE)
-output <- tempfile("batch-")
-batch <- read_appusage_batch(
-  logs, output_dir = output, project_name = "Demo", project_id = "001",
-  parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE
-)
-batch[, c("participant_id", "detected_type", "status", "n_rows")]
-
-# The summary points to the saved records for each file.
-parsed <- new.env(parent = emptyenv())
-load(batch$data_file[[1L]], envir = parsed)
-parsed$data$line[, c("app_name", "duration_ms")]
-unlink(output, recursive = TRUE)
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  output <- tempfile("appusage-example-")
+  on.exit(unlink(output, recursive = TRUE))
+  first <- read_appusage_batch(path, project_dir = output,
+    parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+  first[, c("participant_id", "status", "n_rows")]
+  saved <- new.env(parent = emptyenv())
+  load(first$data_file[[1L]], envir = saved)
+  stopifnot(nrow(saved$data$line) == 14L)
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
 }

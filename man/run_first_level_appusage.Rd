@@ -52,3 +52,24 @@ Module 2 wrapper around content detection and the faithful raw parsers. When
 cache writing is requested, it writes the same BIDS-like \code{proc-1} RDA/JSON
 pair used by batch preprocessing.
 }
+\details{
+Inspect \code{status} before using \code{data}. Successful results contain faithful
+format-specific tables, \code{metadata} and optional cache paths. \code{strict = FALSE}
+returns a failed-source result; \code{parser_strict = TRUE} retains the parser
+quality gate. File names identify the source; content determines its format.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+first <- run_first_level_appusage(path, strict = TRUE)
+first$data$line[, c("app_name", "duration_ms")]
+stopifnot(sum(first$data$line$duration_ms) == 12600000)
+# Explicitly select a malformed synthetic input and retain its diagnosis.
+bad <- file.path(folder, appusage_demo$sources$source_relpath[15L])
+failed <- run_first_level_appusage(bad, strict = FALSE, parser_strict = TRUE)
+stopifnot(failed$status == "error")
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

@@ -21,3 +21,18 @@ Reads APP Usage export content from a file, raw text string, or character
 vector of lines. File input supports UTF-8, UTF-8 with BOM, GB18030, and GBK
 through automatic encoding detection.
 }
+\details{
+File reads return text with encoding diagnostics in attributes. Numeric
+values are parsed later by \code{\link[=run_first_level_appusage]{run_first_level_appusage()}}.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+lines <- read_appusage_lines(path)
+head(lines, 3)
+stopifnot(is.character(lines), length(lines) > 0L)
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

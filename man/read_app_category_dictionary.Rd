@@ -22,3 +22,21 @@ Reads and standardizes the user's manually coded app category dictionary.
 The dictionary must contain \code{App_UUID}, \code{App_Name}, \code{Level_1_Category}, and
 \code{Level_2_Category}. \code{App_UUID} is matched against APP Usage \code{package_name}.
 }
+\details{
+With \code{path = NULL}, reads the bundled five-column dictionary; its version
+is independent of the R package version. The standardized return value adds
+matching-key helpers and lookup/diagnostic attributes. Use it as input to
+\code{\link[=add_app_categories]{add_app_categories()}}. A supplied Excel file follows the same column contract.
+}
+\examples{
+data(appusage_demo)
+dictionary <- read_app_category_dictionary()
+names(dictionary)
+classified <- add_app_categories(
+  appusage_demo$records$line_seven_days$data$daily, dictionary)
+# The org.example identities are fictional; inspect their actual match status.
+unique(classified[, c("package_name", "app_category_match_status")])
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

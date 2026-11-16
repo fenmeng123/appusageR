@@ -69,3 +69,23 @@ Module 3 wrapper around \code{\link[=make_second_level_appusage]{make_second_lev
 \code{\link[=write_second_level_appusage]{write_second_level_appusage()}}. Meta episode reconstruction is explicit and
 enabled by default in second-level meta processing.
 }
+\details{
+The successful result has \code{data} (typed event/episode/daily tables),
+\code{data_file} and \code{metadata_file}; paths are missing for in-memory execution.
+Unavailable grains are typed empty tables. In mixed auto mode, omitted meta
+options use native line episodes/daily totals and meta events. Explicit meta
+reconstruction requires selecting the meta component at first level.
+Durations and timestamps ending in \verb{_ms} are numeric milliseconds.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[5L])
+first <- run_first_level_appusage(path, strict = TRUE)
+second <- run_second_level_appusage(first)
+vapply(second$data, nrow, integer(1))
+stopifnot(identical(second$data, appusage_demo$records$mixed_line_meta$data))
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

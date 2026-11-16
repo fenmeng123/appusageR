@@ -1,0 +1,114 @@
+---
+title: "2. Read formats and interpret the data model"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{2. Read formats and interpret the data model}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(appusageR)
+data(appusage_demo)
+```
+
+Use the same sources to compare native formats with standardized tables. Content
+selects the parser; filenames provide source identity.
+
+```{r formats}
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+cases <- c("line_seven_days", "meta_seven_days", "day_with_all_totals",
+           "app_partial_coverage", "mixed_line_meta")
+sources <- appusage_demo$sources[match(cases, appusage_demo$sources$scenario), ]
+parsed <- lapply(file.path(folder, sources$source_relpath),
+                 run_first_level_appusage, strict = TRUE)
+processed <- lapply(parsed, run_second_level_appusage)
+counts <- t(vapply(processed, function(x) vapply(x$data, nrow, integer(1)), integer(3)))
+rownames(counts) <- cases
+counts
+expected <- as.matrix(sources[, c("expected_event_rows", "expected_episode_rows",
+                                 "expected_daily_rows")])
+stopifnot(all(counts == expected))
+for (i in seq_along(cases)) {
+  stopifnot(identical(processed[[i]]$data, appusage_demo$records[[cases[i]]]$data))
+}
+```
+
+`line` supplies intervals; `meta` supplies Table 1 summaries and Table 2 events;
+`day` and `app` supply daily values. The current second-level defaults reconstruct
+pure-meta episodes and retain summary-derived daily totals. Event rows, intervals
+and daily aggregates represent the same use at different grains: do not add their
+durations together. Day-format `ALL` totals remain as source rows and are excluded
+when summing individual apps. App-format totals cover the exported apps.
+
+## Mixed content: default, explicit and legacy selection
+
+```{r mixed}
+path <- file.path(folder, sources$source_relpath[5L])
+mixed <- parsed[[5L]]
+names(mixed$data)
+stopifnot(identical(names(mixed$data), c("line", "meta_summary", "meta_events")),
+          nrow(mixed$data$meta_events) == 28L,
+          sum(processed[[5L]]$data$daily$duration_ms) == 12600000)
+head(mixed$data$meta_events)
+explicit_line <- run_first_level_appusage(path, type = "line", strict = TRUE)
+explicit_meta <- run_first_level_appusage(path, type = "meta", strict = TRUE)
+legacy <- run_first_level_appusage(path, type = "legacy", strict = TRUE)
+stopifnot(identical(names(explicit_line$data), "line"),
+          identical(names(explicit_meta$data), c("meta_summary", "meta_events")),
+          identical(legacy$data, explicit_meta$data))
+```
+
+Automatic mixed parsing preserves both components: standardized events come from
+Table 2, while intervals and daily totals come from line. Explicit `type = "line"`
+or `"meta"` selects just that component. Legacy mode applies the historical
+single-component choice; it chooses meta in this file. Old saved configurations
+with expanded defaults use that compatibility mode. A newly constructed
+`appusage_config()` records which meta options were explicitly requested.
+
+```{r explicit-meta-options}
+compatible <- run_second_level_appusage(mixed, reconstruct_meta = FALSE)
+stopifnot(identical(compatible$data, processed[[5L]]$data))
+conflict <- tryCatch(run_second_level_appusage(mixed, reconstruct_meta = TRUE),
+                     error = identity)
+stopifnot(inherits(conflict, "error"))
+conditionMessage(conflict)
+meta_only <- run_second_level_appusage(explicit_meta, reconstruct_meta = TRUE,
+                                      meta_daily_source = "episodes")
+stopifnot(nrow(meta_only$data$episode) == 14L)
+```
+
+Explicit reconstruction of a mixed source conflicts with its native line
+intervals. Select meta first when reconstruction is the intended analysis.
+`?appusage_configuration` documents the argument-origin rules and the
+`summary`, `episodes`, and `both` daily choices.
+
+## Units, row order and tail configuration
+
+The faithful Table 2 retains event order and the source configuration tail.
+Inspect these fields before interpreting event-to-episode reconstruction.
+
+```{r event-contract}
+events <- mixed$data$meta_events
+names(events)
+standard_events <- processed[[5L]]$data$event
+stopifnot(all(standard_events$event_type == rep(c(1, 2, 1, 2), 7L)),
+          all(diff(standard_events$source_line) > 0),
+          all(standard_events$configuration_tail == "orientation=portrait,demo=synthetic"))
+head(standard_events[, c("source_line", "event_type", "configuration_tail")])
+raw_lines <- readLines(path, encoding = "UTF-8", warn = FALSE)
+tail(raw_lines, 6L)
+stopifnot(any(grepl("orientation=portrait", raw_lines, fixed = TRUE)),
+          any(grepl("demo=synthetic", raw_lines, fixed = TRUE)))
+line <- processed[[1L]]$data
+stopifnot(inherits(line$daily$date, "Date"), is.numeric(line$daily$duration_ms),
+          nrow(line$event) == 0L, nrow(line$episode) == 14L)
+line$daily[, c("date", "package_name", "duration_ms")]
+```
+
+Numeric `*_ms` columns retain milliseconds. Datetimes retain their timezone;
+calendar dates are `Date`. A typed empty event table in a line export means the
+format supplies no event grain. It does not mean the person had zero events.
+
+Next: [QC, blank days and overlap](day-and-overlap-audits.html).

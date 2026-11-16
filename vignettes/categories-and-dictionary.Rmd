@@ -1,0 +1,187 @@
+---
+title: "5. Add categories and review dictionary gaps"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{5. Add categories and review dictionary gaps}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(appusageR)
+data(appusage_demo)
+```
+
+The package and dictionary have independent versions. This tutorial uses small
+teaching dictionaries for the existing fictional apps. The bundled dictionary
+is read as a dataset and remains unchanged.
+
+```{r dictionary}
+data(app_category_dictionary)
+attr(app_category_dictionary, "dictionary_provenance")$dictionary_version
+dictionary <- data.frame(
+  App_UUID = c("org.example.reader", "org.example.music", "org.example.notes"),
+  App_Name = c("Demo Reader", "Demo Music", "Demo Notes"),
+  Level_1_Category = c("Education and Business", "Music and Audio", "Utilities and Tools"),
+  Level_2_Category = c("Books and Reference", "Music Playback", "System Utilities"))
+record <- appusage_demo$records$line_seven_days$data
+classified <- add_app_categories(record, dictionary)
+table(classified$daily$app_category_disposition)
+stopifnot(identical(classified$daily$duration_ms, record$daily$duration_ms))
+```
+
+The public dictionary contains five character columns. Its `Others / Unclassified`
+rows are provisional classifications; a dictionary match to that pair is not a
+functional label or evidence of low usage. A runtime residual assigned by a
+measured priority profile has a separate disposition.
+
+## Resolve candidates within the package
+
+Use two different label candidates for the same fictional Reader package, plus a
+unique Music candidate. The extra names below are deliberate teaching aliases.
+
+```{r conflicts}
+conflicting <- rbind(dictionary[1:2, ], data.frame(
+  App_UUID = "org.example.reader", App_Name = "Reader Utility Alias",
+  Level_1_Category = "Utilities and Tools", Level_2_Category = "System Utilities"))
+apps <- unique(record$daily[, c("package_name", "app_name")])
+reader <- apps[apps$package_name == "org.example.reader", ]
+music <- apps[apps$package_name == "org.example.music", ]
+cases <- rbind(reader, reader, music)
+cases$app_name <- c("Demo Reader", "Unlisted Reader Alias", "Demo Reader")
+decisions <- add_app_categories(cases, conflicting)
+decisions
+stopifnot(decisions$app_category_match_method[1L] == "app_uuid_name",
+          decisions$Level_2_Category[1L] == "Books and Reference",
+          is.na(decisions$Level_1_Category[2L]),
+          decisions$app_category_disposition[2L] == "needs_review_conflict",
+          decisions$Level_2_Category[3L] == "Music Playback",
+          isTRUE(decisions$app_category_name_disagreement[3L]))
+```
+
+The exact Reader name resolves the first row inside its APK candidates. The
+unlisted alias leaves two different category pairs and remains pending. The Music
+APK wins over a conflicting Reader name and records that disagreement. Duplicate
+dictionary rows with identical L1/L2 labels agree; they are not category conflicts.
+Conflicts never become automatic `Others / Unclassified`.
+
+## Profile unknown apps with an explicit denominator
+
+```{r profile}
+known_reader <- dictionary[1L, ]
+sources <- data.frame(source_id = "line_seven_days", person_id = "101",
+  observation_id = "DEMO-001", selected_primary = TRUE)
+profile <- profile_uncoded_apps(sources, known_reader,
+  data = list(line_seven_days = record))
+profile$apps[, c("app_key", "n_people_positive", "n_people_denominator",
+                 "prevalence", "max_person_share", "disposition")]
+music_profile <- profile$apps[profile$apps$package_name == "org.example.music", ]
+stopifnot(music_profile$n_people_denominator == 1L,
+          music_profile$n_people_positive == 1L, music_profile$prevalence == 1,
+          abs(music_profile$max_person_share - 2/3) < 1e-12)
+profiled <- add_app_categories(record, known_reader, profile = profile)
+table(profiled$daily$app_category_disposition)
+```
+
+Music contributes 20 of the 30 recorded minutes per day. Its maximum primary-file
+share is 2/3; it occurs with positive foreground use in 1 of 1 eligible people.
+The default **share >= 5% OR prevalence >= 1%** rule puts it in priority review.
+These are dictionary-maintenance thresholds. They do not change QC or sample
+eligibility. Population prevalence counts people, not files, and repeated waves
+contribute each person's maximum primary-file share. `extract_uncoded_apps()`
+uses one duration source rather than adding event, episode and daily views.
+
+If the same source is an alternate file rather than a selected primary, its
+identity is retained but it cannot supply the primary-use denominator:
+
+```{r insufficient}
+alternate <- sources
+alternate$selected_primary <- FALSE
+pending <- profile_uncoded_apps(alternate, known_reader,
+  data = list(line_seven_days = record))
+pending$apps[, c("app_key", "n_people_denominator", "disposition")]
+stopifnot(all(pending$apps$n_people_denominator == 0L))
+```
+
+Missing measurements and alternate-only identities are statistical insufficiency,
+not measured zero use. Automatic residuals require adequate measurements below
+both thresholds. In this one-person example every positively observed unknown app
+has 100% prevalence, so no automatic residual is expected. To inspect a provisional
+dictionary residual without changing the priority rule, use an explicit teaching
+row:
+
+```{r residual}
+provisional <- dictionary[1:2, ]
+provisional$Level_1_Category[2L] <- "Others"
+provisional$Level_2_Category[2L] <- "Unclassified"
+labels <- add_app_categories(record, provisional)$daily
+is_residual <- labels$Level_1_Category == "Others" & labels$Level_2_Category == "Unclassified"
+data.frame(measure = c("functional dictionary rows", "provisional dictionary rows"),
+           n = c(sum(!is_residual), sum(is_residual)), denominator = nrow(labels))
+stopifnot(sum(is_residual) == 7L, sum(!is_residual) == 7L)
+```
+
+Report functional matches, provisional/automatic residuals, priority review,
+conflicts and insufficient statistics separately. Keep the denominator explicit:
+the table above counts 14 daily rows, whereas the profile counts two app identities
+and one person. Author-approved additions belong in a versioned dictionary; a
+later update can replace residual labels.
+
+## First-time classification and independent cache updates
+
+Use both line and meta uploads to check that classification reaches every source.
+
+```{r cache-paths}
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+paths <- file.path(folder, appusage_demo$sources$source_relpath[1:2])
+work <- tempfile("appusage-categories-")
+plain_dir <- file.path(work, "plain")
+fresh_dir <- file.path(work, "fresh")
+plain_config <- appusage_config(execution = list(parallel = FALSE, workers = 1L, progress = FALSE))
+plain <- run_appusage_workflow(paths, project_dir = plain_dir, config = plain_config)
+read_data <- function(path) {
+  env <- new.env(parent = emptyenv())
+  stopifnot(identical(load(path, envir = env), "data"))
+  env$data
+}
+before <- lapply(plain$second_level$second_level_data_file, read_data)
+qc_before <- lapply(plain$second_level$second_level_metadata_file,
+  function(path) jsonlite::read_json(path, simplifyVector = FALSE)$qc)
+updated <- write_app_categories_batch(plain_dir, dictionary, workers = 1L, progress = FALSE)
+again <- write_app_categories_batch(plain_dir, dictionary, workers = 1L, progress = FALSE)
+stopifnot(nrow(updated) == 2L, all(updated$action == "run"), all(again$action == "reuse"))
+fresh_config <- appusage_config(category = list(enabled = TRUE, dictionary = dictionary),
+  execution = list(parallel = FALSE, workers = 1L, progress = FALSE))
+fresh <- run_appusage_workflow(paths, project_dir = fresh_dir, config = fresh_config)
+for (i in seq_along(before)) {
+  after <- read_data(plain$second_level$second_level_data_file[i])
+  during <- read_data(fresh$second_level$second_level_data_file[i])
+  for (grain in c("event", "episode", "daily")) {
+    for (column in names(before[[i]][[grain]])) {
+      stopifnot(identical(before[[i]][[grain]][[column]], after[[grain]][[column]]))
+    }
+    for (attribute in setdiff(names(attributes(before[[i]][[grain]])), "names")) {
+      stopifnot(identical(attr(before[[i]][[grain]], attribute), attr(after[[grain]], attribute)))
+    }
+    stopifnot(identical(after[[grain]]$Level_1_Category, during[[grain]]$Level_1_Category),
+              identical(after[[grain]]$Level_2_Category, during[[grain]]$Level_2_Category))
+  }
+  qc_after <- jsonlite::read_json(plain$second_level$second_level_metadata_file[i],
+                                 simplifyVector = FALSE)$qc
+  stopifnot(identical(qc_before[[i]], qc_after))
+}
+updated[, c("action", "status")]
+```
+
+The independent update uses existing paired proc-2 RDA/JSON files. Original
+scientific columns and QC remain unchanged; a repeated identical category update
+reuses the intact pair. For flat copied caches, supply an explicit RDA/JSON
+manifest to `update_app_categories_cache()`. This updates annotations without
+selecting questionnaire relationships.
+
+```{r cleanup}
+unlink(work, recursive = TRUE)
+```
+
+Next: [multiple projects and survey relationships](projects-and-surveys.html).

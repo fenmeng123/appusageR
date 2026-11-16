@@ -17,3 +17,19 @@ POSIXct vector.
 \description{
 Safely parse APP Usage datetimes
 }
+\details{
+Input strings represent wall-clock time in \code{tz}. Both a decimal second
+separator and the export's trailing \verb{:mmm} milliseconds are supported.
+The return value is \code{POSIXct}; invalid or missing values become \code{NA}.
+}
+\examples{
+data(appusage_demo)
+times <- safe_as_datetime(appusage_demo$survey$submitted_at,
+                          tz = appusage_demo$info$timezone)
+stopifnot(inherits(times, "POSIXct"), length(times) == 17L,
+          all(format(times, "\%H:\%M:\%S", tz = appusage_demo$info$timezone) == "11:00:00"))
+head(times)
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

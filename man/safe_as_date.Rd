@@ -15,3 +15,19 @@ Date vector. Missing or invalid dates are returned as \code{NA}.
 \description{
 Safely parse APP Usage dates
 }
+\details{
+Extracts a year-month-day date from character input, accepting hyphens
+or slashes. It returns one \code{Date} per input and retains invalid/missing
+positions as \code{NA}. Timestamp-to-date conversion should first use the
+intended timezone.
+}
+\examples{
+data(appusage_demo)
+dates <- appusage_demo$records$line_seven_days$data$daily$date
+parsed <- safe_as_date(gsub("-", "/", as.character(dates), fixed = TRUE))
+stopifnot(identical(parsed, dates), is.na(safe_as_date("missing")))
+head(parsed)
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

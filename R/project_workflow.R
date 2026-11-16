@@ -12,6 +12,19 @@
 #' @param recursive Whether to scan folders and Excel files recursively.
 #'
 #' @return A tibble with one row per discovered project folder.
+#' @details
+#' Reports project names/IDs, raw-folder paths, file counts and candidate
+#' Excel paths. Keep ProjectID values as character to preserve leading zeroes.
+#' When multiple workbooks are candidates, resolve the choice explicitly before
+#' running [run_appusage_project_workflow()].
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' projects <- scan_appusage_project_root(folder)
+#' stopifnot(nrow(projects) == 1L, projects$project_id == "009",
+#'           projects$n_txt_files == 15L, projects$excel_count == 1L)
+#' projects[, c("project_name", "project_id", "n_txt_files", "excel_count")]
 #' @export
 scan_appusage_project_root <- function(root, excel_pattern = "WJXraw",
                                        recursive = FALSE) {
@@ -104,6 +117,20 @@ scan_appusage_project_root <- function(root, excel_pattern = "WJXraw",
 #' @param self_report_file Optional paired Wenjuanxing/self-report file path.
 #'
 #' @return A tibble manifest with one row per direct file.
+#' @details
+#' The manifest records paths, sizes, filename identity and whether each
+#' direct file is a TXT candidate. Zero-byte and malformed teaching inputs
+#' remain represented. A manifest inventories sources; parser and QC outcomes
+#' are recorded by subsequent workflow stages.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' projects <- scan_appusage_project_root(folder)
+#' manifest <- build_appusage_project_manifest(projects$project_dir[[1L]],
+#'   self_report_file = projects$excel_path[[1L]])
+#' stopifnot(nrow(manifest) == 15L, all(manifest$project_id == "009"))
+#' head(manifest[, c("source_file", "is_txt")])
 #' @export
 build_appusage_project_manifest <- function(project_dir,
                                             self_report_file = NULL) {
@@ -283,23 +310,32 @@ build_appusage_project_manifest <- function(project_dir,
 #'   diagnostic_verbosity = c("summary", "full", "none"),
 #'   ...
 #' )
+#' @details
+#' In raw-root mode the string ProjectID selects its source folder and
+#' questionnaire workbook. Results include the source `manifest`, `first_level`,
+#' `second_level`, `qc`, `matched_self_report` and output `project_dir`. All
+#' questionnaire rows survive, including unmatched rows. The input `project_dir`
+#' argument names a raw folder; this differs from the exact output directory
+#' accepted by [run_appusage_workflow()]. Resume with the same input selectors
+#' and `output_root`. The example is bounded to one source;
+#' `demo("synthetic-project", package = "appusageR")` processes all 15.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
 #' @examples
-#' # Process the bundled synthetic project, including daily aggregation and QC.
-#' demo_dir <- system.file("extdata", "ProjectName-Demo_ProjectID-001",
-#'                         package = "appusageR", mustWork = TRUE)
-#' output <- tempfile("project-")
-#' result <- run_appusage_project_workflow(
-#'   project_dir = demo_dir, output_root = output,
-#'   parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE
-#' )
-#' # This one-day log falls below the default QC minimum of seven non-empty days.
-#' result$qc[, c("participant_id", "qc_status", "pass_qc")]
-#'
-#' # The 1-minute and 2-minute Reader episodes form one daily total.
-#' processed <- new.env(parent = emptyenv())
-#' load(result$second_level$second_level_data_file[[1L]], envir = processed)
-#' processed$data$daily[, c("date", "app_name", "duration_ms")]
-#' unlink(output, recursive = TRUE)
+#' local({
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   output <- tempfile("appusage-project-example-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   # Process one source and retain all 17 survey rows.
+#'   result <- run_appusage_project_workflow(
+#'     raw_data_root = folder, project_id = "009", output_root = output,
+#'     self_report_sheet = "Survey", sequence_col = "sequence_id",
+#'     upload_col = "upload", submit_time_col = "submitted_at", max_files = 1L,
+#'     parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+#'   result$qc[, c("participant_id", "qc_status", "pass_qc")]
+#'   linked <- result$matched_self_report
+#'   stopifnot(nrow(linked) == 17L, sum(linked$moSens_match_status == "matched") == 1L)
+#'   table(linked$moSens_match_status)
+#' })
 #' @export
 run_appusage_project_workflow <- function(project_dir = NULL, output_root,
                                           raw_data_root = NULL,
@@ -695,6 +731,23 @@ run_appusage_project_workflow <- function(project_dir = NULL, output_root,
 #' @param context Optional named list or one-row data frame of source context.
 #'
 #' @return A structured `appusage_error_context` list.
+#' @details
+#' Retains condition class/message, source filename/size, processing stage
+#' and available code context in a named list. Passing the original condition
+#' preserves more diagnostic information than passing a message string.
+#' Formatting the result is separate from writing a report to disk.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' source <- appusage_demo$sources$scenario == "zero_byte_upload"
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[source])
+#' # Capture the deliberate zero-byte teaching failure as a condition.
+#' failure <- tryCatch(run_first_level_appusage(path, strict = TRUE), error = identity)
+#' stopifnot(inherits(failure, "appusage_zero_byte_source"))
+#' context <- diagnose_appusage_error(failure, source_file = path, stage = "first_level")
+#' stopifnot(inherits(context, "appusage_error_context"), context$file_size == 0)
+#' context[c("stage", "source_basename", "condition_class", "condition_message")]
 #' @export
 diagnose_appusage_error <- function(error, source_file = NULL, stage = NULL,
                                     context = NULL) {
@@ -784,6 +837,24 @@ diagnose_appusage_error <- function(error, source_file = NULL, stage = NULL,
 #' @param error_context A context returned by `diagnose_appusage_error()`.
 #'
 #' @return A markdown/plain-text issue report string.
+#' @details
+#' The returned character string can be printed with `cat()` or explicitly
+#' saved with `writeLines()`. It includes source context, condition details and
+#' available traceback/excerpt fields. Review those fields when sharing a report;
+#' the teaching example contains fictional source identities only.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#' source <- appusage_demo$sources$scenario == "zero_byte_upload"
+#' path <- file.path(folder, appusage_demo$sources$source_relpath[source])
+#' # Capture the deliberate zero-byte teaching failure as a condition.
+#' failure <- tryCatch(run_first_level_appusage(path, strict = TRUE), error = identity)
+#' stopifnot(inherits(failure, "appusage_zero_byte_source"))
+#' context <- diagnose_appusage_error(failure, source_file = path, stage = "first_level")
+#' report <- format_appusage_issue_report(context)
+#' stopifnot(grepl("zero-byte", report, fixed = TRUE))
+#' cat(report)
 #' @export
 format_appusage_issue_report <- function(error_context) {
   x <- appusage_context_list(error_context)
@@ -843,6 +914,20 @@ format_appusage_issue_report <- function(error_context) {
 #' @param ... Additional arguments passed to [readxl::read_excel()].
 #'
 #' @return A one-row tibble with preflight diagnostics.
+#' @details
+#' Returns column-presence, missing-value and duplicate-value counts for the
+#' original questionnaire rows. A successful preflight establishes the table
+#' interface; [match_appusage_self_report()] subsequently resolves uploads.
+#' The example uses the same 17 rows as the packaged Survey workbook.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' data(appusage_demo)
+#' check <- preflight_self_report_matching(appusage_demo$survey,
+#'   sequence_col = "sequence_id", upload_col = "upload",
+#'   participant_id_col = "survey_id")
+#' stopifnot(check$status == "success", check$n_rows == 17L,
+#'           check$n_missing_upload == 1L)
+#' check
 #' @export
 preflight_self_report_matching <- function(self_report, sequence_col,
                                            upload_col,

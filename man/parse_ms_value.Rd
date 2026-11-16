@@ -16,3 +16,19 @@ Numeric vector.
 Parses APP Usage millisecond fields, including \code{"T:"} prefixes and
 scientific notation such as \code{1.1447863E7}.
 }
+\details{
+Whitespace, commas and an initial \verb{T:} are removed before numeric parsing.
+Empty, missing and nonnumeric values become \code{NA_real_}. Values remain in
+milliseconds; formatted duration labels are not interpreted as clock times.
+}
+\examples{
+data(appusage_demo)
+ms <- appusage_demo$records$line_seven_days$data$daily$duration_ms[1:2]
+text <- c(paste0("T:", ms), "", NA_character_)
+parsed <- parse_ms_value(text)
+stopifnot(identical(parsed[1:2], ms), all(is.na(parsed[3:4])))
+parsed
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

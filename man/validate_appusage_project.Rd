@@ -43,3 +43,26 @@ Content verification additionally reads source bytes, checks cache signatures,
 and inspects one scientific RDA at a time. Metadata verification leaves
 payloads and questionnaire cells unopened. The report is read-only.
 }
+\details{
+Use \code{verify = "content"} for a delivery check; the default metadata
+preview reports its more limited scope. \code{complete} refers to the delivery
+contract, including preserved input failures, rather than every source
+passing QC. \code{checks} records the individual validation results.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  output <- tempfile("appusage-example-")
+  on.exit(unlink(output, recursive = TRUE))
+  result <- run_appusage_workflow(path, project_dir = output,
+    parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+  report <- validate_appusage_project(output, verify = "content")
+  stopifnot(report$complete)
+  summary(report)
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

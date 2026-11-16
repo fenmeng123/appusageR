@@ -1,5 +1,25 @@
 # appusageR 0.3.11
 
+- Serial file processing omits host-memory subprocesses that cannot change its
+  one-worker selection, recording the measurement as not requested. Parallel
+  decisions continue to measure available memory and apply the existing caps.
+
+- Calendar-date conversion consistently maps nonfinite Date, POSIXct, POSIXlt
+  and millisecond inputs to missing dates across R versions. Finite timestamp
+  conversion and scientific rules are unchanged.
+
+- Collection resume accepts all-failure summaries whose missing cache paths are
+  read from CSV as logical values. Complete diagnosed failures are reused with
+  their source-issue counts; existing scientific-artifact protections remain.
+
+- Expand documentation with a shared fictional project and the portable
+  `appusage_demo` dataset. All 61 public functions have runnable examples;
+  `appusage_configuration` documents 46 workflow settings and five category
+  policy arguments. Teaching examples use temporary caches and one worker.
+  Package-level help and six runnable task tutorials connect these examples,
+  including category conflicts, paired-cache repair, an all-failure project
+  and questionnaire relationships.
+
 - Batch category enrichment now dispatches every valid proc-2 path. Recovery
   recognizes empty mixed exports with complete preflight failure evidence while
   continuing to reject incomplete parses and damaged caches.

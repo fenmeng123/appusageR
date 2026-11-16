@@ -15,3 +15,20 @@ A list of key-value entities plus extension.
 \description{
 Parse BIDS-like APP Usage output filenames
 }
+\details{
+The result uses filename entity names such as \code{sub}, \code{type}, \code{src} and
+\code{proc}, plus \code{extension}. It parses cache naming syntax; it does not validate
+the associated file or its scientific content. Native TXT names are handled
+by \code{\link[=parse_native_appusage_filename]{parse_native_appusage_filename()}}.
+}
+\examples{
+data(appusage_demo)
+name <- build_appusage_filename(appusage_demo$sources$sequence_id[[1L]],
+                               "line", proc = 2, source_key = "demo101")
+entities <- parse_appusage_filename(name)
+stopifnot(entities$sub == "101", entities$src == "demo101", entities$proc == "2")
+entities
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

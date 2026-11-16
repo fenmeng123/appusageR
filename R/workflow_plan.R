@@ -14,6 +14,26 @@
 #'   task IDs, action, reason codes, differences and verification scope. Actions
 #'   are `reuse`, `run`, `blocked`, or `disabled`. Print and summary methods use
 #'   only these stored tables; a preview does not authorize stale cache reuse.
+#' @details
+#' A new project plans parsing and downstream work. An existing project can
+#' use its saved manifest/configuration by omitting `x` and `config`. Inspect
+#' `tasks$stage`, `action` and `reason` before execution. Metadata inspection is
+#' a preview; [run_appusage_workflow()] revalidates before using artifacts.
+#' @seealso [appusage_demo], [appusage_synthetic_project]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   output <- tempfile("appusage-example-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   config <- appusage_config(execution = list(progress = FALSE, workers = 1L))
+#'   plan <- plan_appusage_workflow(path, project_dir = output, config = config)
+#'   plan$tasks[, c("stage", "action", "reason")]
+#'   stopifnot(all(plan$tasks$action[plan$tasks$stage == "parse"] == "run"))
+#'   # Planning leaves the output directory uncreated.
+#'   stopifnot(!dir.exists(output))
+#' })
 #' @export
 plan_appusage_workflow <- function(x = NULL, project_dir, config = NULL,
                                    verify = c("metadata", "content", "cache_only"),
@@ -175,6 +195,28 @@ appusage_workflow_manifest <- function(x, ids = NULL) {
 #' @return The stage's compact summary or matching result, with a `run_record`
 #'   attribute describing actual scope, actions and timings. Project projections
 #'   are refreshed through the same service used by the full workflow.
+#' @details
+#' A parse call can initialize an output project. Later stages consume its
+#' saved caches and configuration. Select a stage explicitly to limit execution
+#' scope and inspect the returned `run_record` for actual actions. The example
+#' runs parse, research-data construction and routine QC in sequence.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   output <- tempfile("appusage-help-")
+#'   on.exit(unlink(output, recursive = TRUE))
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   config <- appusage_config(execution = list(parallel = FALSE, workers = 1L,
+#'                                            progress = FALSE))
+#'   first <- run_appusage_stage("parse", output, config = config, x = path)
+#'   second <- run_appusage_stage("research_data", output)
+#'   qc <- run_appusage_stage("qc", output)
+#'   stopifnot(nrow(first) == 1L, nrow(second) == 1L)
+#'   qc[, c("participant_id", "qc_status", "pass_qc")]
+#'   attr(qc, "run_record")
+#' })
 #' @export
 run_appusage_stage <- function(stage, project_dir, config = NULL, x = NULL) {
   stage <- match.arg(stage, c("parse", "research_data", "qc", "category", "matching", "summary"))

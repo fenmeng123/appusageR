@@ -34,3 +34,28 @@ dictionary. Matching first uses \code{package_name} against dictionary \code{App
 then falls back to unambiguous exact app-name matches against
 \code{App_Name_Repaired} and \code{App_Name}.
 }
+\details{
+Unique APK labels take precedence. Conflicting APK candidates are narrowed
+by exact name within that APK; unresolved conflicts remain pending. Name
+fallback is used only when APK lookup fails. \code{app_category_disposition}
+distinguishes dictionary matches, review states and operational residuals.
+The example supplies one explicit fictional teaching label; it leaves the
+bundled dictionary and the original scientific data unchanged.
+}
+\examples{
+data(appusage_demo)
+# Explicit teaching labels for fictional applications, separate from the dictionary.
+dictionary <- data.frame(
+  App_UUID = "org.example.reader", App_Name = "Demo Reader",
+  Level_1_Category = "Education and Business",
+  Level_2_Category = "Books and Reference")
+daily <- appusage_demo$records$line_seven_days$data$daily
+classified <- add_app_categories(daily, dictionary)
+reader <- classified$package_name == "org.example.reader"
+stopifnot(all(classified$Level_2_Category[reader] == "Books and Reference"),
+          identical(classified$duration_ms, daily$duration_ms))
+unique(classified[, c("package_name", "Level_2_Category", "app_category_disposition")])
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

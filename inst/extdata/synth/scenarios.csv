@@ -1,0 +1,16 @@
+source_basename,sequence_id,scenario,expected_status,expected_failure_class,expected_event_rows,expected_episode_rows,expected_daily_rows,expected_app_duration_ms,expected_nonempty_days,expected_pass_qc,explanation
+101_AppUsage_line_2025_10_8_9_0_0.txt,101,line_seven_days,success,,0,14,14,12600000,7,true,"Seven positive days, two apps; 210 recorded minutes."
+102_AppUsage_meta_2025_10_8_9_0_0.txt,102,meta_seven_days,success,,28,14,14,8400000,7,true,Table 1 daily summaries and paired Table 2 events; 140 minutes.
+103_AppUsage_day_2025_10_8_9_0_0.txt,103,day_with_all_totals,success,,0,0,21,6300000,7,true,"Seven ALL total rows remain in data; app-only total is 105 minutes, not 210."
+104_AppUsage_app_2025_10_8_9_0_0.txt,104,app_partial_coverage,success,,0,0,7,6300000,7,true,One selected app only; 105 minutes do not measure whole-phone use.
+105_AppUsage_meta_2025_10_8_9_0_0.txt,105,mixed_line_meta,success,,28,14,14,12600000,7,true,Filename says meta; content is mixed. Native line totals remain 210 minutes; Table 1 is not added.
+106_AppUsage_line_2025_10_8_9_0_0.txt,106,recorded_blank_absent_days,success,,0,2,2,300000,2,false,"Oct 1/4 recorded; Oct 2 explicitly empty; Oct 3 absent. Window Oct 1-4, recorded total 5 minutes."
+107_AppUsage_line_2025_10_8_9_0_0.txt,107,cross_midnight,success,,0,2,2,720000,2,false,Ten-minute midnight interval splits into 5 and 5 minutes; next morning adds 2 minutes.
+108_AppUsage_line_2025_10_8_9_0_0.txt,108,overlapping_intervals,success,,0,6,6,44000,1,false,"Six intervals, 44 seconds summed and 14 seconds union. Questionnaire intentionally names a different file."
+109_AppUsage_line_2025_10_8_9_0_0.txt,109,same_identity_earlier_upload,success,,0,1,1,60000,1,false,First of two exports for sequence 109; both caches are retained.
+109_AppUsage_line_2025_10_8_10_0_0.txt,109,same_identity_later_upload,success,,0,1,1,180000,1,false,Later timestamp is nearer questionnaire submission; generic duplicate resolver selects this source.
+110_AppUsage_meta_2025_10_8_9_0_0.txt,110,empty_mixed_export,error,appusage_header_only_source,,,,,,,Recognized line/meta headers without data; terminal input diagnosis.
+111_AppUsage_line_2025_10_8_9_0_0.txt,111,unrecognized_text,error,appusage_unknown_content,,,,,,,Wrong text uploaded; no supported export structure.
+112_AppUsage_line_2025_10_8_9_0_0.txt,112,zero_byte_upload,error,appusage_zero_byte_source,,,,,,,Interrupted upload represented by a zero-byte file.
+113_AppUsage_line_2025_10_8_9_0_0.txt,113,binary_disguised_as_txt,error,appusage_binary_source,,,,,,,"Artificial PNG signature only, not an image; incorrect extension is diagnosed."
+114_AppUsage_line_2025_10_8_9_0_0.txt,114,invalid_interval_structure,error,appusage_line_structural_quality,,,,,,,One valid interval and one missing end timestamp; critical structural evidence is retained.

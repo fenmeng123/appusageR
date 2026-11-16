@@ -1,0 +1,155 @@
+---
+title: "6. Process projects and retain survey relationships"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{6. Process projects and retain survey relationships}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(appusageR)
+data(appusage_demo)
+```
+
+Run the 15-source fictional project together with a second, all-failure project.
+Projects execute in registry order. File processing within a project can run in
+parallel; this tutorial uses one worker for a bounded, portable run.
+
+## Assemble the second project from existing failures
+
+```{r registry}
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+work <- tempfile("appusage-projects-")
+failed_raw <- file.path(work, "raw", "ProjectName-DemoFailures_ProjectID-010")
+dir.create(failed_raw, recursive = TRUE)
+failures <- appusage_demo$sources[appusage_demo$sources$expected_status == "error", ]
+stopifnot(nrow(failures) == 5L,
+          all(file.copy(file.path(folder, failures$source_relpath), failed_raw)))
+good_raw <- scan_appusage_project_root(folder)$project_dir[1L]
+projects <- data.frame(
+  project_id = c("009", "010"), project_name = c("Demo", "DemoFailures"),
+  project_dir = c(good_raw, failed_raw),
+  output_dir = file.path(work, c("demo-output", "failures-output")),
+  self_report_file = c(file.path(folder, "ProjectID-009-WJXraw-synthetic.xlsx"), NA),
+  sheet = c("Survey", NA), sequence_col = c("sequence_id", NA),
+  upload_col = c("upload", NA), submit_time_col = c("submitted_at", NA))
+config <- appusage_config(execution = list(progress = FALSE, strict = FALSE))
+batch <- run_appusage_projects(projects, file.path(work, "batch"),
+  config = config, workers = 1L, continue_on_error = FALSE)
+batch$projects[, c("project_id", "status", "action", "n_sources", "source_issues")]
+stopifnot(identical(batch$projects$project_id, c("009", "010")),
+          all(batch$projects$status == "completed_with_source_issues"),
+          identical(as.integer(batch$projects$source_issues), c(5L, 5L)))
+```
+
+`strict = FALSE` retains per-source diagnosed failures. `continue_on_error = FALSE`
+stops the collection on a project-level failure; a complete set of diagnosed
+invalid inputs is not such a failure. Batch checkpoints belong in a directory
+separate from all input and output projects.
+
+## Inspect full-project results and survey links
+
+```{r survey}
+# Reuse the saved manifest and configuration, including questionnaire settings.
+result <- run_appusage_workflow(project_dir = projects$output_dir[1L])
+stopifnot(sum(result$first_level$status == "success") == 10L,
+          sum(result$first_level$status == "error") == 5L,
+          sum(result$qc$qc_status == "success") == 10L,
+          sum(result$qc$pass_qc %in% TRUE) == 5L,
+          sum(result$qc$qc_status == "not_run") == 5L)
+names(result)
+```
+
+The general matching function can also link an in-memory questionnaire to the
+same resolved source manifest. The manifest retains failed uploads with missing
+proc-2 paths, so they have an explicit downstream status.
+
+```{r relationships}
+first <- result$first_level
+second <- result$second_level
+manifest <- data.frame(source_file = first$source_file,
+  second_level_rda = second$second_level_data_file[
+    match(first$data_file, second$first_level_data_file)])
+linked <- match_appusage_self_report(appusage_demo$survey, manifest = manifest,
+  project_dir = projects$output_dir[1L], sequence_col = "sequence_id",
+  upload_col = "upload", submit_time_col = "submitted_at")
+survey <- linked$matched_self_report
+expected <- appusage_demo$expected_links
+stopifnot(nrow(survey) == 17L,
+          identical(survey$survey_id, expected$survey_id),
+          identical(survey$moSens_match_status, expected$expected_match_status),
+          all(vapply(names(appusage_demo$survey), function(column)
+            identical(survey[[column]], appusage_demo$survey[[column]]), logical(1))))
+table(survey$moSens_match_status)
+survey[survey$sequence_id == "109", c("survey_id", "moSens_match_status", "moSens_data_dir")]
+linked$file_matches
+```
+
+Eight questionnaire rows match. The remaining nine comprise five uploads without
+proc-2, one filename mismatch, one sequence mismatch, one missing upload and one
+unresolved upload. All 17 rows and their original values survive. Sequence `109`
+has two source uploads: both caches remain, while generic matching uses export
+priority and submission-time proximity to select a candidate. This is distinct
+from a study-specific reupload/retest/original priority policy.
+
+`run_appusage_project_workflow()` combines folder/workbook discovery with these
+operations; `demo("synthetic-project", package = "appusageR", ask = FALSE)` runs
+that adapter with two file workers. For your own collection, supply the explicit
+registry and questionnaire column names rather than relying on this layout.
+
+## All-failure delivery and resume
+
+```{r failures}
+failed <- run_appusage_workflow(project_dir = projects$output_dir[2L])
+stopifnot(nrow(failed$first_level) == 5L,
+          all(failed$first_level$status == "error"),
+          !any(failed$second_level$second_level_status == "success"),
+          all(failed$qc$qc_status == "not_run"), all(is.na(failed$qc$pass_qc)))
+failed$first_level[, c("source_file", "status", "error_message")]
+reports <- lapply(projects$output_dir, validate_appusage_project, verify = "content")
+stopifnot(all(vapply(reports, function(x) isTRUE(x$complete), logical(1))))
+print(reports[[2L]])
+```
+
+Both projects pass content delivery. Single-project and collection resume retain
+all five terminal failures. On an unchanged collection, each project reports
+`skipped_complete` with action `reuse`; its source issues remain visible.
+
+```{r collection-resume}
+again <- run_appusage_projects(projects, file.path(work, "batch"),
+  config = config, workers = 1L, continue_on_error = FALSE)
+again$projects[, c("project_id", "status", "action", "error")]
+stopifnot(all(again$projects$status == "skipped_complete"),
+          all(again$projects$action == "reuse"),
+          identical(as.integer(again$projects$source_issues), c(5L, 5L)),
+          all(again$projects$workflow_elapsed_sec == 0),
+          isTRUE(validate_appusage_project(projects$output_dir[2L], verify = "content")$complete))
+```
+
+The earlier `invalid 'file' argument` on all-failure collection resume is fixed:
+the protection check accepts the all-missing path column read from the saved CSV.
+Existing scientific artifacts retain the same content and compatibility checks.
+Collection reuse runs no parsing, scientific processing, QC or questionnaire
+matching stages; it preserves the saved diagnoses and results.
+
+| All-failure input | Diagnosis |
+|---|---|
+| Empty mixed export | Headers exist but contain no data |
+| Unrecognized text | No supported export content |
+| Zero-byte upload | No bytes to parse |
+| Binary content with `.txt` suffix | Binary signature rather than text |
+| Incomplete interval structure | Critical missing end-time evidence |
+
+The second project accounts for 5/5 sources but has 0/5 successful research
+outputs and zero evaluated QC records. Its delivery check passes because the
+terminal diagnoses and required downstream states are intact. It supplies no
+analytic sample. This is why delivery completeness and QC use different
+denominators.
+
+```{r cleanup}
+unlink(work, recursive = TRUE)
+```
+
+Return to `?appusageR` or [the starting tutorial](appusageR-workflow.html).

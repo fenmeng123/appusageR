@@ -50,3 +50,33 @@ second-level \code{proc-2} RDA files for successful first-level records, and wri
 \verb{analytic_summary_table_proclevel-2.csv} at the project root when the project
 structure is available.
 }
+\details{
+Successful rows identify \code{second_level_data_file} and the paired
+\code{second_level_metadata_file}. Failed first-level sources retain downstream
+status rows. \code{resume = TRUE} verifies completed pairs before reuse;
+\code{overwrite = FALSE} protects existing artifacts. For coordinated stage
+recovery use \code{\link[=run_appusage_workflow]{run_appusage_workflow()}}.
+}
+\examples{
+local({
+  data(appusage_demo)
+  folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+  path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+  output <- tempfile("appusage-example-")
+  on.exit(unlink(output, recursive = TRUE))
+  first <- read_appusage_batch(path, project_dir = output,
+    parallel = FALSE, n_cores = 1L, progress = FALSE, strict = TRUE)
+  second <- write_second_level_batch(first, parallel = FALSE,
+    n_cores = 1L, progress = FALSE)
+  saved <- new.env(parent = emptyenv())
+  load(second$second_level_data_file[[1L]], envir = saved)
+  stopifnot(sum(saved$data$daily$duration_ms) == 12600000)
+  resumed <- write_second_level_batch(first, resume = TRUE,
+    parallel = FALSE, n_cores = 1L, progress = FALSE)
+  stopifnot(identical(second$second_level_data_file,
+                      resumed$second_level_data_file))
+})
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}

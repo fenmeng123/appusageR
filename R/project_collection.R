@@ -21,6 +21,33 @@
 #' @return An `appusage_projects` object with project statuses, validation and
 #'   workflow times, paths, and compact stage records. Reordered calls revalidate
 #'   evidence and preserve previously checkpointed, unselected projects.
+#' @details
+#' Use exact output directories in the registry; `batch_dir` must be separate
+#' from every raw/output directory. Registry rows are serial and `workers`
+#' controls file processing within each project. Inspect `projects$status`,
+#' `action` and delivery results before resuming. The bounded example selects
+#' one successful source from ProjectID `"009"`; additional registry rows use
+#' the same independently resumable contract.
+#' @seealso [appusage_demo], [appusage_synthetic_project], [appusage_configuration]
+#' @examples
+#' local({
+#'   data(appusage_demo)
+#'   folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+#'   work <- tempfile("appusage-collection-")
+#'   on.exit(unlink(work, recursive = TRUE))
+#'   project <- scan_appusage_project_root(folder)
+#'   manifest <- build_appusage_project_manifest(project$project_dir[[1L]])
+#'   path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+#'   manifest <- manifest[manifest$source_file == normalizePath(path, winslash = "/"), ]
+#'   projects <- data.frame(project_id = "009", project_name = "Demo",
+#'     project_dir = project$project_dir[[1L]], output_dir = file.path(work, "output"))
+#'   projects$manifest <- list(manifest)
+#'   config <- appusage_config(execution = list(progress = FALSE))
+#'   result <- run_appusage_projects(projects, batch_dir = file.path(work, "batch"),
+#'     config = config, workers = 1L, continue_on_error = FALSE)
+#'   stopifnot(nrow(result$projects) == 1L, result$projects$status == "completed")
+#'   result$projects[, c("project_id", "status", "action", "n_sources")]
+#' })
 #' @export
 run_appusage_projects <- function(projects, batch_dir, config = NULL, workers = 8L,
                                   continue_on_error = TRUE, protect_completed = TRUE) {
@@ -231,14 +258,18 @@ appusage_collection_protected_sources <- function(report, first, project_dir) {
     return(if (length(artifacts)) "unidentified_scientific_artifacts" else character())
   }
   if (!nrow(report$tasks)) return(character())
-  orphaned <- first[["data_file"]][first$status %in% "incomplete" &
-    file.exists(first[["data_file"]]) & (is.na(first[["source_file"]]) |
+  # All-failure CSV summaries infer the wholly missing path column as logical.
+  # Normalize it for filesystem checks without changing the saved summary.
+  data_files <- as.character(first[["data_file"]])
+  existing_data <- file.exists(data_files)
+  orphaned <- data_files[first$status %in% "incomplete" &
+    existing_data & (is.na(first[["source_file"]]) |
       !appusage_text_nzchar(first[["source_file"]]))]
   if (length(orphaned)) return("unidentified_scientific_artifacts")
   reasons <- c("verification_insufficient", "component_verification_required", "implementation_changed", "configuration_changed",
     "source_identity_changed", "identity_conflict")
   tasks <- report$tasks
-  paths <- first$source_file[first$status %in% "success" & file.exists(first$data_file)]
+  paths <- first$source_file[first$status %in% "success" & existing_data]
   unique(tasks$source_file[tasks$source_file %in% paths &
     tasks$stage %in% c("parse", "research_data") & tasks$action == "run" & tasks$reason_code %in% reasons])
 }

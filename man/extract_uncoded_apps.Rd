@@ -16,3 +16,27 @@ A tibble of de-duplicated uncoded app rows.
 Module 5 helper for dictionary maintenance. It reports rows where either
 category column is missing and does not infer or assign categories.
 }
+\details{
+Identities are deduplicated across available grains. Duration and \code{n_rows}
+come from one canonical usage table, rather than summing event, episode and
+daily representations. \code{ALL} rows are excluded. Missing or unusable duration
+is \code{NA}, not zero. For population denominators and manual-review priorities
+use \code{\link[=profile_uncoded_apps]{profile_uncoded_apps()}} with an explicit primary-source/person manifest.
+}
+\examples{
+data(appusage_demo)
+# Explicit teaching labels for fictional applications, separate from the dictionary.
+dictionary <- data.frame(
+  App_UUID = "org.example.reader", App_Name = "Demo Reader",
+  Level_1_Category = "Education and Business",
+  Level_2_Category = "Books and Reference")
+classified <- add_app_categories(appusage_demo$records$line_seven_days$data,
+                                  dictionary)
+uncoded <- extract_uncoded_apps(classified)
+stopifnot(nrow(uncoded) == 1L, uncoded$package_name == "org.example.music",
+          uncoded$total_duration_ms == 8400000)
+uncoded
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

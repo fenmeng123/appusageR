@@ -29,9 +29,11 @@ These thresholds prioritize dictionary maintenance; they never exclude users
 or change scientific QC. Residual labels are operational, not manual codes.
 }
 \examples{
+data(appusage_demo)
 policy <- appusage_category_policy()
-policy$share_threshold
-policy$prevalence_threshold
-# Keep unknown applications pending rather than assigning residual labels.
-appusage_category_policy(auto_other = FALSE)
+stopifnot(policy$share_threshold == 0.05, policy$prevalence_threshold == 0.01)
+pending <- appusage_category_policy(auto_other = FALSE)
+classified <- add_app_categories(appusage_demo$records$line_seven_days$data$daily,
+                                 policy = pending)
+unique(classified[, c("package_name", "app_category_disposition")])
 }

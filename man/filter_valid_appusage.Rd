@@ -17,3 +17,25 @@ Filtered \code{data}.
 \description{
 Filter APP Usage records to participants passing QC
 }
+\details{
+Uses the first column of \code{qc_table} as the participant key and retains
+rows whose key has \code{pass_qc = TRUE}. Generate this table with
+\code{\link[=qc_appusage_day]{qc_appusage_day()}} so its key and logical pass field follow that contract.
+This is an explicit filtering step; computing QC alone retains source rows.
+}
+\examples{
+data(appusage_demo)
+complete <- appusage_demo$records$line_seven_days$data$daily
+complete$participant_id <- "101"
+short <- appusage_demo$records$recorded_blank_absent_days$data$daily
+short$participant_id <- "106"
+daily <- rbind(complete, short)
+qc <- qc_appusage_day(daily)
+kept <- filter_valid_appusage(daily, qc)
+stopifnot(nrow(daily) == 16L, nrow(kept) == 14L,
+          all(kept$participant_id == "101"))
+qc[, c("participant_id", "pass_qc")]
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

@@ -37,3 +37,20 @@ Parses date-by-app daily APP Usage exports into the canonical day-level
 schema. \code{duration_ms} is used as the authoritative analytic duration field;
 formatted duration labels are preserved as display text only.
 }
+\details{
+The returned daily table retains \code{ALL} total rows with \code{is_all_apps = TRUE}.
+Select app rows when adding durations. Source counts and display text remain
+available alongside the numeric millisecond duration.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[3L])
+parsed <- parse_day(path, strict = TRUE)
+stopifnot(nrow(parsed) == 21L, sum(parsed$is_all_apps) == 7L,
+          sum(parsed$duration_ms[!parsed$is_all_apps]) == 6300000)
+head(parsed[, c("date", "package_name", "duration_ms", "is_all_apps")])
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}, \link{appusage_configuration}
+}

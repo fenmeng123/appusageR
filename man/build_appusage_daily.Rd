@@ -33,3 +33,21 @@ explicit aggregation diagnostics. No files are written.
 Computes the daily module independently of parsing, storage and QC. Meta
 summary and episode sources remain distinct; \code{both} never adds them together.
 }
+\details{
+Use the selected \code{daily} table for analysis. Component tables and
+aggregation diagnostics explain its origin; summing the selected table
+and its component tables would count the same use more than once.
+}
+\examples{
+data(appusage_demo)
+folder <- system.file("extdata", "synth", package = "appusageR", mustWork = TRUE)
+path <- file.path(folder, appusage_demo$sources$source_relpath[1L])
+first <- run_first_level_appusage(path, strict = TRUE)
+native <- standardize_appusage(first$data)
+daily <- build_appusage_daily(native)
+stopifnot(sum(daily$daily$duration_ms) == 12600000)
+head(daily$daily[, c("date", "app_name", "duration_ms")])
+}
+\seealso{
+\link{appusage_demo}, \link{appusage_synthetic_project}
+}
