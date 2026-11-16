@@ -571,6 +571,52 @@ test_that("documented mixed line quality failures are terminal while incomplete 
   expect_identical(verify(meta), "source_changed")
 })
 
+test_that("empty mixed preflight failures reuse only corroborated terminal evidence", {
+  root <- tempfile("mixed-empty-")
+  dir.create(root)
+  source <- file.path(root, "1_AppUsage_line_2024_1_1_0_0_0.txt")
+  writeLines(c(mixed_line_header(), mixed_meta_lines(FALSE)), source, useBytes = TRUE)
+  project <- file.path(root, "project")
+  run <- run_appusage_workflow(source, project_dir = project,
+    config = appusage_config(execution = list(progress = FALSE)))
+  row <- run$first_level
+  meta <- appusage_read_cache_json(row$metadata_file)
+  expect_identical(row$failure_family, "source_header_only")
+  expect_true(appusage_mixed_header_failure(row, meta))
+  expect_true(appusage_mixed_header_failure(row,
+    appusage_compact_validation_metadata(meta, row$metadata_file)))
+  verify <- function(m) appusage_parse_evidence(row, m, meta$module_state$parse, source)$reason
+  expect_identical(verify(meta), "up_to_date")
+  expect_true(validate_appusage_project(project, verify = "content")$complete)
+  before <- tools::md5sum(row$metadata_file)
+  resumed <- run_appusage_workflow(project_dir = project)
+  expect_true(attr(resumed$first_level, "stage_reused"))
+  expect_identical(tools::md5sum(row$metadata_file), before)
+  for (field in c("status", "failure_family", "has_record_rows", "record_candidate_rows", "boundary_diagnostics")) {
+    bad <- meta
+    bad$source$preflight[[field]] <- NULL
+    expect_identical(verify(bad), "incomplete_parse", info = field)
+  }
+  bad <- meta
+  bad$module_state$components <- list(status = "incomplete", states = list(line = "parsed", meta = "error"))
+  expect_identical(verify(bad), "incomplete_parse")
+  bad <- meta
+  bad$errors <- NULL
+  expect_identical(verify(bad), "incomplete_parse")
+  bad <- meta
+  bad$source$preflight$has_record_rows <- TRUE
+  expect_identical(verify(bad), "incomplete_parse")
+  bad <- meta
+  bad$source$preflight$boundary_diagnostics$component_profiles$meta$n_candidate_rows <- 1L
+  bad$export$boundary_diagnostics <- bad$source$preflight$boundary_diagnostics
+  expect_identical(verify(bad), "incomplete_parse")
+  bad <- meta
+  bad$module_state$parse$implementation <- "different"
+  expect_identical(verify(bad), "implementation_changed")
+  cat("\nchanged", file = source, append = TRUE)
+  expect_identical(verify(meta), "source_changed")
+})
+
 test_that("interleaved blocks retain source order, repeated events and decoded tails", {
   meta <- mixed_meta_lines()
   line <- c(mixed_line_header(), mixed_line_record())

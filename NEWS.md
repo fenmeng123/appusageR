@@ -1,5 +1,9 @@
 # appusageR 0.3.11
 
+- Batch category enrichment now dispatches every valid proc-2 path. Recovery
+  recognizes empty mixed exports with complete preflight failure evidence while
+  continuing to reject incomplete parses and damaged caches.
+
 - Scientific output schema 0.3.5 retains meta table 2 events alongside native
   line episodes and daily totals in mixed exports. New proc-1 and proc-2 stage
   contracts record their schema version. Older files retain their creator metadata.

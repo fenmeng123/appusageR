@@ -252,7 +252,7 @@ write_second_level_batch <- function(batch_summary, output_dir = NULL,
   }
   eligible <- batch_summary$status == "success" &
     !is.na(batch_summary$data_file) &
-    file.exists(batch_summary$data_file)
+    file.exists(as.character(batch_summary$data_file))
   if (!is.null(output_dir) && any(eligible, na.rm = TRUE)) {
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   }

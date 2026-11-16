@@ -34,6 +34,10 @@ appusage_compact_validation_metadata <- function(metadata, path) {
   value$source <- metadata$source[intersect(c("source_fingerprint", "source_cache_key"),
     names(metadata$source))]
   value$export <- metadata$export[intersect(c("detected_type", "component_selection_rule", "timezone"), names(metadata$export))]
+  if (identical(metadata$processing$first_level_failure_reason, "source_header_only")) {
+    value$source$preflight <- metadata$source$preflight
+    value$export$boundary_diagnostics <- metadata$export$boundary_diagnostics
+  }
   check <- metadata$daily_aggregation_self_check
   value$daily_aggregation_self_check <- check[intersect(c("status", "n_missing_or_unmatched_source_keys",
     "n_missing_daily_duration", "n_nonmissing_numeric_mismatch", "n_episode_count_mismatch",

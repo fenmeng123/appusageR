@@ -7,6 +7,29 @@ workflow_fixture <- function(n = 2L) {
     config = appusage_config(execution = list(progress = FALSE)))
 }
 
+test_that("batch categories cover every source and reuse intact pairs", {
+  f <- workflow_fixture(2L)
+  f$config$category$enabled <- TRUE
+  f$config$category$dictionary <- data.frame(App_UUID = "example.app", App_Name = "Example",
+    Level_1_Category = "Manual", Level_2_Category = "Manual")
+  result <- run_appusage_workflow(f$files, project_dir = f$project, config = f$config)
+  paths <- appusage_summary_proc2_paths(result$second_level)
+  status <- vapply(paths, function(p) appusage_read_cache_json(second_level_metadata_path(p))$
+    processing$app_category_status, character(1))
+  expect_identical(unname(status), rep("success", 2L))
+  expect_identical(attr(result$categories, "execution_actions"), rep("run", 2L))
+  expect_true(validate_appusage_project(f$project, verify = "content")$complete)
+  before <- tools::md5sum(c(paths, sub("[.]rda$", ".json", paths)))
+  resumed <- run_appusage_workflow(project_dir = f$project)
+  expect_identical(attr(resumed$categories, "execution_actions"), rep("reuse", 2L))
+  expect_identical(tools::md5sum(names(before)), before)
+
+  # Missing, blank and NA paths are not dispatched or recycled across sources.
+  summary <- data.frame(second_level_data_file = c(paths, NA_character_, "", file.path(f$project, "absent.rda")))
+  refreshed <- appusage_refresh_category_stage(f$project, summary, f$config$category$dictionary)
+  expect_identical(attr(refreshed, "execution_actions"), c("reuse", "reuse", rep("blocked", 3L)))
+})
+
 test_that("generic manifest plans are read-only and no-change resume invokes no science", {
   f <- workflow_fixture()
   plan <- plan_appusage_workflow(f$files, f$project, f$config)

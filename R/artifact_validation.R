@@ -90,6 +90,40 @@ appusage_mixed_quality_failure <- function(row, metadata) {
     identical(appusage_get_col_value(row, "structural_critical_reasons"), paste(reasons, collapse = ";"))
 }
 
+# Empty mixed exports terminate in preflight, before any component parser runs.
+# Reuse requires the saved preflight diagnosis and both empty component profiles;
+# a partial parse or an error label alone is not terminal evidence.
+appusage_mixed_header_failure <- function(row, metadata) {
+  preflight <- metadata$source$preflight
+  errors <- metadata$errors
+  if (!identical(appusage_get_col_value(row, "status"), "error") ||
+      !identical(appusage_get_col_value(row, "failure_family"), "source_header_only") ||
+      !identical(metadata$processing$first_level_status, "error") ||
+      !identical(metadata$processing$first_level_failure_reason, "source_header_only") ||
+      !identical(metadata$export$component_selection_rule, "bounded_line_meta") ||
+      !is.list(preflight) || !identical(preflight$status, "header_only") ||
+      !identical(preflight$failure_family, "source_header_only") ||
+      !identical(preflight$selection_rule, "bounded_line_meta") ||
+      !identical(preflight$has_record_rows, FALSE) ||
+      !"record_candidate_rows" %in% names(preflight) || length(preflight$record_candidate_rows) ||
+      !setequal(preflight$detected_components, c("line", "meta")) ||
+      !is.null(metadata$module_state$components) || !is.null(metadata$module_state$artifact) ||
+      is_present_string(appusage_get_col_value(row, "data_file")) ||
+      !is.data.frame(errors) || nrow(errors) != 1L ||
+      !isTRUE(startsWith(errors$class, "appusage_header_only_source,appusage_source_preflight_error,")))
+    return(FALSE)
+  profiles <- preflight$boundary_diagnostics$component_profiles
+  if (!is.list(profiles) || !setequal(names(profiles), c("line", "meta")) ||
+      !appusage_contract_equal(preflight$boundary_diagnostics, metadata$export$boundary_diagnostics))
+    return(FALSE)
+  all(vapply(profiles, function(profile) {
+    is.list(profile) && all(c("header_rows", "candidate_rows", "n_candidate_rows") %in% names(profile)) &&
+      is.numeric(profile$header_rows) && length(profile$header_rows) > 0L &&
+      all(is.finite(profile$header_rows) & profile$header_rows > 0) &&
+      length(profile$candidate_rows) == 0L && isTRUE(profile$n_candidate_rows == 0)
+  }, logical(1)))
+}
+
 appusage_parse_evidence <- function(row, metadata, requested, x = NULL,
                                     input = "file", verify = "content", context = NULL) {
   source_verified <- FALSE
@@ -103,7 +137,8 @@ appusage_parse_evidence <- function(row, metadata, requested, x = NULL,
     (identical(metadata$export$component_selection_rule, "bounded_line_meta") ||
      identical(appusage_get_col_value(row, "component_selection_rule"), "bounded_line_meta"))
   if (((mixed_failure || (is.list(components) && identical(components$status, "incomplete"))) &&
-       !appusage_mixed_quality_failure(row, metadata)) ||
+       !appusage_mixed_quality_failure(row, metadata) &&
+       !appusage_mixed_header_failure(row, metadata)) ||
       !identical(metadata$processing$first_level_status, row$status[[1]]))
     return(result(FALSE, "incomplete_parse"))
   if (is.null(recorded)) return(result(FALSE, "verification_insufficient"))

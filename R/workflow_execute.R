@@ -193,7 +193,7 @@ appusage_refresh_category_stage <- function(project_dir, summary, dictionary,
       list(dictionary = dictionary, policy = policy, manifest = manifest, profile = NULL), summary, build = TRUE)
   }
   actions <- rep("blocked", length(paths))
-  valid <- is_present_string(paths) & file.exists(paths)
+  valid <- vapply(paths, is_present_string, logical(1)) & file.exists(paths)
   cache_manifest <- data.frame(rda_path = paths[valid], stringsAsFactors = FALSE)
   if (!is.null(profile)) cache_manifest$source_id <- profile$manifest$source_id[match(
     normalized_summary_path(paths[valid]), normalized_summary_path(profile$manifest$rda_path))]
