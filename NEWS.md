@@ -1,4 +1,4 @@
-# appusageR 0.3.11
+# appusageR 0.3.12 (2026-11-16)
 
 - Serial file processing omits host-memory subprocesses that cannot change its
   one-worker selection, recording the measurement as not requested. Parallel
@@ -19,6 +19,10 @@
   Package-level help and six runnable task tutorials connect these examples,
   including category conflicts, paired-cache repair, an all-failure project
   and questionnaire relationships.
+
+- Retain scientific output schema 0.3.5 and manual dictionary 2.0.0.
+
+# appusageR 0.3.11
 
 - Batch category enrichment now dispatches every valid proc-2 path. Recovery
   recognizes empty mixed exports with complete preflight failure evidence while

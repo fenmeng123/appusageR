@@ -5,7 +5,7 @@ data for behavioral and mobile-sensing research. It parses logs, reconstructs
 episodes, summarizes daily app use, evaluates quality, adds application categories
 and links sources to self-report records.
 
-**Package:** 0.3.11 · **App dictionary:** 2.0.0 · **Scientific schema:** 0.3.5
+**Package:** 0.3.12 · **App dictionary:** 2.0.0 · **Scientific schema:** 0.3.5
 
 <br clear="right" />
 

@@ -1,6 +1,6 @@
 Package: appusageR
 Title: Process and Summarize 'Android' Smartphone-Use Logs
-Version: 0.3.11
+Version: 0.3.12
 Authors@R: 
     c(person("Kunru", "Song", email = "Kunrusong97@gmail.com",
              role = c("aut", "cre", "cph"),
