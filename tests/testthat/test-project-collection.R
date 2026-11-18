@@ -399,7 +399,7 @@ test_that("a changed questionnaire and missing export refresh only their owner",
 })
 
 test_that("explicit worker override is propagated without changing scientific configuration", {
-  config <- appusage_config(execution = list(workers = 8, parallel = TRUE))
+  config <- appusage_config(execution = list(workers = 2L, parallel = TRUE))
   expect_identical(appusage_config_second_options(config), appusage_config_second_options(appusage_config()))
   f <- collection_fixture(1)
   original <- appusage_execute_pipeline
@@ -408,7 +408,7 @@ test_that("explicit worker override is propagated without changing scientific co
     options_seen <<- first_options
     original(..., first_options = first_options)
   })
-  result <- run_appusage_projects(f$registry, f$batch, f$config, workers = 8)
+  result <- run_appusage_projects(f$registry, f$batch, f$config, workers = 2L)
   expect_identical(result$projects$status, "completed")
   expect_true(options_seen$worker_cap_override)
 })

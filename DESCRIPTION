@@ -9,8 +9,8 @@ Authors@R:
              comment = "Assisted compilation of the bundled dictionary"),
       person("Changshu", "Zhang", role = "ctb",
              comment = "Assisted compilation of the bundled dictionary"))
-Description: Processes smartphone-use logs exported by 'APP Usage' and
-    'Screen Time' on 'Android' for behavioral and mobile-sensing research.
+Description: Processes smartphone-use logs exported by APP Usage and
+    Screen Time on 'Android' for behavioral and mobile-sensing research.
     Parses and standardizes records, reconstructs usage episodes, and summarizes
     daily application use. Provides quality control reports, application
     categories from a manual dictionary, and links to self-report data.

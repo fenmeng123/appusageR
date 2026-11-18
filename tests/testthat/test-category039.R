@@ -307,6 +307,8 @@ test_that("two category workers preserve Unicode science and match serial catego
 
 test_that("eight category workers produce the serial result and reuse unchanged pairs", {
   skip_on_cran()
+  skip_if(!tolower(Sys.getenv("_R_CHECK_LIMIT_CORES_")) %in% c("", "false"),
+          "Eight workers require an unrestricted local run")
   cores <- parallel::detectCores()
   skip_if(is.na(cores) || cores < 8L)
   category039_check_workers(8L, 64L)

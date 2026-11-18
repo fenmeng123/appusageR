@@ -971,16 +971,19 @@ test_that("dataset description summarizes recognized appusage types and dates", 
 test_that("first-level parallel core settings are capped", {
   path <- testthat::test_path("fixtures", "line_sample.txt")
   output_dir <- file.path(tempdir(), paste0("appusage_batch_", as.integer(runif(1, 1, 1e8))))
-  max_cores <- parallel::detectCores(logical = TRUE)
-  testthat::skip_if(is.na(max_cores), "available cores could not be detected")
+  decide <- appusage_first_level_worker_decision
+  local_mocked_bindings(appusage_first_level_worker_decision = function(...) {
+    decide(..., available_cores = 1L)
+  })
   summary <- read_appusage_batch(
     path,
     output_dir = output_dir,
     parallel = TRUE,
-    n_cores = max_cores + 1,
+    n_cores = 2L,
     progress = FALSE
   )
   expect_equal(summary$status[[1]], "success")
+  expect_identical(summary$first_level_selected_workers[[1]], 1L)
 })
 
 test_that("second-level worker cap logic is bounded and explicit", {
